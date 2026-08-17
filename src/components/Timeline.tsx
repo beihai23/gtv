@@ -44,6 +44,8 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const [showRefLabels, setShowRefLabels] = useState(true);
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
 
   const commitMap = useMemo(() => new Map(data.commits.map(c => [c.id, c])), [data]);
   const branchColorMap = useMemo(() => new Map(data.branches.map(b => [b.name, b.color])), [data]);
@@ -124,12 +126,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         minimapViewport();
       });
     svg.call(zoom);
+    zoomRef.current = zoom;
 
     const allX = data.commits.map(c => c.x);
     const minX = Math.min(...allX, 0) - 180;
     const maxX = Math.max(...allX, 100) + 200;
     const minY = Math.min(...data.commits.map(c => c.y), 0) - LANE_HEIGHT;
     const maxY = Math.max(...data.commits.map(c => c.y), 0) + LANE_HEIGHT;
+    sceneBoundsRef.current = { minX, maxX, minY, maxY };
     // No viewBox: the scene lives in plain pixel space and the zoom transform
     // owns all scaling. (viewBox + zoom double-scales, which made large repos
     // render microscopically small.)
@@ -461,12 +465,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     const shouldReset = resetKeyRef.current !== resetKey;
     resetKeyRef.current = resetKey;
     if (data.commits.length > 0 && shouldReset) {
-      // Fit the whole scene into the viewport (10% padding), capped at 1x.
-      const sceneW = maxX - minX;
-      const sceneH = maxY - minY;
-      const k = Math.min(width / sceneW, height / sceneH, 1) * 0.9;
+      // Default view: readable 1x zoom, positioned on the newest commit
+      // (HEAD when known) — latest activity sits right-of-center, its lane
+      // vertically centered. Pan/zoom out from there, or use the minimap.
+      const newest = data.commits.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+      const target = data.commits.find(c => c.is_head) ?? newest;
+      const k = 1;
       const t = d3.zoomIdentity
-        .translate(width / 2 - (minX + sceneW / 2) * k, height / 2 - (minY + sceneH / 2) * k)
+        .translate(width * 0.7 - target.x * k, height / 2 - target.y * k)
         .scale(k);
       svg.call(zoom.transform, t);
       transformRef.current = t;
@@ -481,6 +487,22 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     window.addEventListener('resize', draw);
     return () => window.removeEventListener('resize', draw);
   }, [draw]);
+
+  /** Fit the whole scene into the viewport (toolbar "Fit" button). */
+  const fitToView = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current || !containerRef.current) return;
+    const { minX, maxX, minY, maxY } = sceneBoundsRef.current;
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    const sceneW = maxX - minX;
+    const sceneH = maxY - minY;
+    if (sceneW <= 0 || sceneH <= 0) return;
+    const k = Math.min(width / sceneW, height / sceneH, 1) * 0.9;
+    const t = d3.zoomIdentity
+      .translate(width / 2 - (minX + sceneW / 2) * k, height / 2 - (minY + sceneH / 2) * k)
+      .scale(k);
+    d3.select(svgRef.current).call(zoomRef.current.transform, t);
+  }, []);
 
   return (
     <div ref={containerRef} className="timeline-container" onClick={() => setLaneMenu(null)}>
@@ -505,6 +527,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           onClick={() => setShowRefLabels(v => !v)}
         >
           Labels
+        </button>
+        <button className="view-btn" onClick={fitToView} title="Fit whole graph into view">
+          Fit
         </button>
         {compressed && expandedLanes.size > 0 && (
           <button className="view-btn" onClick={() => setExpandedLanes(new Set())}>
