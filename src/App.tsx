@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath } from './api';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch } from './api';
 import type { GitData, CommitDetail, BranchLane } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
@@ -100,6 +100,21 @@ function App() {
     try {
       const data = await filterByBranches(branchNames);
       setGitData(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleViewFromBranch = useCallback(async (branchName: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await switchBranch(branchName);
+      setGitData(data);
+      setSelectedCommit(null);
+      setViewResetKey(k => k + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -220,6 +235,7 @@ function App() {
               onCommitClick={handleCommitClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
+              onViewFromBranch={handleViewFromBranch}
             />
             <CommitDetails 
               commit={selectedCommit}

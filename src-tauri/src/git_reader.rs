@@ -188,6 +188,9 @@ impl GitReader {
                 merge_branch_name: None,
                 lane_owner: String::new(),
                 is_head: false,
+                is_key: false,
+                additions: 0,
+                deletions: 0,
                 x: 0.0,
                 y: 0.0,
                 lane: 0,
@@ -196,6 +199,19 @@ impl GitReader {
 
         let (branches, edges) =
             layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
+
+        // Diff volume for key commits only (bounded): feeds node sizing.
+        let mut stats_done = 0usize;
+        for c in commits.iter_mut() {
+            if !c.is_key || stats_done >= 150 {
+                continue;
+            }
+            if let Ok((a, d)) = self.diff_stats(&c.id) {
+                c.additions = a;
+                c.deletions = d;
+                stats_done += 1;
+            }
+        }
 
         log::info!(
             "Built view: {} commits, {} lanes, {} edges",
@@ -301,6 +317,24 @@ impl GitReader {
         }
 
         Ok(list)
+    }
+
+    /// (additions, deletions) of a commit vs its first parent
+    /// (or the empty tree for the root commit).
+    fn diff_stats(&self, commit_id: &str) -> Result<(u32, u32), String> {
+        let oid = Oid::from_str(commit_id).map_err(|e| e.to_string())?;
+        let commit = self.repo.find_commit(oid).map_err(|e| e.to_string())?;
+        let tree = commit.tree().map_err(|e| e.to_string())?;
+        let parent_tree = match commit.parents().next() {
+            Some(p) => Some(p.tree().map_err(|e| e.to_string())?),
+            None => None,
+        };
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+            .map_err(|e| e.to_string())?;
+        let stats = diff.stats().map_err(|e| e.to_string())?;
+        Ok((stats.insertions() as u32, stats.deletions() as u32))
     }
 
     pub fn get_commit_detail(&self, commit_id: &str) -> Result<CommitDetail, String> {

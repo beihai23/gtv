@@ -34,7 +34,6 @@ pub struct LaneSeed {
     pub tip: String,
 }
 
-const NODE_SPACING_X: f64 = 80.0;
 const LANE_HEIGHT: f64 = 80.0;
 
 /// Core entry point. `commits` may be in any order; they are sorted by
@@ -241,10 +240,56 @@ pub fn compute_layout(
         }
     }
 
-    // Coordinates: uniform spacing for now (time-proportional x is P1).
-    commits.sort_by_key(|c| c.timestamp);
+    // Key-node marking (gmaster-style smart compression): a commit survives
+    // compression if it is HEAD, carries refs (tips/tags), is a merge commit,
+    // is a merge source, is a fork point, is its lane's first own commit,
+    // or is its lane's tip within the loaded window.
+    let mut is_merge_source: HashSet<usize> = HashSet::new();
+    let mut has_same_lane_child: HashSet<usize> = HashSet::new();
+    for (i, c) in commits.iter().enumerate() {
+        for (p_pos, p) in c.parents.iter().enumerate() {
+            if let Some(&pi) = index_of.get(p) {
+                if p_pos > 0 {
+                    is_merge_source.insert(pi);
+                } else if owner[pi] == owner[i] {
+                    has_same_lane_child.insert(pi);
+                }
+            }
+        }
+    }
+    let fork_point_ids: HashSet<&String> = fork_points.values().collect();
     for (i, c) in commits.iter_mut().enumerate() {
-        c.x = i as f64 * NODE_SPACING_X;
+        let is_lane_birth = match c.parents.first() {
+            None => true,
+            Some(p) => index_of
+                .get(p)
+                .map(|&pi| owner[pi] != owner[i])
+                .unwrap_or(false),
+        };
+        c.is_key = c.is_head
+            || !c.branch_refs.is_empty()
+            || c.parents.len() > 1
+            || is_merge_source.contains(&i)
+            || fork_point_ids.contains(&c.id)
+            || is_lane_birth
+            || !has_same_lane_child.contains(&i);
+    }
+
+    // Time-proportional x with a per-lane minimum spacing so dense clusters
+    // don't collapse onto one pixel.
+    commits.sort_by_key(|c| c.timestamp);
+    let t_min = commits.first().map(|c| c.timestamp).unwrap_or(0);
+    const PX_PER_DAY: f64 = 10.0;
+    const MIN_SPACING: f64 = 28.0;
+    let mut last_x: HashMap<i32, f64> = HashMap::new();
+    for c in commits.iter_mut() {
+        let time_x = (c.timestamp - t_min) as f64 / 86400.0 * PX_PER_DAY;
+        let x = match last_x.get(&c.lane) {
+            Some(&l) => time_x.max(l + MIN_SPACING),
+            None => time_x,
+        };
+        c.x = x;
+        last_x.insert(c.lane, x);
         c.y = c.lane as f64 * LANE_HEIGHT;
     }
 

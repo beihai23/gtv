@@ -18,6 +18,9 @@ fn commit(id: &str, ts: i64, parents: &[&str]) -> CommitNode {
         merge_branch_name: None,
         lane_owner: String::new(),
         is_head: false,
+        is_key: false,
+        additions: 0,
+        deletions: 0,
         x: 0.0,
         y: 0.0,
         lane: 0,
@@ -186,6 +189,33 @@ fn octopus_merge_produces_one_merge_edge_per_extra_parent() {
     assert_eq!(merge_edges.len(), 2);
     assert_eq!(lane(&lanes, "a").merged_into.as_deref(), Some("m1"));
     assert_eq!(lane(&lanes, "b").merged_into.as_deref(), Some("m1"));
+}
+
+#[test]
+fn compression_marks_only_key_commits() {
+    // main:  c1 -- c2 -- c3 -- c4(tip)
+    //               \
+    // feat:          f1 -- f2(tip, unmerged)
+    // c3 is the only "boring" commit: no refs, no merge, same-lane parent
+    // and child — it must NOT survive compression. Everything else is key.
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("c2", 200, &["c1"]),
+        commit("c3", 300, &["c2"]),
+        commit("c4", 400, &["c3"]),
+        commit("f1", 250, &["c2"]),
+        commit("f2", 350, &["f1"]),
+    ];
+    let seeds = [seed("main", "c4"), seed("feat", "f2")];
+    let _ = compute_layout(&mut commits, &seeds, "main", Some("c4"));
+
+    let key = |id: &str| commits.iter().find(|c| c.id == id).unwrap().is_key;
+    assert!(key("c1"), "root = lane birth");
+    assert!(key("c2"), "fork point");
+    assert!(key("c4"), "lane tip + HEAD");
+    assert!(key("f1"), "lane birth");
+    assert!(key("f2"), "lane tip");
+    assert!(!key("c3"), "boring middle commit must be compressed");
 }
 
 #[test]

@@ -19,6 +19,15 @@ pub struct CommitNode {
     /// True when this commit is the current HEAD.
     #[serde(default)]
     pub is_head: bool,
+    /// True when this commit survives smart compression (lane birth/tip,
+    /// merge source or target, tagged, HEAD...).
+    #[serde(default)]
+    pub is_key: bool,
+    /// Diff volume vs first parent (filled for key commits only).
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
     // Layout coordinates (calculated later)
     pub x: f64,
     pub y: f64,

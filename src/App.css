@@ -439,3 +439,73 @@
 .diff-add { color: #4CAF50; }
 .diff-del { color: #F44336; }
 .lane-label { user-select: none; }
+
+/* --- view toolbar (top-left overlay) --- */
+.view-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 20;
+}
+.view-btn {
+  background: rgba(30, 30, 30, 0.85);
+  color: #999;
+  border: 1px solid #444;
+  border-radius: 12px;
+  padding: 3px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.view-btn:hover { border-color: #666; color: #ccc; }
+.view-btn.active {
+  color: #fff;
+  border-color: #4A90D9;
+  background: rgba(74, 144, 217, 0.25);
+}
+.view-btn.focused {
+  color: #fff;
+  border-color: #E91E63;
+  background: rgba(233, 30, 99, 0.25);
+}
+
+/* --- minimap (bottom-right overlay) --- */
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 1px solid #333;
+  border-radius: 6px;
+  z-index: 15;
+  cursor: crosshair;
+}
+
+/* --- lane context menu --- */
+.lane-menu {
+  position: fixed;
+  z-index: 100;
+  background: #252526;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  overflow: hidden;
+}
+.lane-menu button {
+  background: none;
+  border: none;
+  color: #ccc;
+  text-align: left;
+  padding: 8px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.lane-menu button:hover { background: #094771; color: #fff; }
+
+/* --- collapse chips --- */
+.collapse-chip rect { transition: fill 0.15s; }
+.collapse-chip:hover rect { fill: #3a3a3a; }

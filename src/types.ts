@@ -18,6 +18,9 @@ export interface CommitNode {
   merge_branch_name: string | null;
   lane_owner: string;
   is_head: boolean;
+  is_key: boolean;
+  additions: number;
+  deletions: number;
   x: number;
   y: number;
   lane: number;
