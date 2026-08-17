@@ -13,6 +13,12 @@ pub struct CommitNode {
     pub branch_refs: Vec<BranchRef>,
     pub fork_branch_name: Option<String>,
     pub merge_branch_name: Option<String>,
+    /// Name of the lane that owns this commit (assigned by layout).
+    #[serde(default)]
+    pub lane_owner: String,
+    /// True when this commit is the current HEAD.
+    #[serde(default)]
+    pub is_head: bool,
     // Layout coordinates (calculated later)
     pub x: f64,
     pub y: f64,
@@ -50,6 +56,15 @@ pub struct BranchLane {
     pub lane_index: i32,
     pub color: String,
     pub is_tag: bool,
+    /// Commit where this lane was born (on the parent lane). None for main.
+    #[serde(default)]
+    pub fork_point: Option<String>,
+    /// Merge commit that absorbed this lane's tip. None if never merged.
+    #[serde(default)]
+    pub merged_into: Option<String>,
+    /// Whether the branch ref still exists (false = ghost lane).
+    #[serde(default)]
+    pub is_active: bool,
 }
 
 /// Complete Git data for visualization
@@ -101,4 +116,9 @@ pub struct CommitDetail {
     pub parents: Vec<String>,
     pub branch_refs: Vec<BranchRef>,
     pub files: Vec<FileChange>,
+    /// Whole-commit diff totals (per-file split is P1).
+    #[serde(default)]
+    pub total_additions: i32,
+    #[serde(default)]
+    pub total_deletions: i32,
 }

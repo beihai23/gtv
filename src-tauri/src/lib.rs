@@ -1,6 +1,7 @@
 mod commands;
-mod git_reader;
-mod models;
+pub mod git_reader;
+pub mod layout;
+pub mod models;
 
 use commands::AppState;
 

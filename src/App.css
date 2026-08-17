@@ -434,3 +434,8 @@
   background: #9C27B0;
   color: white;
 }
+
+.diff-total { font-weight: normal; font-size: 12px; }
+.diff-add { color: #4CAF50; }
+.diff-del { color: #F44336; }
+.lane-label { user-select: none; }

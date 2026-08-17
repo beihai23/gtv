@@ -16,6 +16,8 @@ export interface CommitNode {
   branch_refs: BranchRef[];
   fork_branch_name: string | null;
   merge_branch_name: string | null;
+  lane_owner: string;
+  is_head: boolean;
   x: number;
   y: number;
   lane: number;
@@ -32,6 +34,9 @@ export interface BranchLane {
   lane_index: number;
   color: string;
   is_tag: boolean;
+  fork_point: string | null;
+  merged_into: string | null;
+  is_active: boolean;
 }
 
 export interface GitData {
@@ -59,4 +64,6 @@ export interface CommitDetail {
   parents: string[];
   branch_refs: BranchRef[];
   files: FileChange[];
+  total_additions: number;
+  total_deletions: number;
 }

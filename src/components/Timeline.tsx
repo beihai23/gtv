@@ -32,15 +32,6 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   };
 
-  useEffect(() => {
-    console.log('Timeline data:', {
-      commitsCount: data.commits.length,
-      branchesCount: data.branches.length,
-      sampleCommit: data.commits[0],
-      branches: data.branches.map(b => ({ name: b.name, lane_index: b.lane_index }))
-    });
-  }, [data]);
-
   const draw = useCallback(() => {
     if (!svgRef.current || !containerRef.current) return;
 
@@ -64,7 +55,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
 
     svg.call(zoom);
 
-    const minX = Math.min(...data.commits.map((c: CommitNode) => c.x), 0) - 100;
+    const minX = Math.min(...data.commits.map((c: CommitNode) => c.x), 0) - 180;
     const maxX = Math.max(...data.commits.map((c: CommitNode) => c.x), 1000) + 200;
     const minY = Math.min(...data.commits.map((c: CommitNode) => c.y), 0) - LANE_HEIGHT;
     const maxY = Math.max(...data.commits.map((c: CommitNode) => c.y), 0) + LANE_HEIGHT;
@@ -84,6 +75,42 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
       .attr('stroke-width', 1)
       .attr('stroke-dasharray', '4,4')
       .attr('opacity', 0.3);
+
+    // Branch bars: a solid rounded bar spanning each lane's own commits
+    // (the gmaster "select the bar" element — clickable in P3).
+    const laneSpan = new Map<number, { min: number; max: number }>();
+    for (const c of data.commits) {
+      const span = laneSpan.get(c.lane) ?? { min: c.x, max: c.x };
+      span.min = Math.min(span.min, c.x);
+      span.max = Math.max(span.max, c.x);
+      laneSpan.set(c.lane, span);
+    }
+    g.selectAll('.lane-bar')
+      .data(data.branches.filter((b: BranchLane) => laneSpan.has(b.lane_index)))
+      .enter()
+      .append('line')
+      .attr('class', 'lane-bar')
+      .attr('x1', (d: BranchLane) => laneSpan.get(d.lane_index)!.min)
+      .attr('x2', (d: BranchLane) => laneSpan.get(d.lane_index)!.max)
+      .attr('y1', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
+      .attr('y2', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
+      .attr('stroke', (d: BranchLane) => d.color)
+      .attr('stroke-width', 4)
+      .attr('stroke-linecap', 'round')
+      .attr('opacity', 0.55);
+
+    // Lane name labels pinned to the left edge of the scene.
+    g.selectAll('.lane-label')
+      .data(data.branches)
+      .enter()
+      .append('text')
+      .attr('class', 'lane-label')
+      .attr('x', minX + 8)
+      .attr('y', (d: BranchLane) => d.lane_index * LANE_HEIGHT + 4)
+      .attr('font-size', '11px')
+      .attr('fill', (d: BranchLane) => d.color)
+      .attr('text-anchor', 'start')
+      .text((d: BranchLane) => d.name);
 
     g.selectAll('.edge')
       .data(data.edges)
@@ -134,15 +161,24 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
 
     nodes.append('circle')
       .attr('r', NODE_RADIUS)
-      .attr('fill', (d: CommitNode) => {
-        for (const ref of d.branch_refs) {
-          const color = branchColorMap.get(ref.name);
-          if (color) return color;
-        }
-        return '#4A90D9';
-      })
+      .attr('fill', (d: CommitNode) => branchColorMap.get(d.lane_owner) ?? '#4A90D9')
       .attr('stroke', (d: CommitNode) => d.id === selectedCommitId ? '#fff' : 'transparent')
       .attr('stroke-width', (d: CommitNode) => d.id === selectedCommitId ? 3 : 0);
+
+    // HEAD marker: white ring + green label above the node.
+    const headNodes = nodes.filter((d: CommitNode) => d.is_head);
+    headNodes.append('circle')
+      .attr('r', NODE_RADIUS + 5)
+      .attr('fill', 'none')
+      .attr('stroke', '#4CAF50')
+      .attr('stroke-width', 2);
+    headNodes.append('text')
+      .attr('y', -NODE_RADIUS - 10)
+      .attr('font-size', '10px')
+      .attr('font-weight', 'bold')
+      .attr('fill', '#4CAF50')
+      .attr('text-anchor', 'middle')
+      .text('HEAD');
 
     nodes.append('title')
       .text((d: CommitNode) => `${d.short_id}\n${d.message}\n${d.author_name}\n${formatTime(d.timestamp)}`);
@@ -225,7 +261,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
         >
           <div className="tooltip-hash">{hoveredCommit.short_id}</div>
           <div className="tooltip-message">{hoveredCommit.message}</div>
-          <div className="tooltip-author">{hoveredCommit.author_name}</div>
+          <div className="tooltip-author">{hoveredCommit.author_name} · {hoveredCommit.lane_owner}</div>
           <div className="tooltip-time">{formatTime(hoveredCommit.timestamp)}</div>
           {hoveredCommit.branch_refs.length > 0 && (
             <div className="tooltip-branches">

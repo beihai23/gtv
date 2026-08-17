@@ -1,0 +1,210 @@
+//! Pure-graph tests for the lane propagation algorithm.
+//! Fixtures are hand-built CommitNode graphs — no git repo involved.
+
+use gtv_lib::layout::{compute_layout, LaneSeed};
+use gtv_lib::models::{BranchLane, CommitNode, EdgeType};
+
+fn commit(id: &str, ts: i64, parents: &[&str]) -> CommitNode {
+    CommitNode {
+        id: id.to_string(),
+        short_id: id[..7.min(id.len())].to_string(),
+        message: format!("commit {id}"),
+        author_name: "test".to_string(),
+        author_email: "t@t".to_string(),
+        timestamp: ts,
+        parents: parents.iter().map(|p| p.to_string()).collect(),
+        branch_refs: vec![],
+        fork_branch_name: None,
+        merge_branch_name: None,
+        lane_owner: String::new(),
+        is_head: false,
+        x: 0.0,
+        y: 0.0,
+        lane: 0,
+    }
+}
+
+fn seed(name: &str, tip: &str) -> LaneSeed {
+    LaneSeed {
+        name: name.to_string(),
+        tip: tip.to_string(),
+    }
+}
+
+fn lane_of(commits: &[CommitNode], id: &str) -> String {
+    commits
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap_or_else(|| panic!("commit {id} not found"))
+        .lane_owner
+        .clone()
+}
+
+fn lane<'a>(lanes: &'a [BranchLane], name: &str) -> &'a BranchLane {
+    lanes
+        .iter()
+        .find(|l| l.name == name)
+        .unwrap_or_else(|| panic!("lane {name} not found"))
+}
+
+fn edge_types(commits: &[CommitNode], edges: &[gtv_lib::models::CommitEdge], from: &str) -> Vec<EdgeType> {
+    let mut v: Vec<EdgeType> = edges
+        .iter()
+        .filter(|e| e.from == from)
+        .map(|e| match e.edge_type {
+            EdgeType::Direct => EdgeType::Direct,
+            EdgeType::Branch => EdgeType::Branch,
+            EdgeType::Merge => EdgeType::Merge,
+        })
+        .collect();
+    v.sort_by_key(|e| match e {
+        EdgeType::Direct => 0,
+        EdgeType::Branch => 1,
+        EdgeType::Merge => 2,
+    });
+    let _ = commits;
+    v
+}
+
+#[test]
+fn linear_history_single_lane() {
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("c2", 200, &["c1"]),
+        commit("c3", 300, &["c2"]),
+    ];
+    let (lanes, edges) = compute_layout(&mut commits, &[seed("main", "c3")], "main", Some("c3"));
+
+    assert_eq!(lanes.len(), 1);
+    for c in &commits {
+        assert_eq!(c.lane_owner, "main");
+        assert_eq!(c.lane, 0);
+    }
+    assert!(edges.iter().all(|e| matches!(e.edge_type, EdgeType::Direct)));
+    assert!(commits.iter().find(|c| c.id == "c3").unwrap().is_head);
+}
+
+#[test]
+fn feature_branch_fork_and_merge() {
+    // main:   c1 -- c2 ------- m1
+    //                 \       /
+    // feat:            f1 -- f2
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("c2", 200, &["c1"]),
+        commit("f1", 300, &["c2"]),
+        commit("f2", 400, &["f1"]),
+        commit("m1", 500, &["c2", "f2"]),
+    ];
+    let seeds = [seed("main", "m1"), seed("feat", "f2")];
+    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", Some("m1"));
+
+    assert_eq!(lane_of(&commits, "c1"), "main");
+    assert_eq!(lane_of(&commits, "c2"), "main");
+    assert_eq!(lane_of(&commits, "m1"), "main");
+    assert_eq!(lane_of(&commits, "f1"), "feat");
+    assert_eq!(lane_of(&commits, "f2"), "feat");
+
+    let feat = lane(&lanes, "feat");
+    assert_eq!(feat.fork_point.as_deref(), Some("c2"));
+    assert_eq!(feat.merged_into.as_deref(), Some("m1"));
+    assert_eq!(feat.lane_index, 1);
+
+    // fork annotation lands on the fork-point commit (parent lane)
+    let c2 = commits.iter().find(|c| c.id == "c2").unwrap();
+    assert_eq!(c2.fork_branch_name.as_deref(), Some("feat"));
+    // merge annotation lands on the merge commit
+    let m1 = commits.iter().find(|c| c.id == "m1").unwrap();
+    assert_eq!(m1.merge_branch_name.as_deref(), Some("feat"));
+
+    // edge types: f1->c2 is Branch, m1->f2 is Merge, m1->c2 Direct
+    assert!(edges.iter().any(|e| e.from == "f1" && e.to == "c2" && matches!(e.edge_type, EdgeType::Branch)));
+    assert!(edges.iter().any(|e| e.from == "m1" && e.to == "f2" && matches!(e.edge_type, EdgeType::Merge)));
+    assert!(edges.iter().any(|e| e.from == "m1" && e.to == "c2" && matches!(e.edge_type, EdgeType::Direct)));
+}
+
+#[test]
+fn unmerged_branch_reaches_tip_without_merge_edge() {
+    // main:  c1 -- c2
+    //          \
+    // feat:     f1 (tip, never merged)
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("c2", 200, &["c1"]),
+        commit("f1", 250, &["c1"]),
+    ];
+    let seeds = [seed("main", "c2"), seed("feat", "f1")];
+    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", Some("c2"));
+
+    assert_eq!(lane_of(&commits, "f1"), "feat");
+    assert_eq!(lane(&lanes, "feat").merged_into, None);
+    assert!(!edges.iter().any(|e| matches!(e.edge_type, EdgeType::Merge)));
+}
+
+#[test]
+fn branch_forked_from_another_branch() {
+    // main:  c1
+    //          \
+    // base:     b1
+    //             \
+    // sub:         s1
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("b1", 200, &["c1"]),
+        commit("s1", 300, &["b1"]),
+    ];
+    let seeds = [seed("main", "c1"), seed("base", "b1"), seed("sub", "s1")];
+    let (lanes, _edges) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane_of(&commits, "b1"), "base");
+    assert_eq!(lane_of(&commits, "s1"), "sub");
+    assert_eq!(lane(&lanes, "sub").fork_point.as_deref(), Some("b1"));
+    // fork annotation for "sub" lands on b1 (on the "base" lane)
+    let b1 = commits.iter().find(|c| c.id == "b1").unwrap();
+    assert_eq!(b1.fork_branch_name.as_deref(), Some("sub"));
+}
+
+#[test]
+fn octopus_merge_produces_one_merge_edge_per_extra_parent() {
+    // main:  c1 -------- m1
+    //         \  \      /  /
+    // a:       a1 -----   /
+    // b:        \ b1 -----
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("a1", 200, &["c1"]),
+        commit("b1", 250, &["c1"]),
+        commit("m1", 300, &["c1", "a1", "b1"]),
+    ];
+    let seeds = [seed("main", "m1"), seed("a", "a1"), seed("b", "b1")];
+    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", None);
+
+    let merge_edges: Vec<_> = edges
+        .iter()
+        .filter(|e| e.from == "m1" && matches!(e.edge_type, EdgeType::Merge))
+        .collect();
+    assert_eq!(merge_edges.len(), 2);
+    assert_eq!(lane(&lanes, "a").merged_into.as_deref(), Some("m1"));
+    assert_eq!(lane(&lanes, "b").merged_into.as_deref(), Some("m1"));
+}
+
+#[test]
+fn lanes_sorted_by_birth_time() {
+    // old forks sit closer to main (lane 1), late forks further out.
+    // main:  c1 -- c2 -- c3
+    //          \      \
+    // early:    e1     \
+    // late:             l1
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("e1", 150, &["c1"]),
+        commit("c2", 200, &["c1"]),
+        commit("c3", 300, &["c2"]),
+        commit("l1", 350, &["c3"]),
+    ];
+    let seeds = [seed("main", "c3"), seed("early", "e1"), seed("late", "l1")];
+    let (lanes, _) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane(&lanes, "early").lane_index, 1);
+    assert_eq!(lane(&lanes, "late").lane_index, 2);
+}

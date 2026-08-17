@@ -59,7 +59,13 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
         
         {commit.files.length > 0 && (
           <div className="files-section">
-            <h4>Changed Files ({commit.files.length})</h4>
+            <h4>
+              Changed Files ({commit.files.length})
+              <span className="diff-total">
+                {' '}<span className="diff-add">+{commit.total_additions}</span>
+                {' '}<span className="diff-del">−{commit.total_deletions}</span>
+              </span>
+            </h4>
             <div className="files-list">
               {commit.files.map((file, i) => (
                 <div key={i} className="file-row">

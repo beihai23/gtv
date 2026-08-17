@@ -28,13 +28,10 @@ function App() {
   }, []);
 
   const handleOpenRepo = useCallback(async () => {
-    console.log('Opening repository...');
     setLoading(true);
     setError(null);
     try {
-      console.log('Calling selectAndOpenRepository...');
       const data = await selectAndOpenRepository();
-      console.log('Got data:', data);
       if (data) {
         setGitData(data);
         setSelectedCommit(null);
@@ -45,9 +42,7 @@ function App() {
           setLatestRepo(path);
         }
         
-        console.log('Getting branch list...');
         const branches = await getBranchList();
-        console.log('Got branches:', branches.length);
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
         setSearchQuery('');
@@ -62,18 +57,14 @@ function App() {
 
   const handleOpenLatestRepo = useCallback(async () => {
     if (!latestRepo) return;
-    console.log('Opening latest repository:', latestRepo);
     setLoading(true);
     setError(null);
     try {
       const data = await openRepository(latestRepo);
-      console.log('Got data:', data);
       setGitData(data);
       setSelectedCommit(null);
       
-      console.log('Getting branch list...');
       const branches = await getBranchList();
-      console.log('Got branches:', branches.length);
       setBranchList(branches);
       setSelectedBranches(branches.map(b => b.name));
       setSearchQuery('');
