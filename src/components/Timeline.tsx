@@ -117,7 +117,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     };
 
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.01, 500])
+      .scaleExtent([0.005, 40])
       .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform.toString());
@@ -130,7 +130,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     const maxX = Math.max(...allX, 100) + 200;
     const minY = Math.min(...data.commits.map(c => c.y), 0) - LANE_HEIGHT;
     const maxY = Math.max(...data.commits.map(c => c.y), 0) + LANE_HEIGHT;
-    svg.attr('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+    // No viewBox: the scene lives in plain pixel space and the zoom transform
+    // owns all scaling. (viewBox + zoom double-scales, which made large repos
+    // render microscopically small.)
 
     // --- time ruler (top, inside the zoomable scene) --------------------------
     if (data.commits.length > 1) {
@@ -458,11 +460,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     // --- viewport: reset only when a repo was (re)opened ------------------------------
     const shouldReset = resetKeyRef.current !== resetKey;
     resetKeyRef.current = resetKey;
-    const latestCommit = data.commits[data.commits.length - 1];
-    if (latestCommit && shouldReset) {
+    if (data.commits.length > 0 && shouldReset) {
+      // Fit the whole scene into the viewport (10% padding), capped at 1x.
+      const sceneW = maxX - minX;
+      const sceneH = maxY - minY;
+      const k = Math.min(width / sceneW, height / sceneH, 1) * 0.9;
       const t = d3.zoomIdentity
-        .translate(width / 2 - latestCommit.x, height / 3)
-        .scale(1);
+        .translate(width / 2 - (minX + sceneW / 2) * k, height / 2 - (minY + sceneH / 2) * k)
+        .scale(k);
       svg.call(zoom.transform, t);
       transformRef.current = t;
     } else {
