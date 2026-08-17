@@ -16,6 +16,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
+  const [viewResetKey, setViewResetKey] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
@@ -35,6 +36,7 @@ function App() {
       if (data) {
         setGitData(data);
         setSelectedCommit(null);
+        setViewResetKey(k => k + 1);
         
         const path = await getCurrentPath();
         if (path) {
@@ -63,6 +65,7 @@ function App() {
       const data = await openRepository(latestRepo);
       setGitData(data);
       setSelectedCommit(null);
+      setViewResetKey(k => k + 1);
       
       const branches = await getBranchList();
       setBranchList(branches);
@@ -216,6 +219,7 @@ function App() {
               data={gitData} 
               onCommitClick={handleCommitClick}
               selectedCommitId={selectedCommit?.id ?? null}
+              resetKey={viewResetKey}
             />
             <CommitDetails 
               commit={selectedCommit}

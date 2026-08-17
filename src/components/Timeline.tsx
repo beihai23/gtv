@@ -6,15 +6,18 @@ interface TimelineProps {
   data: GitData;
   onCommitClick: (commitId: string) => void;
   selectedCommitId: string | null;
+  /** Increments when a repository is (re)opened — the only time the viewport resets. */
+  resetKey: number;
 }
 
 const NODE_RADIUS = 8;
 const LANE_HEIGHT = 80;
 
-export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const transformRef = useRef(d3.zoomIdentity);
+  const resetKeyRef = useRef(-1);
   const [hoveredCommit, setHoveredCommit] = useState<CommitNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
@@ -226,21 +229,28 @@ export function Timeline({ data, onCommitClick, selectedCommitId }: TimelineProp
       .text((d: CommitNode) => d.merge_branch_name || '');
 
     const latestCommit = data.commits[data.commits.length - 1];
-    if (latestCommit) {
+    // Only reset the viewport when the user opened a (new) repository.
+    // Filter toggles / commit selection re-render on new data but must
+    // preserve the user's zoom & pan.
+    const shouldReset = resetKeyRef.current !== resetKey;
+    resetKeyRef.current = resetKey;
+    if (latestCommit && shouldReset) {
       // Start with a reasonable scale focused on the timeline, not fitting everything
       const initialScale = 1.0;
       const translateX = width / 2 - latestCommit.x * initialScale;
       const translateY = height / 2;
-      
+
       const initialTransform = d3.zoomIdentity
         .translate(translateX, translateY)
         .scale(initialScale);
-      
+
       svg.call(zoom.transform, initialTransform);
       transformRef.current = initialTransform;
+    } else {
+      svg.call(zoom.transform, transformRef.current);
     }
 
-  }, [data, onCommitClick, selectedCommitId]);
+  }, [data, onCommitClick, selectedCommitId, resetKey]);
 
   useEffect(() => {
     draw();
