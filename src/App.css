@@ -347,7 +347,10 @@
 .filter-tags {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  align-items: center;
+  max-width: 60vw;
 }
 
 .filter-tag {
@@ -509,3 +512,40 @@
 /* --- collapse chips --- */
 .collapse-chip rect { transition: fill 0.15s; }
 .collapse-chip:hover rect { fill: #3a3a3a; }
+
+/* --- branch panel (dropdown for large ref lists) --- */
+.branch-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+}
+.branch-panel {
+  position: absolute;
+  top: 64px;
+  right: 24px;
+  width: min(760px, 85vw);
+  max-height: 55vh;
+  background: #1f1f23;
+  border: 1px solid #3a3a40;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+}
+.branch-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #333;
+  color: #999;
+  font-size: 12px;
+}
+.branch-panel-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}

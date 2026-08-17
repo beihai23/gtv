@@ -123,6 +123,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform.toString());
+        cull();
         minimapViewport();
       });
     svg.call(zoom);
@@ -420,6 +421,48 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .attr('fill', '#E91E63')
       .attr('text-anchor', 'middle')
       .text((d: CommitNode) => `⤶ ${d.merge_branch_name}`);
+
+    // --- viewport culling: only elements inside (or near) the visible scene
+    // rect stay in the render tree; everything else is display:none. Lane
+    // labels get pinned to the view's left edge so they never scroll away.
+    function cull() {
+      const t = transformRef.current;
+      const M = 240; // scene-px margin around the viewport
+      const x0 = -t.x / t.k - M;
+      const x1 = (width - t.x) / t.k + M;
+      const y0 = -t.y / t.k - M;
+      const y1 = (height - t.y) / t.k + M;
+      const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+
+      g.selectAll<SVGGElement, CommitNode>('.node,.label,.ref-badges')
+        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
+      g.selectAll<SVGTextElement, CommitNode>('.fork-label,.merge-label')
+        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
+      g.selectAll<SVGPathElement, CommitEdge>('.edge')
+        .style('display', d => {
+          const a = commitMap.get(d.from);
+          const b = commitMap.get(d.to);
+          if (!a || !b) return 'none';
+          return inView(a.x, a.y) || inView(b.x, b.y) ? null : 'none';
+        });
+      g.selectAll<SVGLineElement, BranchLane>('.lane,.lane-bar')
+        .style('display', d => {
+          const y = d.lane_index * LANE_HEIGHT;
+          return y >= y0 && y <= y1 ? null : 'none';
+        });
+      g.selectAll<SVGTextElement, BranchLane>('.lane-label')
+        .attr('x', x0 + M + 8)
+        .style('display', d => {
+          const y = d.lane_index * LANE_HEIGHT;
+          return y >= y0 && y <= y1 ? null : 'none';
+        });
+      g.selectAll<SVGGElement, { lane: BranchLane; hidden: number }>('.collapse-chip')
+        .style('display', d => {
+          const span = laneSpan.get(d.lane.lane_index);
+          if (!span) return 'none';
+          return inView((span.min + span.max) / 2, d.lane.lane_index * LANE_HEIGHT) ? null : 'none';
+        });
+    }
 
     // --- minimap ----------------------------------------------------------------------
     if (minimapRef.current) {

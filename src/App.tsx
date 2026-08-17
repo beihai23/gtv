@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
@@ -17,7 +17,6 @@ function App() {
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
   const [viewResetKey, setViewResetKey] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
 
@@ -140,12 +139,15 @@ function App() {
     return branchList.filter(b => b.name.toLowerCase().includes(query));
   }, [branchList, searchQuery]);
 
-  const visibleBranches = useMemo(() => {
-    if (showAllTags) return filteredBranches;
-    return filteredBranches.slice(0, 30);
-  }, [filteredBranches, showAllTags]);
+  const INLINE_CHIP_LIMIT = 12;
+  const inlineBranches = useMemo(() => {
+    // Selected branches stay visible; fill remaining slots by list order.
+    const selected = filteredBranches.filter(b => selectedBranches.includes(b.name));
+    const rest = filteredBranches.filter(b => !selectedBranches.includes(b.name));
+    return [...selected, ...rest].slice(0, INLINE_CHIP_LIMIT);
+  }, [filteredBranches, selectedBranches]);
 
-  const hasMoreTags = filteredBranches.length > 30;
+  const hasMoreTags = filteredBranches.length > inlineBranches.length;
 
   return (
     <div className="app">
@@ -170,8 +172,8 @@ function App() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
               
-              <div className="filter-tags" ref={containerRef}>
-                {visibleBranches.map(branch => (
+              <div className="filter-tags">
+                {inlineBranches.map(branch => (
                   <button
                     key={branch.name}
                     className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
@@ -189,7 +191,7 @@ function App() {
                     className="filter-tag show-more"
                     onClick={() => setShowAllTags(!showAllTags)}
                   >
-                    {showAllTags ? 'Show Less' : `+${filteredBranches.length - 30} more`}
+                    {showAllTags ? 'Close ▴' : `+${filteredBranches.length - inlineBranches.length} more ▾`}
                   </button>
                 )}
               </div>
@@ -205,6 +207,32 @@ function App() {
           </button>
         </div>
       </header>
+
+      {showAllTags && (
+        <div className="branch-panel-backdrop" onClick={() => setShowAllTags(false)}>
+          <div className="branch-panel" onClick={e => e.stopPropagation()}>
+            <div className="branch-panel-header">
+              <span>{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
+              <button className="view-btn" onClick={() => setShowAllTags(false)}>Close</button>
+            </div>
+            <div className="branch-panel-list">
+              {filteredBranches.map(branch => (
+                <button
+                  key={branch.name}
+                  className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
+                  style={{
+                    borderColor: branch.color,
+                    backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
+                  }}
+                  onClick={() => toggleBranchFilter(branch.name)}
+                >
+                  {branch.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="error">
