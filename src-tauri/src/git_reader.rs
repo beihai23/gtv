@@ -338,6 +338,77 @@ impl GitReader {
         Ok((stats.insertions() as u32, stats.deletions() as u32))
     }
 
+    /// Unified diff patch text for one file in a commit (vs first parent,
+    /// or the empty tree for the root commit). Large patches are truncated.
+    pub fn get_file_diff(&self, commit_id: &str, path: &str) -> Result<String, String> {
+        const MAX_PATCH_BYTES: usize = 200 * 1024;
+
+        let oid = Oid::from_str(commit_id).map_err(|e| format!("Invalid commit id: {}", e))?;
+        let commit = self
+            .repo
+            .find_commit(oid)
+            .map_err(|e| format!("Failed to find commit: {}", e))?;
+        let commit_tree = commit
+            .tree()
+            .map_err(|e| format!("Failed to get commit tree: {}", e))?;
+        let parent_tree = match commit.parents().next() {
+            Some(parent) => Some(
+                parent
+                    .tree()
+                    .map_err(|e| format!("Failed to get parent tree: {}", e))?,
+            ),
+            None => None,
+        };
+
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
+            .map_err(|e| format!("Failed to get diff: {}", e))?;
+
+        // Match against the new path (what the file list shows); fall back to
+        // the old path so renames still resolve.
+        let idx = (0..diff.deltas().len())
+            .find(|&i| {
+                let delta = diff.get_delta(i).unwrap();
+                let new_match = delta
+                    .new_file()
+                    .path()
+                    .and_then(|p| p.to_str())
+                    .map(|p| p == path)
+                    .unwrap_or(false);
+                let old_match = delta
+                    .old_file()
+                    .path()
+                    .and_then(|p| p.to_str())
+                    .map(|p| p == path)
+                    .unwrap_or(false);
+                new_match || old_match
+            })
+            .ok_or_else(|| format!("File not found in commit diff: {}", path))?;
+
+        let mut patch = git2::Patch::from_diff(&diff, idx)
+            .map_err(|e| format!("Failed to build patch: {}", e))?
+            .ok_or_else(|| format!("No patch for file: {}", path))?;
+
+        let buf = patch.to_buf().map_err(|e| format!("Failed to render patch: {}", e))?;
+        let text = String::from_utf8_lossy(&buf).to_string();
+        if text.is_empty() {
+            return Ok("(binary file or no textual diff)".to_string());
+        }
+        if text.len() > MAX_PATCH_BYTES {
+            let mut cut = MAX_PATCH_BYTES;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            return Ok(format!(
+                "{}\n\n... (diff truncated at {} KB)",
+                &text[..cut],
+                MAX_PATCH_BYTES / 1024
+            ));
+        }
+        Ok(text)
+    }
+
     pub fn get_commit_detail(&self, commit_id: &str) -> Result<CommitDetail, String> {
         let oid = Oid::from_str(commit_id).map_err(|e| format!("Invalid commit id: {}", e))?;
 

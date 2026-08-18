@@ -23,6 +23,10 @@ export async function getCommitDetail(commitId: string): Promise<CommitDetail> {
   return invoke<CommitDetail>('get_commit_detail', { commitId });
 }
 
+export async function getFileDiff(commitId: string, path: string): Promise<string> {
+  return invoke<string>('get_file_diff', { commitId, path });
+}
+
 export async function getCurrentPath(): Promise<string | null> {
   return invoke<string | null>('get_current_path');
 }

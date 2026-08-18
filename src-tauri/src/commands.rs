@@ -55,6 +55,17 @@ pub fn get_commit_detail(
 }
 
 #[tauri::command]
+pub fn get_file_diff(
+    commit_id: String,
+    path: String,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let current_repo = state.current_repo.lock().unwrap();
+    let reader = current_repo.as_ref().ok_or("No repository opened")?;
+    reader.get_file_diff(&commit_id, &path)
+}
+
+#[tauri::command]
 pub fn get_current_path(state: tauri::State<AppState>) -> Option<String> {
     let current_path = state.current_path.lock().unwrap();
     current_path.clone()

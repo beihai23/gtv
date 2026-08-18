@@ -25,3 +25,4 @@ dist-ssr
 
 # mock preview harness data (regenerate: cargo run --example dump_json -- <repo> > public/mock-data.json)
 public/mock-data.json
+.gstack/

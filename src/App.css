@@ -23,6 +23,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   padding: 12px 20px;
   background: #16213e;
   border-bottom: 1px solid #0f3460;
@@ -32,6 +33,7 @@
   display: flex;
   align-items: baseline;
   gap: 16px;
+  flex-shrink: 0;
 }
 
 .header h1 {
@@ -314,6 +316,70 @@
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;
 }
 
+.file-row.clickable {
+  cursor: pointer;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+}
+
+.file-row.clickable:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.file-row.clickable.expanded {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.file-row .expand-hint {
+  margin-left: auto;
+  color: #666;
+  font-size: 10px;
+}
+
+.file-diff {
+  margin: 4px 0 8px 26px;
+  padding: 8px;
+  background: #16161e;
+  border: 1px solid #2a2a35;
+  border-radius: 4px;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.file-diff .diff-line {
+  white-space: pre;
+  color: #999;
+}
+
+.file-diff .diff-line-add {
+  color: #7ee787;
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.file-diff .diff-line-del {
+  color: #ff7b72;
+  background: rgba(244, 67, 54, 0.08);
+}
+
+.file-diff .diff-line-hunk {
+  color: #79c0ff;
+}
+
+.file-diff-loading,
+.file-diff-error {
+  color: #888;
+  white-space: pre-wrap;
+}
+
+.file-diff-error {
+  color: #ff7b72;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -332,7 +398,19 @@
 .header-chips {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 8px;
+  container-type: inline-size;
+}
+
+/* When the window is too narrow for even one whole chip, drop the chip row
+   and keep just the "+N more" button instead of showing a cut-off sliver. */
+@container (max-width: 140px) {
+  .header-chips .filter-tags {
+    display: none;
+  }
 }
 
 .branch-select {
@@ -363,14 +441,20 @@
 
 .filter-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  flex-wrap: nowrap;
-  overflow: hidden;
   align-items: center;
-  max-width: 60vw;
+  min-width: 0;
+  /* One-row clipping: chips that don't fit wrap onto a hidden second row,
+     so they're hidden whole instead of being cut mid-label. */
+  max-height: 26px;
+  overflow: hidden;
 }
 
 .filter-tag {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
   padding: 4px 8px;
   font-size: 11px;
   border: 1px solid;
@@ -378,9 +462,6 @@
   cursor: pointer;
   color: #e0e0e0;
   white-space: nowrap;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   transition: all 0.2s;
 }
 
@@ -392,6 +473,7 @@
   background: #0f3460;
   border-color: #666;
   color: #aaa;
+  flex-shrink: 0;
 }
 
 .filter-tag.show-more:hover {
@@ -630,10 +712,24 @@
 }
 .branch-panel-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 12px;
   padding: 12px 14px;
   overflow-y: auto;
+}
+
+.branch-panel-group-title {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.branch-panel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .minimap {

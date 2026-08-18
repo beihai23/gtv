@@ -6,6 +6,19 @@ import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList
 import type { GitData, CommitDetail, BranchLane } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
+const SHOW_TAGS_KEY = 'gtv_show_tags';
+
+// Branch/tag chip labels: show the full name up to this many chars; longer
+// names keep head and tail with an ellipsis in the middle (CSS can only
+// truncate at the end, which hides the distinguishing tail of long names).
+const CHIP_LABEL_MAX = 32;
+
+function truncateMiddle(name: string, max: number = CHIP_LABEL_MAX): string {
+  if (name.length <= max) return name;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
+}
 
 function App() {
   const [gitData, setGitData] = useState<GitData | null>(null);
@@ -16,6 +29,14 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
+  // Version-tag flood control: hides tag chips from the toolbar and panel.
+  const [showTags, setShowTags] = useState(() => localStorage.getItem(SHOW_TAGS_KEY) !== '0');
+  const toggleShowTags = useCallback(() => {
+    setShowTags(v => {
+      localStorage.setItem(SHOW_TAGS_KEY, v ? '0' : '1');
+      return !v;
+    });
+  }, []);
   const [viewResetKey, setViewResetKey] = useState(0);
   // View options live here so the header owns the whole toolbar row.
   const [compressed, setCompressed] = useState(true);
@@ -161,10 +182,11 @@ function App() {
   }, [branchList, refActivity]);
 
   const filteredBranches = useMemo(() => {
-    if (!searchQuery) return sortedBranches;
+    const visible = showTags ? sortedBranches : sortedBranches.filter(b => !b.is_tag);
+    if (!searchQuery) return visible;
     const query = searchQuery.toLowerCase();
-    return sortedBranches.filter(b => b.name.toLowerCase().includes(query));
-  }, [sortedBranches, searchQuery]);
+    return visible.filter(b => b.name.toLowerCase().includes(query));
+  }, [sortedBranches, searchQuery, showTags]);
 
   const INLINE_CHIP_LIMIT = 8;
   const inlineBranches = useMemo(() => {
@@ -175,6 +197,32 @@ function App() {
   }, [filteredBranches, selectedBranches]);
 
   const hasMoreTags = filteredBranches.length > inlineBranches.length;
+
+  // Panel groups: enabled (selected) chips first, then the rest.
+  const panelEnabled = useMemo(
+    () => filteredBranches.filter(b => selectedBranches.includes(b.name)),
+    [filteredBranches, selectedBranches]
+  );
+  const panelDisabled = useMemo(
+    () => filteredBranches.filter(b => !selectedBranches.includes(b.name)),
+    [filteredBranches, selectedBranches]
+  );
+
+  const renderBranchChip = (branch: BranchLane) => (
+    <button
+      key={branch.name}
+      className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
+      style={{
+        borderColor: branch.color,
+        backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
+      }}
+      onClick={() => toggleBranchFilter(branch.name)}
+      onDoubleClick={() => handleFilterChange([branch.name])}
+      title={`${branch.name}\nClick: toggle · Double-click: only this one`}
+    >
+      {truncateMiddle(branch.name)}
+    </button>
+  );
 
   return (
     <div className="app">
@@ -189,22 +237,10 @@ function App() {
         </div>
 
         {branchList.length > 0 && (
-          <div className="filter-tags header-chips">
-            {inlineBranches.map(branch => (
-              <button
-                key={branch.name}
-                className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
-                style={{
-                  borderColor: branch.color,
-                  backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
-                }}
-                onClick={() => toggleBranchFilter(branch.name)}
-                onDoubleClick={() => handleFilterChange([branch.name])}
-                title="Click: toggle · Double-click: only this one"
-              >
-                {branch.name}
-              </button>
-            ))}
+          <div className="header-chips">
+            <div className="filter-tags">
+              {inlineBranches.map(renderBranchChip)}
+            </div>
             {hasMoreTags && (
               <button
                 className="filter-tag show-more"
@@ -270,26 +306,34 @@ function App() {
                 autoFocus
               />
               <span className="branch-panel-count">{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
+              <button
+                className={`view-btn ${showTags ? 'active' : ''}`}
+                onClick={toggleShowTags}
+                title="Show/hide tag chips (e.g. version tags)"
+              >
+                Tags
+              </button>
               <button className="view-btn" onClick={() => handleFilterChange(branchList.map(b => b.name))}>All</button>
               <button className="view-btn" onClick={() => handleFilterChange([])}>None</button>
               <button className="view-btn" onClick={() => setShowAllTags(false)}>Close</button>
             </div>
             <div className="branch-panel-list">
-              {filteredBranches.map(branch => (
-                <button
-                  key={branch.name}
-                  className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
-                  style={{
-                    borderColor: branch.color,
-                    backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
-                  }}
-                  onClick={() => toggleBranchFilter(branch.name)}
-                  onDoubleClick={() => handleFilterChange([branch.name])}
-                  title="Click: toggle · Double-click: only this one"
-                >
-                  {branch.name}
-                </button>
-              ))}
+              {panelEnabled.length > 0 && (
+                <div className="branch-panel-group">
+                  <div className="branch-panel-group-title">Enabled ({panelEnabled.length})</div>
+                  <div className="branch-panel-chips">
+                    {panelEnabled.map(renderBranchChip)}
+                  </div>
+                </div>
+              )}
+              {panelDisabled.length > 0 && (
+                <div className="branch-panel-group">
+                  <div className="branch-panel-group-title">Disabled ({panelDisabled.length})</div>
+                  <div className="branch-panel-chips">
+                    {panelDisabled.map(renderBranchChip)}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="branch-panel-footer">
               Double-click a chip to solo it — for daily work: None, then double-click the 2-3 branches you care about.
