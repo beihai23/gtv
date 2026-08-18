@@ -544,10 +544,20 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid #333;
   color: #999;
   font-size: 12px;
+}
+.branch-panel-search {
+  flex: 1;
+  min-width: 0;
+  background: #16161c;
+  border-color: #3a3a40;
+}
+.branch-panel-count {
+  white-space: nowrap;
 }
 .branch-panel-list {
   display: flex;

@@ -22,6 +22,17 @@ interface LaneMenu {
   lane: BranchLane;
 }
 
+interface BadgePill {
+  name: string;
+  is_tag: boolean;
+}
+
+interface BadgeSpec {
+  c: CommitNode;
+  names: BadgePill[];
+  level: number;
+}
+
 function nodeRadius(c: CommitNode): number {
   const volume = c.additions + c.deletions;
   if (volume <= 0) return 7;
@@ -350,11 +361,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .text('HEAD');
 
     nodes.append('title')
-      .text((d: CommitNode) => `${d.short_id}\n${d.message}\n${d.author_name}\n${formatTime(d.timestamp)}`);
+      .text((d: CommitNode) =>
+        `${d.short_id}\n${d.message}\n${d.author_name}\n${formatTime(d.timestamp)}` +
+        (d.branch_refs.length ? `\nrefs: ${d.branch_refs.map(r => r.name).join(', ')}` : ''));
 
-    // --- node labels (short id + message, key nodes only when compressed) --------
+    // --- node labels (short id + message), greedily thinned per lane ---------
+    // Labels on a lane are laid out left-to-right; a label is only drawn when
+    // it clears the previous one, so dense regions degrade to every-Nth label
+    // instead of an overlapping mess. The selected commit is always labelled.
+    const labelVisible = (() => {
+      const ok = new Set<string>();
+      const lastX1 = new Map<string, number>();
+      const byX = [...visibleCommits].sort((a, b) => a.x - b.x);
+      for (const c of byX) {
+        const x0 = c.x + nodeRadius(c) + 7;
+        const w = Math.max(c.short_id.length * 6.6, Math.min(c.message.length, 30) * 5.8);
+        const prev = lastX1.get(c.lane_owner);
+        if (prev !== undefined && x0 < prev + 8 && c.id !== selectedCommitId) continue;
+        lastX1.set(c.lane_owner, x0 + w);
+        ok.add(c.id);
+      }
+      return ok;
+    })();
+
     const labels = g.selectAll('.label')
-      .data(visibleCommits)
+      .data(visibleCommits.filter(c => labelVisible.has(c.id)))
       .enter()
       .append('g')
       .attr('class', 'label')
@@ -371,31 +402,60 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .attr('y', 12)
       .text((d: CommitNode) => d.message.length > 30 ? d.message.slice(0, 30) + '…' : d.message);
 
-    // --- ref badges (stacked, above the node) -------------------------------------
+    // --- ref badges, collision-resolved per lane ---------------------------
+    // A commit shows at most two pills (first ref + "+N"). Pill groups that
+    // would horizontally overlap a neighbour on the same lane are pushed to a
+    // higher level; groups beyond MAX_LEVEL are dropped (their refs stay
+    // reachable through the node tooltip and the CommitDetails panel).
     if (showRefLabels) {
+      const pillW = (name: string) => name.length * 5.6 + 14;
+      const LEVEL_H = 40;
+      const MAX_LEVEL = 3;
+      const specs: BadgeSpec[] = [];
+      const lastX1 = new Map<string, number[]>();
+      const withRefs = visibleCommits
+        .filter(c => c.branch_refs.length > 0)
+        .sort((a, b) => a.x - b.x);
+      for (const c of withRefs) {
+        const shown = c.branch_refs.slice(0, 2);
+        const extra = c.branch_refs.length - shown.length;
+        const names: BadgePill[] = shown.map(r => ({ name: r.name, is_tag: r.is_tag }));
+        if (extra > 0) names.push({ name: `+${extra}`, is_tag: false });
+        const width = Math.max(...names.map(n => pillW(n.name)));
+        const x0 = c.x - width / 2;
+        const edges = lastX1.get(c.lane_owner) ?? [];
+        let level = 0;
+        while (level <= MAX_LEVEL && edges[level] !== undefined && x0 < edges[level] + 8) level++;
+        if (level > MAX_LEVEL) continue;
+        edges[level] = c.x + width / 2;
+        lastX1.set(c.lane_owner, edges);
+        specs.push({ c, names, level });
+      }
       const badgeGroups = g.selectAll('.ref-badges')
-        .data(visibleCommits.filter(c => c.branch_refs.length > 0))
+        .data(specs)
         .enter()
         .append('g')
         .attr('class', 'ref-badges')
-        .attr('transform', (d: CommitNode) => `translate(${d.x}, ${d.y - nodeRadius(d) - 8})`);
-      badgeGroups.each(function (c: CommitNode) {
+        .attr('transform', s => `translate(${s.c.x}, ${s.c.y - nodeRadius(s.c) - 8 - s.level * LEVEL_H})`)
+        .attr('opacity', s => laneOpacity(s.c.lane_owner));
+      badgeGroups.each(function (s) {
         const grp = d3.select(this);
-        c.branch_refs.forEach((ref, i) => {
-          const w = ref.name.length * 6 + 12;
+        grp.append('title').text(s.c.branch_refs.map(r => r.name).join('\n'));
+        s.names.forEach((n, i) => {
+          const w = pillW(n.name);
           const item = grp.append('g').attr('transform', `translate(${-w / 2}, ${-i * 18})`);
           item.append('rect')
             .attr('x', 0).attr('y', -13)
             .attr('width', w).attr('height', 16)
             .attr('rx', 8)
-            .attr('fill', ref.is_tag ? '#9C27B0' : branchColorMap.get(c.lane_owner) ?? '#4A90D9')
-            .attr('opacity', 0.9);
+            .attr('fill', n.is_tag ? '#9C27B0' : n.name.startsWith('+') ? '#555' : branchColorMap.get(s.c.lane_owner) ?? '#4A90D9')
+            .attr('opacity', 0.92);
           item.append('text')
             .attr('x', w / 2).attr('y', -2)
             .attr('text-anchor', 'middle')
             .attr('font-size', '9px')
             .attr('fill', '#fff')
-            .text(ref.name);
+            .text(n.name);
         });
       });
     }
@@ -437,8 +497,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const y1 = (height - t.y) / t.k + M;
       const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
 
-      g.selectAll<SVGGElement, CommitNode>('.node,.label,.ref-badges')
+      g.selectAll<SVGGElement, CommitNode>('.node,.label')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
+      g.selectAll<SVGGElement, BadgeSpec>('.ref-badges')
+        .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
       g.selectAll<SVGTextElement, CommitNode>('.fork-label,.merge-label')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
       g.selectAll<SVGPathElement, CommitEdge>('.edge')

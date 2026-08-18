@@ -133,11 +133,33 @@ function App() {
     }
   }, [selectedBranches, handleFilterChange]);
 
+  // Latest activity time per ref (branch lane or tag), derived from the
+  // loaded commits. Used to order the branch chips newest-first.
+  const refActivity = useMemo(() => {
+    const map = new Map<string, number>();
+    if (gitData) {
+      for (const c of gitData.commits) {
+        const prev = map.get(c.lane_owner);
+        if (prev === undefined || c.timestamp > prev) map.set(c.lane_owner, c.timestamp);
+        for (const r of c.branch_refs) {
+          const p = map.get(r.name);
+          if (p === undefined || c.timestamp > p) map.set(r.name, c.timestamp);
+        }
+      }
+    }
+    return map;
+  }, [gitData]);
+
+  const sortedBranches = useMemo(() => {
+    return [...branchList].sort((a, b) =>
+      (refActivity.get(b.name) ?? 0) - (refActivity.get(a.name) ?? 0));
+  }, [branchList, refActivity]);
+
   const filteredBranches = useMemo(() => {
-    if (!searchQuery) return branchList;
+    if (!searchQuery) return sortedBranches;
     const query = searchQuery.toLowerCase();
-    return branchList.filter(b => b.name.toLowerCase().includes(query));
-  }, [branchList, searchQuery]);
+    return sortedBranches.filter(b => b.name.toLowerCase().includes(query));
+  }, [sortedBranches, searchQuery]);
 
   const INLINE_CHIP_LIMIT = 12;
   const inlineBranches = useMemo(() => {
@@ -163,16 +185,7 @@ function App() {
         
         <div className="header-controls">
           {branchList.length > 0 && (
-            <>
-              <input
-                type="text"
-                className="search-input"
-                placeholder="Filter branches/tags..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              
-              <div className="filter-tags">
+            <div className="filter-tags">
                 {inlineBranches.map(branch => (
                   <button
                     key={branch.name}
@@ -195,7 +208,6 @@ function App() {
                   </button>
                 )}
               </div>
-            </>
           )}
           
           <button 
@@ -212,7 +224,15 @@ function App() {
         <div className="branch-panel-backdrop" onClick={() => setShowAllTags(false)}>
           <div className="branch-panel" onClick={e => e.stopPropagation()}>
             <div className="branch-panel-header">
-              <span>{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
+              <input
+                type="text"
+                className="search-input branch-panel-search"
+                placeholder="Filter branches/tags..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                autoFocus
+              />
+              <span className="branch-panel-count">{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
               <button className="view-btn" onClick={() => setShowAllTags(false)}>Close</button>
             </div>
             <div className="branch-panel-list">
