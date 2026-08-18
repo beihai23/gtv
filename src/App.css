@@ -449,10 +449,10 @@
 .diff-del { color: #F44336; }
 .lane-label { user-select: none; }
 
-/* --- view toolbar (top-left overlay) --- */
+/* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
 .view-toolbar {
   position: absolute;
-  top: 10px;
+  top: 34px;
   left: 12px;
   display: flex;
   gap: 6px;

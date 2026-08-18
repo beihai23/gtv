@@ -181,12 +181,28 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .attr('stroke-width', 1);
       const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
 
+      const pad2 = (n: number) => String(n).padStart(2, '0');
       updateRuler = () => {
         const screenScale = transformRef.current.rescaleX(timeScale);
+        // Adaptive precision: the visible time span decides whether ticks show
+        // year, year-month, full date, or date + time down to minutes/seconds.
+        const [d0, d1] = screenScale.domain();
+        const spanSec = (d1.getTime() - d0.getTime()) / 1000;
+        const fmtTick = (d: Date | d3.NumberValue): string => {
+          const dt = d as Date;
+          const date = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+          if (spanSec > 3 * 365 * 86400) return `${dt.getFullYear()}`;
+          if (spanSec > 100 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
+          if (spanSec > 2.5 * 86400) return date;
+          const time = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+          if (spanSec > 5 * 60) return `${date} ${time}`;
+          return `${date} ${time}:${pad2(dt.getSeconds())}`;
+        };
         axisG.call(
           d3.axisTop(screenScale)
-            .ticks(Math.max(3, Math.floor(width / 110)))
+            .ticks(Math.max(3, Math.floor(width / 150)))
             .tickSize(5)
+            .tickFormat(fmtTick)
         );
         axisG.selectAll('text').attr('fill', '#888').attr('font-size', '10px');
         axisG.selectAll('line,path').attr('stroke', '#555');
@@ -236,20 +252,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
       });
 
-    // --- lane labels (left) ----------------------------------------------------
-    g.selectAll('.lane-label')
+    // --- lane labels (pinned to the left edge, chip-style) -------------------
+    // Each label is a small group: opaque backdrop rect + colored text, so it
+    // stays readable when nodes/edges scroll beneath it. cull() re-pins the
+    // group's x to the viewport's left edge on every pan/zoom.
+    const laneLabelG = g.selectAll('.lane-label')
       .data(data.branches)
       .enter()
-      .append('text')
+      .append('g')
       .attr('class', 'lane-label')
-      .attr('x', minX + 8)
-      .attr('y', (d: BranchLane) => d.lane_index * LANE_HEIGHT + 4)
-      .attr('font-size', '11px')
-      .attr('fill', (d: BranchLane) => d.color)
-      .attr('text-anchor', 'start')
+      .attr('transform', (d: BranchLane) => `translate(${minX + 8}, ${d.lane_index * LANE_HEIGHT + 4})`)
       .attr('opacity', (d: BranchLane) => laneOpacity(d.name))
       .style('cursor', 'pointer')
-      .text((d: BranchLane) => d.name)
       .on('click', (_e: MouseEvent, d: BranchLane) => {
         setFocusedLane(prev => (prev === d.name ? null : d.name));
       })
@@ -257,6 +271,27 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         event.preventDefault();
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
       });
+    laneLabelG.append('text')
+      .attr('font-size', '11px')
+      .attr('fill', (d: BranchLane) => d.color)
+      .attr('text-anchor', 'start')
+      .text((d: BranchLane) => d.name);
+    laneLabelG.each(function (d: BranchLane) {
+      const grp = d3.select(this);
+      const t = grp.select('text').node() as SVGTextElement | null;
+      if (!t) return;
+      const bb = t.getBBox();
+      grp.insert('rect', 'text')
+        .attr('x', bb.x - 5)
+        .attr('y', bb.y - 1.5)
+        .attr('width', bb.width + 10)
+        .attr('height', bb.height + 3)
+        .attr('rx', 4)
+        .attr('fill', '#14141f')
+        .attr('fill-opacity', 0.88)
+        .attr('stroke', d.color)
+        .attr('stroke-opacity', 0.45);
+    });
 
     // --- edges -----------------------------------------------------------------
     const visibleIds = new Set(visibleCommits.map(c => c.id));
@@ -538,11 +573,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           const y = d.lane_index * LANE_HEIGHT;
           return y >= y0 && y <= y1 ? null : 'none';
         });
-      g.selectAll<SVGTextElement, BranchLane>('.lane-label')
-        .attr('x', x0 + M + 8)
+      g.selectAll<SVGGElement, BranchLane>('.lane-label')
+        // Pin to the viewport's left edge and counter-scale, so the chips keep
+        // a constant on-screen size at any zoom level.
+        .attr('transform', d => `translate(${x0 + M + 8}, ${d.lane_index * LANE_HEIGHT + 4}) scale(${1 / t.k})`)
         .style('display', d => {
           const y = d.lane_index * LANE_HEIGHT;
-          return y >= y0 && y <= y1 ? null : 'none';
+          if (y < y0 || y > y1) return 'none';
+          // At heavy zoom-out lanes squeeze together; thin the pinned chips so
+          // they never overlap on screen (every Nth lane keeps its label).
+          const rowH = LANE_HEIGHT * t.k;
+          if (rowH < 18 && d.lane_index % Math.ceil(18 / rowH) !== 0) return 'none';
+          return null;
         });
       g.selectAll<SVGGElement, { lane: BranchLane; hidden: number }>('.collapse-chip')
         .style('display', d => {
