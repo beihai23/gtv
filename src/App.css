@@ -547,8 +547,7 @@
 .minimap {
   position: absolute;
   right: 16px;
-  bottom: 16px;
-  background: rgba(14, 14, 20, 0.96);
+  bottom: 16px; background: rgba(14, 14, 20, 0.96);
   border: 1px solid #4a4a58;
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
