@@ -39,15 +39,15 @@ const LANE_HEIGHT: f64 = 80.0;
 /// Core entry point. `commits` may be in any order; they are sorted by
 /// timestamp (oldest first) inside. Mutates commits in place (lane,
 /// lane_owner, x, y, is_head, fork/merge labels) and returns the lane
-/// list plus typed edges.
+/// list, typed edges, and folded time gaps (axis breaks).
 pub fn compute_layout(
     commits: &mut Vec<CommitNode>,
     seeds: &[LaneSeed],
     main_branch: &str,
     head_id: Option<&str>,
-) -> (Vec<BranchLane>, Vec<CommitEdge>) {
+) -> (Vec<BranchLane>, Vec<CommitEdge>, Vec<TimeGap>) {
     if commits.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
     let index_of: HashMap<String, usize> = commits
@@ -275,23 +275,138 @@ pub fn compute_layout(
             || !has_same_lane_child.contains(&i);
     }
 
-    // Time-proportional x with a per-lane minimum spacing so dense clusters
-    // don't collapse onto one pixel.
+    // Time-proportional x. The min-spacing cascade runs over KEY commits
+    // only: they are the nodes visible in the default compressed view, so
+    // they alone decide the scene's extent. (Cascading over every commit
+    // lets one dense lane — e.g. main with 2-3 commits/day at 28px each —
+    // stretch the whole time axis to 8x its honest width, breaking Fit, the
+    // ruler and the minimap.) Non-key commits are interpolated inside the
+    // segment between their neighbouring key commits; they only appear when
+    // the user expands a lane.
     commits.sort_by_key(|c| c.timestamp);
     let t_min = commits.first().map(|c| c.timestamp).unwrap_or(0);
     const PX_PER_DAY: f64 = 10.0;
     const MIN_SPACING: f64 = 28.0;
-    let mut last_x: HashMap<i32, f64> = HashMap::new();
+    let time_x = |ts: i64| (ts - t_min) as f64 / 86400.0 * PX_PER_DAY;
+
+    let mut by_lane: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (i, c) in commits.iter().enumerate() {
+        by_lane.entry(c.lane).or_default().push(i);
+    }
+    for idxs in by_lane.values() {
+        // idxs is already time-ordered (commits sorted by timestamp above).
+        // Pass 1: cascade the key commits of this lane.
+        let mut last_key_x: Option<f64> = None;
+        for &i in idxs {
+            if !commits[i].is_key {
+                continue;
+            }
+            let tx = time_x(commits[i].timestamp);
+            let x = match last_key_x {
+                Some(l) => tx.max(l + MIN_SPACING),
+                None => tx,
+            };
+            commits[i].x = x;
+            last_key_x = Some(x);
+        }
+        // Pass 2: interpolate each run of non-key commits between the key
+        // commits bracketing it. Every run is bracketed on both sides (a
+        // lane's first own commit and its tip are always key).
+        let key_positions: Vec<(usize, i64, f64)> = idxs
+            .iter()
+            .filter(|&&i| commits[i].is_key)
+            .map(|&i| (i, commits[i].timestamp, commits[i].x))
+            .collect();
+        let mut placed: HashSet<usize> = HashSet::new();
+        for w in key_positions.windows(2) {
+            let (_, ta, xa) = w[0];
+            let (_, tb, xb) = w[1];
+            let run: Vec<usize> = idxs
+                .iter()
+                .copied()
+                .filter(|&i| !commits[i].is_key && commits[i].timestamp > ta && commits[i].timestamp < tb)
+                .collect();
+            let n = run.len();
+            for (j, i) in run.into_iter().enumerate() {
+                let frac = if tb > ta {
+                    ((commits[i].timestamp - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95)
+                } else {
+                    (j + 1) as f64 / (n + 1) as f64
+                };
+                commits[i].x = xa + (xb - xa) * frac;
+                placed.insert(i);
+            }
+        }
+        // Non-key commits exactly at a boundary timestamp (same second as a
+        // key commit): nudge them just right of that key.
+        for &i in idxs {
+            if commits[i].is_key || placed.contains(&i) {
+                continue;
+            }
+            let t = commits[i].timestamp;
+            let anchor = key_positions
+                .iter()
+                .filter(|&&(_, kt, _)| kt <= t)
+                .last()
+                .map(|&(_, _, kx)| kx)
+                .unwrap_or_else(|| time_x(t));
+            commits[i].x = anchor + MIN_SPACING * 0.4;
+        }
+    }
     for c in commits.iter_mut() {
-        let time_x = (c.timestamp - t_min) as f64 / 86400.0 * PX_PER_DAY;
-        let x = match last_x.get(&c.lane) {
-            Some(&l) => time_x.max(l + MIN_SPACING),
-            None => time_x,
-        };
-        c.x = x;
-        last_x.insert(c.lane, x);
         c.y = c.lane as f64 * LANE_HEIGHT;
     }
 
-    (lanes, edges)
+    // Fold anomalous empty time gaps (axis breaks). Any x-range wider than
+    // ~45 days of emptiness holds no commits at all; collapse it to a fixed
+    // width and record it so the renderer can draw a break marker and the
+    // ruler can skip it. One bogus future-dated commit would otherwise
+    // stretch the whole scene by tens of thousands of pixels.
+    const GAP_MIN_PX: f64 = 45.0 * PX_PER_DAY;
+    const GAP_PX: f64 = 120.0;
+    let mut xs: Vec<f64> = commits.iter().map(|c| c.x).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    // (orig_start, orig_end, t_start, t_end) in pre-fold coordinates
+    let mut raw_gaps: Vec<(f64, f64, i64, i64)> = Vec::new();
+    for w in xs.windows(2) {
+        if w[1] - w[0] > GAP_MIN_PX {
+            let t_start = commits
+                .iter()
+                .filter(|c| c.x <= w[0] + 0.5)
+                .map(|c| c.timestamp)
+                .max()
+                .unwrap_or(0);
+            let t_end = commits
+                .iter()
+                .filter(|c| c.x >= w[1] - 0.5)
+                .map(|c| c.timestamp)
+                .min()
+                .unwrap_or(0);
+            raw_gaps.push((w[0], w[1], t_start, t_end));
+        }
+    }
+    let mut time_gaps: Vec<TimeGap> = Vec::new();
+    if !raw_gaps.is_empty() {
+        let mut shift = 0.0;
+        for &(gs, ge, ts, te) in &raw_gaps {
+            time_gaps.push(TimeGap {
+                t_start: ts,
+                t_end: te,
+                x_start: gs - shift,
+                x_end: gs - shift + GAP_PX,
+            });
+            shift += ge - gs - GAP_PX;
+        }
+        for c in commits.iter_mut() {
+            let s: f64 = raw_gaps
+                .iter()
+                .filter(|g| c.x >= g.1 - 0.5)
+                .map(|g| g.1 - g.0 - GAP_PX)
+                .sum();
+            c.x -= s;
+        }
+    }
+
+    (lanes, edges, time_gaps)
 }

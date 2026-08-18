@@ -2,7 +2,7 @@
 //! Fixtures are hand-built CommitNode graphs — no git repo involved.
 
 use gtv_lib::layout::{compute_layout, LaneSeed};
-use gtv_lib::models::{BranchLane, CommitNode, EdgeType};
+use gtv_lib::models::{BranchLane, BranchRef, CommitNode, EdgeType};
 
 fn commit(id: &str, ts: i64, parents: &[&str]) -> CommitNode {
     CommitNode {
@@ -76,7 +76,7 @@ fn linear_history_single_lane() {
         commit("c2", 200, &["c1"]),
         commit("c3", 300, &["c2"]),
     ];
-    let (lanes, edges) = compute_layout(&mut commits, &[seed("main", "c3")], "main", Some("c3"));
+    let (lanes, edges, _) = compute_layout(&mut commits, &[seed("main", "c3")], "main", Some("c3"));
 
     assert_eq!(lanes.len(), 1);
     for c in &commits {
@@ -100,7 +100,7 @@ fn feature_branch_fork_and_merge() {
         commit("m1", 500, &["c2", "f2"]),
     ];
     let seeds = [seed("main", "m1"), seed("feat", "f2")];
-    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", Some("m1"));
+    let (lanes, edges, _) = compute_layout(&mut commits, &seeds, "main", Some("m1"));
 
     assert_eq!(lane_of(&commits, "c1"), "main");
     assert_eq!(lane_of(&commits, "c2"), "main");
@@ -137,7 +137,7 @@ fn unmerged_branch_reaches_tip_without_merge_edge() {
         commit("f1", 250, &["c1"]),
     ];
     let seeds = [seed("main", "c2"), seed("feat", "f1")];
-    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", Some("c2"));
+    let (lanes, edges, _) = compute_layout(&mut commits, &seeds, "main", Some("c2"));
 
     assert_eq!(lane_of(&commits, "f1"), "feat");
     assert_eq!(lane(&lanes, "feat").merged_into, None);
@@ -157,7 +157,7 @@ fn branch_forked_from_another_branch() {
         commit("s1", 300, &["b1"]),
     ];
     let seeds = [seed("main", "c1"), seed("base", "b1"), seed("sub", "s1")];
-    let (lanes, _edges) = compute_layout(&mut commits, &seeds, "main", None);
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", None);
 
     assert_eq!(lane_of(&commits, "b1"), "base");
     assert_eq!(lane_of(&commits, "s1"), "sub");
@@ -180,7 +180,7 @@ fn octopus_merge_produces_one_merge_edge_per_extra_parent() {
         commit("m1", 300, &["c1", "a1", "b1"]),
     ];
     let seeds = [seed("main", "m1"), seed("a", "a1"), seed("b", "b1")];
-    let (lanes, edges) = compute_layout(&mut commits, &seeds, "main", None);
+    let (lanes, edges, _) = compute_layout(&mut commits, &seeds, "main", None);
 
     let merge_edges: Vec<_> = edges
         .iter()
@@ -233,8 +233,64 @@ fn lanes_sorted_by_birth_time() {
         commit("l1", 350, &["c3"]),
     ];
     let seeds = [seed("main", "c3"), seed("early", "e1"), seed("late", "l1")];
-    let (lanes, _) = compute_layout(&mut commits, &seeds, "main", None);
+    let (lanes, _, _) = compute_layout(&mut commits, &seeds, "main", None);
 
     assert_eq!(lane(&lanes, "early").lane_index, 1);
     assert_eq!(lane(&lanes, "late").lane_index, 2);
+}
+
+#[test]
+fn anomalous_time_gap_is_folded() {
+    // Two clusters 400 days apart: the empty range must collapse to ~120px
+    // with one TimeGap recorded, instead of stretching the scene by 4000px.
+    // (Commits inside a cluster sit 10 days apart so the 10px/day time scale
+    // exceeds the 28px per-lane minimum spacing. a2/b1 are tagged to make
+    // them key: the min-spacing cascade runs over key commits only, and
+    // non-key commits get interpolated x positions instead.)
+    let day = 86400;
+    let mut commits = vec![
+        commit("a1", 100 * day, &[]),
+        commit("a2", 110 * day, &["a1"]),
+        commit("b1", 510 * day, &["a2"]),
+        commit("b2", 520 * day, &["b1"]),
+    ];
+    for id in ["a2", "b1"] {
+        let c = commits.iter_mut().find(|c| c.id == id).unwrap();
+        c.branch_refs.push(BranchRef {
+            name: format!("tag-{id}"),
+            is_remote: false,
+            is_tag: true,
+            color: String::new(),
+        });
+    }
+    let (_lanes, _edges, gaps) =
+        compute_layout(&mut commits, &[seed("main", "b2")], "main", Some("b2"));
+
+    assert_eq!(gaps.len(), 1, "one folded gap expected");
+    let g = &gaps[0];
+    assert!(g.t_start >= 100 * day && g.t_end <= 520 * day);
+    assert!((g.x_end - g.x_start - 120.0).abs() < 1e-6, "folded width must be 120px");
+
+    let x_of = |id: &str| commits.iter().find(|c| c.id == id).unwrap().x;
+    // Commits left of the gap keep their x; commits right of it are shifted
+    // so the on-screen distance across the gap is exactly the folded width.
+    assert!((x_of("b1") - x_of("a2") - 120.0).abs() < 1e-6);
+    // Normal spacing inside each cluster is preserved.
+    assert!((x_of("a2") - x_of("a1") - 100.0).abs() < 1e-6);
+    assert!((x_of("b2") - x_of("b1") - 100.0).abs() < 1e-6);
+}
+
+#[test]
+fn small_time_gap_is_not_folded() {
+    // 10 days apart (100px) — below the 45-day threshold, no folding.
+    let day = 86400;
+    let mut commits = vec![
+        commit("a1", 100 * day, &[]),
+        commit("a2", 110 * day, &["a1"]),
+    ];
+    let (_lanes, _edges, gaps) =
+        compute_layout(&mut commits, &[seed("main", "a2")], "main", Some("a2"));
+    assert!(gaps.is_empty());
+    let x_of = |id: &str| commits.iter().find(|c| c.id == id).unwrap().x;
+    assert!((x_of("a2") - x_of("a1") - 100.0).abs() < 1e-6);
 }

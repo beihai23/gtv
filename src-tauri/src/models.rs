@@ -83,6 +83,22 @@ pub struct GitData {
     pub edges: Vec<CommitEdge>,
     pub branches: Vec<BranchLane>,
     pub main_branch: String,
+    /// Folded empty time gaps on the x-axis (axis breaks), sorted by time.
+    #[serde(default)]
+    pub time_gaps: Vec<TimeGap>,
+}
+
+/// An anomalous empty time range that was folded to a fixed pixel width.
+/// Without folding, one commit with a bogus future/past timestamp stretches
+/// the time-proportional x-axis by tens of thousands of pixels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeGap {
+    /// Folded-away time range (unix seconds).
+    pub t_start: i64,
+    pub t_end: i64,
+    /// Final x range the folded gap occupies on screen.
+    pub x_start: f64,
+    pub x_end: f64,
 }
 
 /// Layout configuration

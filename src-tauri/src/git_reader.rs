@@ -197,7 +197,7 @@ impl GitReader {
             });
         }
 
-        let (branches, edges) =
+        let (branches, edges, time_gaps) =
             layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
 
         // Diff volume for key commits only (bounded): feeds node sizing.
@@ -225,6 +225,7 @@ impl GitReader {
             edges,
             branches,
             main_branch,
+            time_gaps,
         })
     }
 
