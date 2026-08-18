@@ -17,6 +17,11 @@ function App() {
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
   const [viewResetKey, setViewResetKey] = useState(0);
+  // View options live here so the header owns the whole toolbar row.
+  const [compressed, setCompressed] = useState(true);
+  const [showMergeLinks, setShowMergeLinks] = useState(true);
+  const [showRefLabels, setShowRefLabels] = useState(true);
+  const [fitSignal, setFitSignal] = useState(0);
 
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
 
@@ -161,7 +166,7 @@ function App() {
     return sortedBranches.filter(b => b.name.toLowerCase().includes(query));
   }, [sortedBranches, searchQuery]);
 
-  const INLINE_CHIP_LIMIT = 12;
+  const INLINE_CHIP_LIMIT = 8;
   const inlineBranches = useMemo(() => {
     // Selected branches stay visible; fill remaining slots by list order.
     const selected = filteredBranches.filter(b => selectedBranches.includes(b.name));
@@ -182,36 +187,68 @@ function App() {
             </span>
           )}
         </div>
-        
-        <div className="header-controls">
-          {branchList.length > 0 && (
-            <div className="filter-tags">
-                {inlineBranches.map(branch => (
-                  <button
-                    key={branch.name}
-                    className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
-                    style={{ 
-                      borderColor: branch.color,
-                      backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
-                    }}
-                    onClick={() => toggleBranchFilter(branch.name)}
-                  >
-                    {branch.name}
-                  </button>
-                ))}
-                {hasMoreTags && (
-                  <button 
-                    className="filter-tag show-more"
-                    onClick={() => setShowAllTags(!showAllTags)}
-                  >
-                    {showAllTags ? 'Close ▴' : `+${filteredBranches.length - inlineBranches.length} more ▾`}
-                  </button>
-                )}
-              </div>
+
+        {branchList.length > 0 && (
+          <div className="filter-tags header-chips">
+            {inlineBranches.map(branch => (
+              <button
+                key={branch.name}
+                className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
+                style={{
+                  borderColor: branch.color,
+                  backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
+                }}
+                onClick={() => toggleBranchFilter(branch.name)}
+                onDoubleClick={() => handleFilterChange([branch.name])}
+                title="Click: toggle · Double-click: only this one"
+              >
+                {branch.name}
+              </button>
+            ))}
+            {hasMoreTags && (
+              <button
+                className="filter-tag show-more"
+                onClick={() => setShowAllTags(!showAllTags)}
+              >
+                {showAllTags ? 'Close ▴' : `+${filteredBranches.length - inlineBranches.length} more ▾`}
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="header-right">
+          {gitData && (
+            <div className="view-toggles">
+              <button
+                className={`view-btn ${compressed ? 'active' : ''}`}
+                onClick={() => setCompressed(v => !v)}
+                title="Smart compression: show only lane births, tips, merges, tags, HEAD"
+              >
+                Compress
+              </button>
+              <button
+                className={`view-btn ${showMergeLinks ? 'active' : ''}`}
+                onClick={() => setShowMergeLinks(v => !v)}
+              >
+                Merge links
+              </button>
+              <button
+                className={`view-btn ${showRefLabels ? 'active' : ''}`}
+                onClick={() => setShowRefLabels(v => !v)}
+              >
+                Labels
+              </button>
+              <button
+                className="view-btn"
+                onClick={() => setFitSignal(n => n + 1)}
+                title="Fit whole graph into view"
+              >
+                Fit
+              </button>
+            </div>
           )}
-          
-          <button 
-            className="open-btn" 
+          <button
+            className="open-btn"
             onClick={handleOpenRepo}
             disabled={loading}
           >
@@ -233,6 +270,8 @@ function App() {
                 autoFocus
               />
               <span className="branch-panel-count">{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
+              <button className="view-btn" onClick={() => handleFilterChange(branchList.map(b => b.name))}>All</button>
+              <button className="view-btn" onClick={() => handleFilterChange([])}>None</button>
               <button className="view-btn" onClick={() => setShowAllTags(false)}>Close</button>
             </div>
             <div className="branch-panel-list">
@@ -245,10 +284,15 @@ function App() {
                     backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
                   }}
                   onClick={() => toggleBranchFilter(branch.name)}
+                  onDoubleClick={() => handleFilterChange([branch.name])}
+                  title="Click: toggle · Double-click: only this one"
                 >
                   {branch.name}
                 </button>
               ))}
+            </div>
+            <div className="branch-panel-footer">
+              Double-click a chip to solo it — for daily work: None, then double-click the 2-3 branches you care about.
             </div>
           </div>
         </div>
@@ -284,6 +328,10 @@ function App() {
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
               onViewFromBranch={handleViewFromBranch}
+              compressed={compressed}
+              showMergeLinks={showMergeLinks}
+              showRefLabels={showRefLabels}
+              fitSignal={fitSignal}
             />
             <CommitDetails 
               commit={selectedCommit}

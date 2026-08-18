@@ -10,6 +10,12 @@ interface TimelineProps {
   resetKey: number;
   /** "View from this branch" (lane context menu). */
   onViewFromBranch: (branchName: string) => void;
+  /** View options lifted to the app header. */
+  compressed: boolean;
+  showMergeLinks: boolean;
+  showRefLabels: boolean;
+  /** Increment to trigger "Fit to view" from outside. */
+  fitSignal: number;
 }
 
 const LANE_HEIGHT = 80;
@@ -39,7 +45,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, fitSignal }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
@@ -48,11 +54,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const [hoveredCommit, setHoveredCommit] = useState<CommitNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [laneMenu, setLaneMenu] = useState<LaneMenu | null>(null);
+  /** Endpoints of the last plain-clicked edge; drives the highlight rings. */
+  const [edgeHighlight, setEdgeHighlight] = useState<{ from: string; to: string } | null>(null);
 
-  // View options (gmaster-style display options)
-  const [compressed, setCompressed] = useState(true);
-  const [showMergeLinks, setShowMergeLinks] = useState(true);
-  const [showRefLabels, setShowRefLabels] = useState(true);
+  // View-local state (options themselves live in the app header)
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -66,6 +71,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     setFocusedLane(null);
     setExpandedLanes(new Set());
     setLaneMenu(null);
+    setEdgeHighlight(null);
   }, [resetKey]);
 
   const visibleCommits = useMemo(() => {
@@ -144,6 +150,15 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     svg.call(zoom);
     zoomRef.current = zoom;
 
+    /** Center the viewport on a scene point, keeping the current zoom. */
+    const centerOn = (sx: number, sy: number) => {
+      const t = transformRef.current;
+      const next = d3.zoomIdentity
+        .translate(width / 2 - sx * t.k, height / 2 - sy * t.k)
+        .scale(t.k);
+      svg.call(zoom.transform, next);
+    };
+
     const allX = data.commits.map(c => c.x);
     const minX = Math.min(...allX, 0) - 180;
     const maxX = Math.max(...allX, 100) + 200;
@@ -184,23 +199,26 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const pad2 = (n: number) => String(n).padStart(2, '0');
       updateRuler = () => {
         const screenScale = transformRef.current.rescaleX(timeScale);
-        // Adaptive precision: the visible time span decides whether ticks show
-        // year, year-month, full date, or date + time down to minutes/seconds.
-        const [d0, d1] = screenScale.domain();
-        const spanSec = (d1.getTime() - d0.getTime()) / 1000;
+        const ticks = screenScale.ticks(Math.max(3, Math.floor(width / 150)));
+        // Pick a precision strictly finer than the tightest tick gap, so two
+        // adjacent labels can never read the same (e.g. four "2026-01" ticks).
+        let minGapSec = Infinity;
+        for (let i = 1; i < ticks.length; i++) {
+          minGapSec = Math.min(minGapSec, (ticks[i].getTime() - ticks[i - 1].getTime()) / 1000);
+        }
         const fmtTick = (d: Date | d3.NumberValue): string => {
           const dt = d as Date;
           const date = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
-          if (spanSec > 3 * 365 * 86400) return `${dt.getFullYear()}`;
-          if (spanSec > 100 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
-          if (spanSec > 2.5 * 86400) return date;
+          if (minGapSec >= 250 * 86400) return `${dt.getFullYear()}`;
+          if (minGapSec >= 25 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
+          if (minGapSec >= 20 * 3600) return date;
           const time = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
-          if (spanSec > 5 * 60) return `${date} ${time}`;
+          if (minGapSec >= 40 * 60) return `${date} ${time}`;
           return `${date} ${time}:${pad2(dt.getSeconds())}`;
         };
         axisG.call(
           d3.axisTop(screenScale)
-            .ticks(Math.max(3, Math.floor(width / 150)))
+            .tickValues(ticks)
             .tickSize(5)
             .tickFormat(fmtTick)
         );
@@ -297,40 +315,48 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     const visibleIds = new Set(visibleCommits.map(c => c.id));
     const visibleEdges = data.edges.filter(e => {
       if (!showMergeLinks && e.edge_type === 'Merge') return false;
-      if (e.edge_type === 'Direct') return visibleIds.has(e.from) && visibleIds.has(e.to);
       return visibleIds.has(e.from) && visibleIds.has(e.to); // Branch/Merge endpoints are key nodes
     });
+
+    // Edge direction (from the backend): from = child commit, to = parent.
+    const edgePath = (d: CommitEdge): string => {
+      const from = commitMap.get(d.from);
+      const to = commitMap.get(d.to);
+      if (!from || !to) return '';
+      if (d.edge_type === 'Direct') {
+        return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+      }
+      if (d.edge_type === 'Merge') {
+        // merge link: thin, gentle curve into the merge commit
+        const midX = (from.x + to.x) / 2;
+        return `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`;
+      }
+      // fork (Branch): right-angle polyline — drop from parent lane, then
+      // horizontal into the child lane's first commit (gmaster style)
+      const midX = from.x - 24;
+      return `M ${to.x} ${to.y} L ${midX} ${to.y} L ${midX} ${from.y} L ${from.x} ${from.y}`;
+    };
+    const isHotEdge = (d: CommitEdge) =>
+      edgeHighlight !== null && edgeHighlight.from === d.from && edgeHighlight.to === d.to;
 
     g.selectAll('.edge')
       .data(visibleEdges)
       .enter()
       .append('path')
       .attr('class', 'edge')
-      .attr('d', (d: CommitEdge) => {
-        const from = commitMap.get(d.from);
-        const to = commitMap.get(d.to);
-        if (!from || !to) return '';
-
-        if (d.edge_type === 'Direct') {
-          return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
-        }
-        if (d.edge_type === 'Merge') {
-          // merge link: thin, gentle curve into the merge commit
-          const midX = (from.x + to.x) / 2;
-          return `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`;
-        }
-        // fork (Branch): right-angle polyline — drop from parent lane, then
-        // horizontal into the child lane's first commit (gmaster style)
-        const midX = from.x - 24;
-        return `M ${to.x} ${to.y} L ${midX} ${to.y} L ${midX} ${from.y} L ${from.x} ${from.y}`;
-      })
+      .attr('d', edgePath)
       .attr('fill', 'none')
       .attr('stroke', (d: CommitEdge) => {
+        if (isHotEdge(d)) return '#FFD166';
         const from = commitMap.get(d.from);
         return from ? branchColorMap.get(from.lane_owner) ?? '#888' : '#888';
       })
-      .attr('stroke-width', (d: CommitEdge) => d.edge_type === 'Direct' ? 2.5 : d.edge_type === 'Branch' ? 1.8 : 1.3)
+      .attr('stroke-width', (d: CommitEdge) => {
+        if (isHotEdge(d)) return 4;
+        return d.edge_type === 'Direct' ? 2.5 : d.edge_type === 'Branch' ? 1.8 : 1.3;
+      })
       .attr('opacity', (d: CommitEdge) => {
+        if (isHotEdge(d)) return 1;
         const from = commitMap.get(d.from);
         if (!from) return 0.5;
         if (focusedLane && d.edge_type === 'Merge') {
@@ -341,6 +367,36 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         }
         return dimOthers(from.lane_owner) ? 0.08 : (d.edge_type === 'Merge' ? 0.7 : 0.9);
       });
+
+    // Invisible fat strokes on top: edges are 1.3-2.5px thin, so the clickable
+    // area lives on a separate transparent path.
+    //   click       -> highlight both endpoint commits
+    //   ctrl/cmd+click -> jump to the parent end
+    //   shift+click    -> jump to the child end
+    const edgeHit = g.selectAll('.edge-hit')
+      .data(visibleEdges)
+      .enter()
+      .append('path')
+      .attr('class', 'edge-hit')
+      .attr('d', edgePath)
+      .attr('fill', 'none')
+      .attr('stroke', 'rgba(0,0,0,0)')
+      .attr('stroke-width', 14)
+      .style('cursor', 'pointer')
+      .on('click', (event: MouseEvent, d: CommitEdge) => {
+        event.stopPropagation();
+        if (event.ctrlKey || event.metaKey) {
+          const parent = commitMap.get(d.to);
+          if (parent) centerOn(parent.x, parent.y);
+        } else if (event.shiftKey) {
+          const child = commitMap.get(d.from);
+          if (child) centerOn(child.x, child.y);
+        } else {
+          setEdgeHighlight(h => (h && h.from === d.from && h.to === d.to ? null : { from: d.from, to: d.to }));
+        }
+      });
+    edgeHit.append('title')
+      .text('Click: highlight endpoints\nCtrl+Click: go to parent\nShift+Click: go to child');
 
     // --- collapsed-segment chips ------------------------------------------------
     if (compressed) {
@@ -417,6 +473,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .attr('fill', '#4CAF50')
       .attr('text-anchor', 'middle')
       .text('HEAD');
+
+    // edge-click highlight: amber rings around the two endpoint commits
+    if (edgeHighlight) {
+      nodes
+        .filter((d: CommitNode) => d.id === edgeHighlight!.from || d.id === edgeHighlight!.to)
+        .append('circle')
+        .attr('r', (d: CommitNode) => nodeRadius(d) + 6)
+        .attr('fill', 'none')
+        .attr('stroke', '#FFD166')
+        .attr('stroke-width', 2.5)
+        .attr('pointer-events', 'none');
+    }
 
     nodes.append('title')
       .text((d: CommitNode) =>
@@ -499,6 +567,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       badgeGroups.each(function (s) {
         const grp = d3.select(this);
         grp.append('title').text(s.c.branch_refs.map(r => r.name).join('\n'));
+        // Connector pin from the pill stack down to its commit node — without
+        // it, badges lifted to higher levels look detached from their commit.
+        const dropY = 8 + s.level * LEVEL_H;
+        if (dropY > 6) {
+          grp.append('line')
+            .attr('x1', 0).attr('y1', 4)
+            .attr('x2', 0).attr('y2', dropY)
+            .attr('stroke', '#888')
+            .attr('stroke-width', 1)
+            .attr('stroke-dasharray', '2,2')
+            .attr('opacity', 0.65);
+        }
         s.names.forEach((n, i) => {
           const w = pillW(n.name);
           const item = grp.append('g').attr('transform', `translate(${-w / 2}, ${-i * 18})`);
@@ -561,7 +641,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
       g.selectAll<SVGTextElement, CommitNode>('.fork-label,.merge-label')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
-      g.selectAll<SVGPathElement, CommitEdge>('.edge')
+      g.selectAll<SVGPathElement, CommitEdge>('.edge,.edge-hit')
         .style('display', d => {
           const a = commitMap.get(d.from);
           const b = commitMap.get(d.to);
@@ -654,7 +734,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       svg.call(zoom.transform, transformRef.current);
     }
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight]);
 
   useEffect(() => {
     draw();
@@ -677,6 +757,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .scale(k);
     d3.select(svgRef.current).call(zoomRef.current.transform, t);
   }, []);
+
+  // "Fit" lives in the app header; fitSignal increments trigger it here.
+  const fitSignalRef = useRef(fitSignal);
+  useEffect(() => {
+    if (fitSignalRef.current === fitSignal) return;
+    fitSignalRef.current = fitSignal;
+    fitToView();
+  }, [fitSignal, fitToView]);
 
   // Trackpad-friendly wheel handling (Figma-style):
   //   two-finger scroll (plain wheel)  -> pan
@@ -714,32 +802,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   }, []);
 
   return (
-    <div ref={containerRef} className="timeline-container" onClick={() => setLaneMenu(null)}>
+    <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
       <svg ref={svgRef}></svg>
 
       <div className="view-toolbar">
-        <button
-          className={`view-btn ${compressed ? 'active' : ''}`}
-          onClick={() => setCompressed(v => !v)}
-          title="Smart compression: show only lane births, tips, merges, tags, HEAD"
-        >
-          Compress
-        </button>
-        <button
-          className={`view-btn ${showMergeLinks ? 'active' : ''}`}
-          onClick={() => setShowMergeLinks(v => !v)}
-        >
-          Merge links
-        </button>
-        <button
-          className={`view-btn ${showRefLabels ? 'active' : ''}`}
-          onClick={() => setShowRefLabels(v => !v)}
-        >
-          Labels
-        </button>
-        <button className="view-btn" onClick={fitToView} title="Fit whole graph into view">
-          Fit
-        </button>
         {compressed && expandedLanes.size > 0 && (
           <button className="view-btn" onClick={() => setExpandedLanes(new Set())}>
             Collapse all

@@ -314,10 +314,25 @@
   font-family: 'SF Mono', Monaco, 'Courier New', monospace;
 }
 
-.header-controls {
+.header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.view-toggles {
+  display: flex;
+  gap: 6px;
+  padding-right: 4px;
+  border-right: 1px solid #0f3460;
+  margin-right: 4px;
+}
+
+.header-chips {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
 }
 
 .branch-select {
@@ -558,6 +573,12 @@
 }
 .branch-panel-count {
   white-space: nowrap;
+}
+.branch-panel-footer {
+  padding: 8px 14px;
+  border-top: 1px solid #333;
+  color: #666;
+  font-size: 11px;
 }
 .branch-panel-list {
   display: flex;
