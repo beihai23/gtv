@@ -18,14 +18,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest          # Apple Silicon
-            target: aarch64-apple-darwin
-          - os: macos-13              # Intel
-            target: x86_64-apple-darwin
+          # Universal macOS build (Apple Silicon + Intel in one artifact),
+          # built on the arm64 runner — no dependence on the legacy
+          # macos-13 Intel runner label.
+          - os: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            args: ''
           - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            args: ''
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -46,7 +50,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -66,4 +70,4 @@ jobs:
           releaseBody: 'See the assets below to download and install.'
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: ${{ matrix.args }}
