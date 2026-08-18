@@ -1,17 +1,18 @@
 # gmaster / Branch Explorer 资料收集
 
-> 收集时间：2026-08-17。用途：作为 gtv 重设计的参照系。
-> 状态说明：web.archive.org 在收集当天全线 503，gmaster.io 的 Tour/Features 页面截图与
-> Branch Explorer 专集视频（1 分 15 秒）的存档快照暂未取到，待 Wayback 恢复后补充。
+> 收集时间：2026-08-17（第一轮）；2026-08-18（第二轮：Wayback 恢复，官网快照入库）。
+> 用途：作为 gtv 重设计的参照系。
+> 官网存档索引见 `docs/reference/gmaster-io/README.md`（页面 HTML + 高清截图 +
+> 8 集 tour 视频清单均已本地化）。
 
 ## 1. 产品背景
 
 - gmaster 由 Codice Software（Plastic SCM 开发商）出品，定位是"尽可能视觉化、而不是
   命令行的 GUI 包装器"的 Git 客户端。
-- 版本停在 0.9.x  beta（可考证的最后安装包为 v0.9.524 beta，2018-05），从未发布 1.0，
-  2018 年后停止更新。
-- Codice Software 于 2020 年被 Unity 收购，Plastic SCM 演变为 Unity Version Control
-  （UVCS），Branch Explorer 在其中延续至今。gmaster 本体已无官方下载渠道。
+- ~~版本停在 0.9.x beta，从未发布 1.0~~ **修正（2026-08-18，据官网 releasenotes
+  快照）**：gmaster 发布过 1.0——1.0.663 于 2020-10-14 发布；Unity 于 2020 年 8 月
+  收购 Codice 后更新停滞， Plastic SCM 演变为 Unity Version Control（UVCS），
+  Branch Explorer 在其中延续至今。gmaster 本体已无官方下载渠道。
 - 三大支柱（官方自述）：视觉化（Branch Explorer 总览 + 可视化 diff/merge）、完整性
   （内置 side-by-side diff 与三路 merge）、语义化（解析 C#/Java/C/C++ 等代码结构做
   diff/merge）。对 gtv 有参考价值的是第一根支柱。
@@ -158,8 +159,24 @@ Period.cs 取自 nodatime 项目，代码移动/改名历史是为演示 Semanti
 构造的——对 gtv 的时间线可视化无直接关系，但可作为 CommitDetails 文件变更
 （含 R 状态 rename）的测试素材。
 
-## 6. 待补资料（Wayback 恢复后）
+## 6. Wayback 官网快照（2026-08-18 补齐）
 
-- gmaster.io/tour 与 /features 快照（功能页截图、Tour 视频缩略图）
-- StackOverflow Q45573184 "git branch horizontal viewer"（当天 403，未取到正文）
-- 节点"下半圆填充"状态的准确语义（需视频 0:32 前后压缩切换段的更多帧确认）
+官网快照与图片已全部入库：`docs/reference/gmaster-io/`（索引见该目录 README）。
+新增确认点：
+
+- **过滤栏形态**（branch-explorer-full.png）：`only relevant ✓`（智能压缩开关）、
+  `remotes ✓`（远程引用开关）、日期范围下拉（"last 2 years"）、Search 框——
+  与视频三层过滤互证，且给出控件级参照。
+- **泳道双线绘制**：分支横杠是两条平行细线（非单线），未激活段虚线；节点为大
+  空心圆。gtv 目前是单虚线 + 实心圆点，视觉密度可再向原作靠。
+- **吸顶时间标尺**：官网截图确认日期标尺固定在视口顶缘——gtv 已实现同款
+  （commit 2e8316d）。
+- **分支右键菜单全量项**：建分支/merge/checkout/fetch/pull/push/filter/rename/
+  delete——Branch Explorer 是操作入口而非只读视图，印证 §2.4。
+- **tour 视频清单核实**：8 集标题经 YouTube oEmbed 确认，Branch Explorer 为第 3 集
+  （KHb2ZF402CY），其余 7 集均为 diff/merge/语义化主题——可视化历史只是 gmaster
+  三分之一支柱，但是官网首屏卖点。
+
+遗留：StackOverflow Q45573184 正文仍未取到（价值低，仅作历史佐证）；节点"下半圆
+填色"语义仍未确认（在 branch-explorer-full.png 中同样可见，疑为"该提交有未推送/
+已推送状态"或压缩占位，待视频逐帧确认）。
