@@ -218,6 +218,9 @@ x = (timestamp - t_min) * px_per_second，px_per_second 自适应到可用宽度
 
 ## 5. 路线图
 
+> 2026-08-18 起，路线图以 [roadmap.md](roadmap.md) 为准；本表是设计文档写作时
+> 的原始分期，P0–P2 已完成，留作历史记录。
+
 | 阶段 | 内容 | 验收标准 |
 |---|---|---|
 | **P0 泳道正确性** | §3 算法落地；all-tips revwalk；tag 不占泳道；配色收口；HEAD 标记 | 打开一个"main + 2 feature 分支（其一已合并、其一未合并）+ 3 tags"的 fixture 仓库，每个提交落在正确泳道；截图与 `git log --graph --all` 结构一致 |

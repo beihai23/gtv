@@ -4,80 +4,101 @@
   <img src="docs/assets/logo.png" width="128" alt="gtv logo"/>
 </p>
 
-A desktop app that draws your git history the way gmaster's legendary **Branch Explorer**
-did: a horizontal blackboard where every branch lives on its own lane, is born at a fork
-point, and folds back into its parent at a merge.
+**gtv** is a desktop app that turns your git history into a horizontal timeline of
+branch lanes: every branch gets its own track, is born at a fork point, lives its
+life left-to-right, and folds back into its parent at a merge. One glance tells you
+which lines are alive, where they came from, and where they landed.
 
 <p align="center">
-  <img src="docs/assets/gtv-tour-after.png" alt="gtv rendering the official gmaster tour repository"/>
+  <img src="docs/assets/gtv-tour-after.png" alt="gtv timeline view"/>
 </p>
 
-<p align="center"><em>
-gtv rendering the official gmaster "tour" demo repository — the same repo gmaster's own
-Branch Explorer video used, recovered from the GitHub fork network.
-</em></p>
+## Why gtv
 
-## Why
+`git log --graph` is linear text. It can't answer the questions you actually have
+when you open an unfamiliar repo — or return to your own after a month:
 
-`git log --graph` is linear text. It cannot show you *branch parallelism*: which branches
-exist, where each was born, where it merged back, and which lines are still alive.
-gmaster (Codice Software, discontinued 2018) solved this with the Branch Explorer;
-after the Codice → Unity acquisition it lives on only inside Unity Version Control.
-gtv re-creates that view from **pure git data** — no server metadata — using
-first-parent lane propagation.
+- *What branches exist right now, and which ones are still alive?*
+- *Where did this branch start, and did it ever merge back?*
+- *What landed on main this week, and what's still floating around unmerged?*
+
+gtv answers these visually, from **pure git data** — no server, no metadata store,
+no account. Point it at any local repository and it reconstructs branch lineage
+from the commit graph itself.
 
 ## Features
 
-- **Branch lanes from pure DAG structure** — every commit is assigned to its branch's
-  lane via first-parent lineage (tip protection walls, merged-branches-first priority)
-- **Fork / merge annotations** — right-angle branch-birth lines and thin merge links,
-  labeled with the branch names involved
-- **Smart compression** (gmaster's key trick) — by default only *key* commits are shown:
-  lane births, lane tips, merge sources/targets, tagged commits, HEAD. Click a `+N` chip
-  on a lane bar to expand its hidden commits; toggle `Compress` to see everything
-- **Lane focus** — click a lane name (or right-click → *Focus this lane*) to dim
-  everything else; merge links touching the focused lane stay visible
-- **Time-proportional x-axis** with a top time ruler (per-lane minimum spacing keeps
-  dense clusters readable)
-- **Change-volume node sizing** — bigger nodes = bigger diffs (key commits only)
-- **Minimap** with viewport rectangle and click-to-jump
-- **Display options** — toggle merge links / ref labels
-- **Branch filter chips**, commit search, commit detail panel with `+add/−del` stats,
-  remembers your last repository
-- Read-only. gtv never modifies your repository.
+**The graph**
+- Branch lanes reconstructed from DAG structure (first-parent lane propagation,
+  merged-branches-first priority, tip protection)
+- Fork points drawn as right-angle birth lines; merges as thin curves, both labeled
+- Tags and branch refs as stacked badges pinned to their commit — collision-resolved,
+  never overlapping
+- Node size encodes change volume; HEAD is marked
+- Time-proportional x-axis with a sticky, zoom-adaptive ruler
+  (`2026` → `2026-07` → `2026-07-17` → `… 15:04` → `… 15:04:05` — adjacent ticks
+  never repeat)
+
+**Handling big repos**
+- Smart compression: by default only key commits render (lane births, tips, merge
+  endpoints, tagged commits, HEAD); click a `+N` chip on a lane bar to expand
+- Viewport culling: only what you see is in the render tree
+- Lane names pinned to the left edge as constant-size chips; click to focus a lane
+  (dims everything else), right-click for lane actions
+- Branch panel: search, newest-first ordering, All / None, double-click a chip to
+  solo that branch
+
+**Interaction**
+- Trackpad-native: two-finger scroll pans, pinch zooms around the cursor
+- Click an edge to highlight its endpoint commits; `Ctrl+click` jumps to the
+  parent, `Shift+click` jumps to the child
+- Minimap with live viewport rectangle and click-to-jump
+- Commit detail panel: author, full message, refs, changed files with `+/-` stats
+- Remembers your last repository
+
+**Read-only.** gtv never modifies your repository.
 
 ## Development
 
 ```bash
 npm install
-npm run tauri dev        # run the app
-cd src-tauri && cargo test   # layout engine tests + gmaster-tour benchmark
+npm run tauri dev            # run the app
+cd src-tauri && cargo test   # lane engine tests + real-repo benchmark
 ```
-
-Try it on the bundled benchmark repo: **Open Repository** → `docs/reference/gmaster-tour`
-(14 commits, 7 branches, merged/unmerged/branch-from-branch — with a known-good answer).
 
 ## Architecture
 
+Tauri 2 + React 19 + D3. The backend reads the repo with git2; the lane engine is
+a pure, unit-tested module with no git dependencies.
+
 ```
 src-tauri/src/
-  layout.rs       pure lane-propagation engine (no git2 — unit-tested with hand-built graphs)
+  layout.rs       lane-propagation engine (pure functions, hand-built graph tests)
   git_reader.rs   git2 access: refs, revwalk from all branch tips, diff stats
   commands.rs     Tauri commands
 src/
-  components/Timeline.tsx      D3 timeline: lanes, bars, compression, focus, minimap
+  components/Timeline.tsx      D3 timeline: lanes, edges, badges, minimap, ruler
   components/CommitDetails.tsx commit detail panel
 docs/
-  design-v2.md          full design doc (lane algorithm spec, rendering spec, roadmap)
-  gmaster-research.md   Branch Explorer research notes + feature mapping
+  roadmap.md          where gtv goes next
+  design-v2.md        lane algorithm + rendering spec
+  gmaster-research.md research notes
+  reference/          archived reference material
 ```
 
-## Roadmap status
+## Roadmap
 
-- [x] P0 lane correctness (propagation, typed edges, fork/merge labels, HEAD marker)
-- [x] P1 information density (smart compression, time-proportional axis, node sizing)
-- [x] P2 view controls (display options, minimap, lane focus)
-- [~] P3 lane as operation entry (context menu → view-from-branch done; real checkout/diff pending)
+Near-term: anomaly-gap compression for the time axis, inactive-lane collapsing,
+related-branch filtering, date-range filter, jump-to-commit search, two-commit
+diff. See [docs/roadmap.md](docs/roadmap.md).
+
+## Acknowledgments
+
+gtv's lane-timeline view is inspired by **gmaster**'s Branch Explorer
+(Codice Software) — a beautiful idea that deserved a living heir. Thank you for
+showing what git history could look like. gtv is its own project: new code, new
+interaction model, and its own road ahead. Research notes and archived reference
+material live in `docs/`.
 
 ## License
 
