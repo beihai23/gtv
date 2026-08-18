@@ -143,9 +143,11 @@
   flex: 1;
   overflow: hidden;
   background: #1a1a2e;
+  position: relative;
 }
 
-.timeline-container svg {
+/* direct child only — overlay SVGs (minimap) must NOT be stretched */
+.timeline-container > svg {
   width: 100%;
   height: 100%;
 }
@@ -360,6 +362,10 @@
   border-radius: 12px;
   cursor: pointer;
   color: #e0e0e0;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: all 0.2s;
 }
 
@@ -548,4 +554,9 @@
   gap: 6px;
   padding: 12px 14px;
   overflow-y: auto;
+}
+
+.minimap {
+  width: 220px !important;
+  height: 120px !important;
 }

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>gtv mock preview</title>
+  <style>html, body, #root { height: 100%; margin: 0; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Mock Tauri v2 internals BEFORE app code runs; data from a real dump
+    // of a large repo (taskon-server: 2000 commits, 37 lanes).
+    let DATA = null;
+    const ready = fetch('/mock-data.json').then(r => r.json()).then(d => { DATA = d; });
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (cmd, args) => {
+        await ready;
+        switch (cmd) {
+          case 'open_repository': return DATA;
+          case 'get_current_path': return '/mock/taskon-server';
+          case 'get_current_branch': return 'marschain';
+          case 'get_branch_list': return DATA.branches;
+          case 'get_commit_detail': return null;
+          case 'filter_by_branches': return DATA;
+          case 'is_valid_git_repo': return true;
+          default: return null; // plugin:dialog|open -> null (no native dialog)
+        }
+      },
+      transformCallback: () => 0,
+    };
+    localStorage.setItem('gtv_latest_repo', '/mock/taskon-server');
+  </script>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
