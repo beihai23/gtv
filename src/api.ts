@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { GitData, CommitDetail, BranchLane } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
 export async function selectAndOpenRepository(): Promise<GitData | null> {
   const selected = await open({
@@ -49,4 +49,8 @@ export async function switchBranch(branchName: string): Promise<GitData> {
 
 export async function filterByBranches(branchNames: string[]): Promise<GitData> {
   return invoke<GitData>('filter_by_branches', { branchNames });
+}
+
+export async function getPatchLinks(): Promise<PatchLink[]> {
+  return invoke<PatchLink[]>('get_patch_links');
 }

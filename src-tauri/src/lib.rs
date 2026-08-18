@@ -25,6 +25,7 @@ pub fn run() {
             commands::get_branch_list,
             commands::switch_branch,
             commands::filter_by_branches,
+            commands::get_patch_links,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

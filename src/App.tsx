@@ -2,8 +2,8 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch } from './api';
-import type { GitData, CommitDetail, BranchLane } from './types';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks } from './api';
+import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
 const SHOW_TAGS_KEY = 'gtv_show_tags';
@@ -43,8 +43,28 @@ function App() {
   const [showMergeLinks, setShowMergeLinks] = useState(true);
   const [showRefLabels, setShowRefLabels] = useState(true);
   const [fitSignal, setFitSignal] = useState(0);
+  // Cherry-pick / rebase copy detection (expensive: one diff per commit),
+  // computed on demand when the toggle is switched on.
+  const [showPatchLinks, setShowPatchLinks] = useState(false);
+  const [patchLinks, setPatchLinks] = useState<PatchLink[]>([]);
+  const [patchLinksLoading, setPatchLinksLoading] = useState(false);
 
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
+
+  // Fetch patch links when the Copies toggle is on and a repo is loaded.
+  useEffect(() => {
+    if (!showPatchLinks || !gitData) {
+      setPatchLinks([]);
+      return;
+    }
+    let cancelled = false;
+    setPatchLinksLoading(true);
+    getPatchLinks()
+      .then(links => { if (!cancelled) setPatchLinks(links ?? []); })
+      .catch(() => { if (!cancelled) setPatchLinks([]); })
+      .finally(() => { if (!cancelled) setPatchLinksLoading(false); });
+    return () => { cancelled = true; };
+  }, [showPatchLinks, gitData]);
 
   useEffect(() => {
     const saved = localStorage.getItem(LATEST_REPO_KEY);
@@ -228,12 +248,21 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="header-left">
-          <h1>Git Timeline Viewer</h1>
+          {gitData && latestRepo && (
+            <h1 className="repo-name" title={latestRepo}>{latestRepo.split('/').pop()}</h1>
+          )}
           {gitData && (
             <span className="repo-info">
               {gitData.main_branch} • {gitData.commits.length} commits
             </span>
           )}
+          <button
+            className="open-btn"
+            onClick={handleOpenRepo}
+            disabled={loading}
+          >
+            {loading ? 'Loading...' : 'Open Repository'}
+          </button>
         </div>
 
         {branchList.length > 0 && (
@@ -275,6 +304,13 @@ function App() {
                 Labels
               </button>
               <button
+                className={`view-btn ${showPatchLinks ? 'active' : ''}`}
+                onClick={() => setShowPatchLinks(v => !v)}
+                title="Detect cherry-picked / rebased commits (same patch, different commit)"
+              >
+                {patchLinksLoading ? 'Copies…' : 'Copies'}
+              </button>
+              <button
                 className="view-btn"
                 onClick={() => setFitSignal(n => n + 1)}
                 title="Fit whole graph into view"
@@ -283,13 +319,6 @@ function App() {
               </button>
             </div>
           )}
-          <button
-            className="open-btn"
-            onClick={handleOpenRepo}
-            disabled={loading}
-          >
-            {loading ? 'Loading...' : 'Open Repository'}
-          </button>
         </div>
       </header>
 
@@ -375,6 +404,7 @@ function App() {
               compressed={compressed}
               showMergeLinks={showMergeLinks}
               showRefLabels={showRefLabels}
+              patchLinks={showPatchLinks ? patchLinks : []}
               fitSignal={fitSignal}
             />
             <CommitDetails 

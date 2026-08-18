@@ -64,6 +64,12 @@ export interface FileChange {
   status: string;
 }
 
+export interface PatchLink {
+  from: string;
+  to: string;
+  kind: string; // 'rebase' | 'cherry-pick'
+}
+
 export interface CommitDetail {
   id: string;
   short_id: string;

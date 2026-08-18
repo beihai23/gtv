@@ -39,6 +39,7 @@ src-tauri/tests/
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
+  dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
 src/
   api.ts          thin wrappers around tauri invoke(), one per backend command
   types.ts        TypeScript mirror of models.rs — keep in sync by hand

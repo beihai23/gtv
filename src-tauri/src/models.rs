@@ -128,6 +128,17 @@ pub struct FileChange {
     pub status: String,
 }
 
+/// A "same change, different commit" link, detected by normalized patch
+/// hash (git patch-id style: added/removed lines + file paths, no line
+/// numbers, no context). kind is "rebase" when two lanes share a run of
+/// consecutive matching commits, otherwise "cherry-pick".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchLink {
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+}
+
 /// Detailed commit info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitDetail {

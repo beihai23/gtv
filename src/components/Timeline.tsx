@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
-import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap } from '../types';
+import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
 
 interface TimelineProps {
   data: GitData;
@@ -14,6 +14,8 @@ interface TimelineProps {
   compressed: boolean;
   showMergeLinks: boolean;
   showRefLabels: boolean;
+  /** Cherry-pick / rebase copy links (empty when the Copies toggle is off). */
+  patchLinks: PatchLink[];
   /** Increment to trigger "Fit to view" from outside. */
   fitSignal: number;
 }
@@ -45,7 +47,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, fitSignal }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal }: TimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
@@ -378,14 +380,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
       }
       if (d.edge_type === 'Merge') {
-        // merge link: thin, gentle curve into the merge commit
+        // merge link: mirrored fork routing — run along the merged lane past
+        // its tip (empty track), then straight up into the merge commit.
+        // Orthogonal segments hug their own lane/commit x, so fork and merge
+        // lines rarely cross; the old diagonal bezier swept across the whole
+        // graph and crossed every fork drop in between.
+        if (to.x <= from.x) {
+          return `M ${from.x} ${from.y} L ${from.x} ${to.y} L ${to.x} ${to.y}`;
+        }
+        // time-inverted merge (tip timestamp newer than the merge commit):
+        // plain S-curve fallback
         const midX = (from.x + to.x) / 2;
         return `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`;
       }
-      // fork (Branch): right-angle polyline — drop from parent lane, then
-      // horizontal into the child lane's first commit (gmaster style)
-      const midX = from.x - 24;
-      return `M ${to.x} ${to.y} L ${midX} ${to.y} L ${midX} ${from.y} L ${from.x} ${from.y}`;
+      // fork (Branch): drop straight down from the fork-point commit to the
+      // child lane, then run along the child lane into its first commit.
+      // One 90° turn; nothing rides on top of the parent lane, and the drop
+      // is time-aligned with the commit the branch was born at.
+      if (from.x >= to.x) {
+        return `M ${to.x} ${to.y} L ${to.x} ${from.y} L ${from.x} ${from.y}`;
+      }
+      // Time-inverted fork (child commit timestamps earlier than the fork
+      // commit — rebase/amend artifacts): a right angle would turn
+      // backwards, so fall back to a plain S-curve.
+      const midY = (from.y + to.y) / 2;
+      return `M ${to.x} ${to.y} C ${to.x} ${midY}, ${from.x} ${midY}, ${from.x} ${from.y}`;
     };
     const isHotEdge = (d: CommitEdge) =>
       edgeHighlight !== null && edgeHighlight.from === d.from && edgeHighlight.to === d.to;
@@ -448,6 +467,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       });
     edgeHit.append('title')
       .text('Click: highlight endpoints\nCtrl+Click: go to parent\nShift+Click: go to child');
+
+    // --- patch links: cherry-pick / rebase copies ------------------------------
+    // Dashed S-curves between commits carrying the same patch (Copies
+    // toggle). Cyan = rebase run, orange = cherry-pick. Under the nodes.
+    const patchLinkData = patchLinks.filter(l => visibleIds.has(l.from) && visibleIds.has(l.to));
+    const patchLinkPath = (l: PatchLink): string => {
+      const a = commitMap.get(l.from)!;
+      const b = commitMap.get(l.to)!;
+      const midY = (a.y + b.y) / 2;
+      return `M ${a.x} ${a.y} C ${a.x} ${midY}, ${b.x} ${midY}, ${b.x} ${b.y}`;
+    };
+    g.selectAll('.patch-link')
+      .data(patchLinkData)
+      .enter()
+      .append('path')
+      .attr('class', 'patch-link')
+      .attr('d', patchLinkPath)
+      .attr('fill', 'none')
+      .attr('stroke', (l: PatchLink) => (l.kind === 'rebase' ? '#26C6DA' : '#FFA726'))
+      .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '5,4')
+      .attr('opacity', 0.75)
+      .append('title')
+      .text((l: PatchLink) =>
+        `${l.kind === 'rebase' ? 'Rebased' : 'Cherry-picked'} copy: ${l.from.slice(0, 7)} ↔ ${l.to.slice(0, 7)}`);
 
     // --- collapsed-segment chips ------------------------------------------------
     if (compressed) {
@@ -540,54 +584,28 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     // NOTE: no SVG <title> on nodes — the custom HTML tooltip below covers
     // hover; a native title would show up as a second, redundant popup.
 
-    // --- node labels (short id + message), greedily thinned per lane ---------
-    // Labels on a lane are laid out left-to-right; a label is only drawn when
-    // it clears the previous one, so dense regions degrade to every-Nth label
-    // instead of an overlapping mess. The selected commit is always labelled.
-    const labelVisible = (() => {
-      const ok = new Set<string>();
-      const lastX1 = new Map<string, number>();
-      const byX = [...visibleCommits].sort((a, b) => a.x - b.x);
-      for (const c of byX) {
-        const x0 = c.x + nodeRadius(c) + 7;
-        const w = Math.max(c.short_id.length * 6.6, Math.min(c.message.length, 30) * 5.8);
-        const prev = lastX1.get(c.lane_owner);
-        if (prev !== undefined && x0 < prev + 8 && c.id !== selectedCommitId) continue;
-        lastX1.set(c.lane_owner, x0 + w);
-        ok.add(c.id);
-      }
-      return ok;
-    })();
+    // --- shared text-collision occupancy -----------------------------------
+    // Every in-scene text element (ref badges, fork/merge annotations)
+    // registers its bounding box here. Anything that can't find a free slot
+    // is dropped instead of overlapping — badges may climb levels to find
+    // space, annotations are simply skipped. Commit messages and short ids
+    // are intentionally NOT drawn on the canvas: hover tooltip and the
+    // CommitDetails panel carry them, and the badges own this space now.
+    interface TextBox { x0: number; y0: number; x1: number; y1: number }
+    const placedBoxes: TextBox[] = [];
+    const boxCollides = (b: TextBox) =>
+      placedBoxes.some(p => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
 
-    const labels = g.selectAll('.label')
-      .data(visibleCommits.filter(c => labelVisible.has(c.id)))
-      .enter()
-      .append('g')
-      .attr('class', 'label')
-      .attr('transform', (d: CommitNode) => `translate(${d.x + nodeRadius(d) + 7}, ${d.y - 5})`)
-      .attr('opacity', (d: CommitNode) => laneOpacity(d.lane_owner));
-
-    labels.append('text')
-      .attr('font-size', '11px')
-      .attr('fill', '#ccc')
-      .text((d: CommitNode) => d.short_id);
-    labels.append('text')
-      .attr('font-size', '10px')
-      .attr('fill', '#888')
-      .attr('y', 12)
-      .text((d: CommitNode) => d.message.length > 30 ? d.message.slice(0, 30) + '…' : d.message);
-
-    // --- ref badges, collision-resolved per lane ---------------------------
-    // A commit shows at most two pills (first ref + "+N"). Pill groups that
-    // would horizontally overlap a neighbour on the same lane are pushed to a
-    // higher level; groups beyond MAX_LEVEL are dropped (their refs stay
-    // reachable through the node tooltip and the CommitDetails panel).
+    // --- ref badges, collision-resolved against all placed text ------------
+    // A commit shows at most two pills (first ref + "+N"). A pill group that
+    // would overlap any already-placed text box is pushed to a higher level;
+    // groups that find no free level are dropped (their refs stay reachable
+    // through the node tooltip and the CommitDetails panel).
     if (showRefLabels) {
       const pillW = (name: string) => name.length * 5.6 + 14;
       const LEVEL_H = 40;
       const MAX_LEVEL = 3;
       const specs: BadgeSpec[] = [];
-      const lastX1 = new Map<string, number[]>();
       const withRefs = visibleCommits
         .filter(c => c.branch_refs.length > 0)
         .sort((a, b) => a.x - b.x);
@@ -597,13 +615,23 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         const names: BadgePill[] = shown.map(r => ({ name: r.name, is_tag: r.is_tag }));
         if (extra > 0) names.push({ name: `+${extra}`, is_tag: false });
         const width = Math.max(...names.map(n => pillW(n.name)));
-        const x0 = c.x - width / 2;
-        const edges = lastX1.get(c.lane_owner) ?? [];
-        let level = 0;
-        while (level <= MAX_LEVEL && edges[level] !== undefined && x0 < edges[level] + 8) level++;
-        if (level > MAX_LEVEL) continue;
-        edges[level] = c.x + width / 2;
-        lastX1.set(c.lane_owner, edges);
+        const stackH = (names.length - 1) * 18;
+        let level = -1;
+        for (let l = 0; l <= MAX_LEVEL; l++) {
+          const gy = c.y - nodeRadius(c) - 8 - l * LEVEL_H;
+          const box: TextBox = {
+            x0: c.x - width / 2 - 2,
+            y0: gy - stackH - 15,
+            x1: c.x + width / 2 + 2,
+            y1: gy + 4,
+          };
+          if (!boxCollides(box)) {
+            placedBoxes.push(box);
+            level = l;
+            break;
+          }
+        }
+        if (level < 0) continue;
         specs.push({ c, names, level });
       }
       const badgeGroups = g.selectAll('.ref-badges')
@@ -647,30 +675,104 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       });
     }
 
-    // --- fork / merge annotations ---------------------------------------------------
-    g.selectAll('.fork-label')
-      .data(visibleCommits.filter(c => c.fork_branch_name))
-      .enter()
-      .append('text')
-      .attr('class', 'fork-label')
-      .attr('x', (d: CommitNode) => d.x)
-      .attr('y', (d: CommitNode) => d.y + 24)
-      .attr('font-size', '9px')
-      .attr('fill', '#4A90D9')
-      .attr('text-anchor', 'middle')
-      .text((d: CommitNode) => `⑂ ${d.fork_branch_name}`);
+    // --- fork / merge annotations -------------------------------------------
+    // Annotations climb levels like ref badges when their preferred slot is
+    // taken (fork labels grow downward from the node, merge labels upward),
+    // and every annotation gets a dashed connector back to its commit node so
+    // ownership is unambiguous even when lifted far away. Beyond
+    // MAX_ANN_LEVEL there is no sane space left; only then is one dropped.
+    // Each branch name is rendered in its own lane's color, so the label
+    // visually points at the lane it talks about.
+    interface AnnSpec { c: CommitNode; level: number }
+    interface AnnPart { text: string; color: string }
+    const ANN_H = 18;
+    const MAX_ANN_LEVEL = 8;
 
-    g.selectAll('.merge-label')
-      .data(visibleCommits.filter(c => c.merge_branch_name && showMergeLinks))
-      .enter()
-      .append('text')
-      .attr('class', 'merge-label')
-      .attr('x', (d: CommitNode) => d.x)
-      .attr('y', (d: CommitNode) => d.y - nodeRadius(d) - 8)
-      .attr('font-size', '9px')
-      .attr('fill', '#E91E63')
-      .attr('text-anchor', 'middle')
-      .text((d: CommitNode) => `⤶ ${d.merge_branch_name}`);
+    const drawAnnotations = (
+      className: string,
+      commits: CommitNode[],
+      partsOf: (c: CommitNode) => AnnPart[],
+      fallbackColor: string,
+      // level-0 baseline relative to the commit, and growth direction
+      baseY: (c: CommitNode) => number,
+      dir: 1 | -1,
+    ) => {
+      const fullText = (c: CommitNode) => partsOf(c).map(p => p.text).join('');
+      const specs: AnnSpec[] = [];
+      for (const c of [...commits].sort((a, b) => a.x - b.x)) {
+        const w = fullText(c).length * 5.4;
+        for (let l = 0; l <= MAX_ANN_LEVEL; l++) {
+          const baseline = baseY(c) + dir * l * ANN_H;
+          const box: TextBox = { x0: c.x - w / 2, y0: baseline - 9, x1: c.x + w / 2, y1: baseline + 3 };
+          if (!boxCollides(box)) {
+            placedBoxes.push(box);
+            specs.push({ c, level: l });
+            break;
+          }
+        }
+      }
+
+      const grps = g.selectAll(`.${className}`)
+        .data(specs)
+        .enter()
+        .append('g')
+        .attr('class', className)
+        .attr('transform', s => `translate(${s.c.x}, ${baseY(s.c) + dir * s.level * ANN_H})`)
+        .attr('opacity', s => laneOpacity(s.c.lane_owner));
+
+      // Connector pin from the label back to the node edge (in group coords
+      // the node sits at y = -dir * (offset from baseline to node center)).
+      grps.append('line')
+        .attr('x1', 0).attr('y1', dir === 1 ? -9 : 3)
+        .attr('x2', 0)
+        .attr('y2', s => {
+          const nodeEdgeY = dir === 1 ? s.c.y + nodeRadius(s.c) : s.c.y - nodeRadius(s.c);
+          return nodeEdgeY - (baseY(s.c) + dir * s.level * ANN_H);
+        })
+        .attr('stroke', s => partsOf(s.c)[0]?.color ?? fallbackColor)
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '2,2')
+        .attr('opacity', 0.65);
+
+      const texts = grps.append('text')
+        .attr('font-size', '10px')
+        .attr('text-anchor', 'middle');
+      texts.each(function (s) {
+        const t = d3.select(this);
+        for (const part of partsOf(s.c)) {
+          t.append('tspan').attr('fill', part.color).text(part.text);
+        }
+      });
+    };
+
+    const laneColorOf = (name: string, fallback: string) =>
+      branchColorMap.get(name) ?? fallback;
+
+    drawAnnotations(
+      'fork-label',
+      visibleCommits.filter(c => c.fork_branch_name),
+      c => (c.fork_branch_name ?? '').split(', ').map((name, i) => ({
+        text: (i === 0 ? '🌱 ' : ', ') + name,
+        color: laneColorOf(name, '#4A90D9'),
+      })),
+      '#4A90D9',
+      c => c.y + 24,
+      1,
+    );
+
+    if (showMergeLinks) {
+      drawAnnotations(
+        'merge-label',
+        visibleCommits.filter(c => c.merge_branch_name),
+        c => [{
+          text: `🔀 ${c.merge_branch_name}`,
+          color: laneColorOf(c.merge_branch_name ?? '', '#E91E63'),
+        }],
+        '#E91E63',
+        c => c.y - nodeRadius(c) - 8,
+        -1,
+      );
+    }
 
     // --- viewport culling: only elements inside (or near) the visible scene
     // rect stay in the render tree; everything else is display:none. Lane
@@ -684,18 +786,37 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const y1 = (height - t.y) / t.k + M;
       const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
 
-      g.selectAll<SVGGElement, CommitNode>('.node,.label')
+      g.selectAll<SVGGElement, CommitNode>('.node')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
       g.selectAll<SVGGElement, BadgeSpec>('.ref-badges')
         .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
-      g.selectAll<SVGTextElement, CommitNode>('.fork-label,.merge-label')
-        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
+      g.selectAll<SVGGElement, AnnSpec>('.fork-label,.merge-label')
+        .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
+      // Cull by bounding box, not endpoints: a fork polyline's long vertical
+      // run (or a merge curve's midsection) can cross the viewport while both
+      // endpoint nodes are offscreen — endpoint testing made such edges
+      // vanish when zooming in.
       g.selectAll<SVGPathElement, CommitEdge>('.edge,.edge-hit')
         .style('display', d => {
           const a = commitMap.get(d.from);
           const b = commitMap.get(d.to);
           if (!a || !b) return 'none';
-          return inView(a.x, a.y) || inView(b.x, b.y) ? null : 'none';
+          const minX = Math.min(a.x, b.x);
+          const maxX = Math.max(a.x, b.x);
+          const minY = Math.min(a.y, b.y);
+          const maxY = Math.max(a.y, b.y);
+          return maxX >= x0 && minX <= x1 && maxY >= y0 && minY <= y1 ? null : 'none';
+        });
+      g.selectAll<SVGPathElement, PatchLink>('.patch-link')
+        .style('display', d => {
+          const a = commitMap.get(d.from);
+          const b = commitMap.get(d.to);
+          if (!a || !b) return 'none';
+          const minX = Math.min(a.x, b.x);
+          const maxX = Math.max(a.x, b.x);
+          const minY = Math.min(a.y, b.y);
+          const maxY = Math.max(a.y, b.y);
+          return maxX >= x0 && minX <= x1 && maxY >= y0 && minY <= y1 ? null : 'none';
         });
       g.selectAll<SVGLineElement, TimeGap>('.gap-break')
         .style('display', d => {
@@ -832,7 +953,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       svg.call(zoom.transform, transformRef.current);
     }
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight]);
 
   useEffect(() => {
     draw();

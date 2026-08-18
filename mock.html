@@ -21,6 +21,7 @@
           case 'get_current_branch': return 'marschain';
           case 'get_branch_list': return DATA.branches;
           case 'get_commit_detail': return null;
+          case 'get_patch_links': return DATA._patch_links ?? [];
           case 'filter_by_branches': return DATA;
           case 'is_valid_git_repo': return true;
           default: return null; // plugin:dialog|open -> null (no native dialog)

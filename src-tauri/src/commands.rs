@@ -7,6 +7,8 @@ pub struct AppState {
     pub current_repo: Mutex<Option<GitReader>>,
     pub current_path: Mutex<Option<String>>,
     pub current_branch: Mutex<Option<String>>,
+    /// Last built view; patch-link detection runs against these commits.
+    pub current_view: Mutex<Option<GitData>>,
 }
 
 impl Default for AppState {
@@ -15,6 +17,7 @@ impl Default for AppState {
             current_repo: Mutex::new(None),
             current_path: Mutex::new(None),
             current_branch: Mutex::new(None),
+            current_view: Mutex::new(None),
         }
     }
 }
@@ -38,6 +41,9 @@ pub async fn open_repository(path: String, state: tauri::State<'_, AppState>) ->
 
     let mut current_branch = state.current_branch.lock().unwrap();
     *current_branch = Some(data.main_branch.clone());
+
+    let mut current_view = state.current_view.lock().unwrap();
+    *current_view = Some(data.clone());
 
     log::info!("Opened repository with {} commits", data.commits.len());
 
@@ -113,6 +119,9 @@ pub async fn switch_branch(
     let mut current_branch = state.current_branch.lock().unwrap();
     *current_branch = Some(branch_name);
 
+    let mut current_view = state.current_view.lock().unwrap();
+    *current_view = Some(data.clone());
+
     log::info!("Switched to branch with {} commits", data.commits.len());
 
     Ok(data)
@@ -136,9 +145,34 @@ pub async fn filter_by_branches(
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
+    let mut current_view = state.current_view.lock().unwrap();
+    *current_view = Some(data.clone());
+
     log::info!("Filtered to {} commits", data.commits.len());
 
     Ok(data)
+}
+
+/// Cherry-pick / rebase detection across the current view's commits.
+/// Expensive (one diff per commit), so it runs on demand via the Copies
+/// toggle, inside spawn_blocking.
+#[tauri::command]
+pub async fn get_patch_links(state: tauri::State<'_, AppState>) -> Result<Vec<PatchLink>, String> {
+    let (path, commits) = {
+        let path = state.current_path.lock().unwrap().clone();
+        let view = state.current_view.lock().unwrap().clone();
+        match (path, view) {
+            (Some(p), Some(v)) => (p, v.commits),
+            _ => return Err("No repository opened".to_string()),
+        }
+    };
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.get_patch_links(&commits)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 use git2::Repository;

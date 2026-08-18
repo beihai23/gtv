@@ -409,6 +409,165 @@ impl GitReader {
         Ok(text)
     }
 
+    /// Normalized patch hash for a commit vs its first parent: file paths
+    /// plus added/removed line contents, ignoring line numbers and context
+    /// — the same idea as `git patch-id`. Two commits with the same hash
+    /// carry the same change (cherry-pick / rebase copies). Merge commits
+    /// return None: their "change" is not a portable patch.
+    fn patch_hash(&self, commit_id: &str) -> Option<u64> {
+        let oid = Oid::from_str(commit_id).ok()?;
+        let commit = self.repo.find_commit(oid).ok()?;
+        if commit.parent_count() > 1 {
+            return None;
+        }
+        let tree = commit.tree().ok()?;
+        let parent_tree = match commit.parents().next() {
+            Some(p) => Some(p.tree().ok()?),
+            None => None,
+        };
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+            .ok()?;
+
+        // FNV-1a via Cell so both callbacks can share the state.
+        let state = std::cell::Cell::new(0xcbf29ce484222325u64);
+        let mix = |bytes: &[u8]| {
+            let mut h = state.get();
+            for &b in bytes {
+                h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+            }
+            state.set(h);
+        };
+        let mut file_cb = |delta: git2::DiffDelta, _progress: f32| {
+            if let Some(p) = delta.old_file().path() {
+                mix(p.to_string_lossy().as_bytes());
+            }
+            mix(&[0]);
+            if let Some(p) = delta.new_file().path() {
+                mix(p.to_string_lossy().as_bytes());
+            }
+            mix(&[0xff]);
+            true
+        };
+        let mut line_cb =
+            |_delta: git2::DiffDelta, _hunk: Option<git2::DiffHunk>, line: git2::DiffLine| {
+                match line.origin() {
+                    '+' | '-' => {
+                        mix(&[line.origin() as u8]);
+                        mix(line.content());
+                    }
+                    _ => {}
+                }
+                true
+            };
+        diff.foreach(
+            &mut file_cb,
+            None,
+            None,
+            Some(
+                &mut line_cb as &mut dyn FnMut(
+                    git2::DiffDelta,
+                    Option<git2::DiffHunk>,
+                    git2::DiffLine,
+                ) -> bool,
+            ),
+        )
+        .ok()?;
+        Some(state.get())
+    }
+
+    /// Detect copied commits inside the current view by matching normalized
+    /// patch hashes. A run of ≥2 consecutive matching pairs between two
+    /// lanes is classified as a rebase; anything else is a cherry-pick.
+    pub fn get_patch_links(&self, commits: &[CommitNode]) -> Result<Vec<PatchLink>, String> {
+        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (i, c) in commits.iter().enumerate() {
+            if let Some(h) = self.patch_hash(&c.id) {
+                by_hash.entry(h).or_default().push(i);
+            }
+        }
+
+        // Rank of each commit within its own lane, ordered by x — used to
+        // test whether matching pairs form consecutive runs.
+        let mut lane_order: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, c) in commits.iter().enumerate() {
+            lane_order.entry(c.lane_owner.as_str()).or_default().push(i);
+        }
+        let mut pos = vec![0usize; commits.len()];
+        for v in lane_order.values_mut() {
+            v.sort_by(|&a, &b| {
+                commits[a]
+                    .x
+                    .partial_cmp(&commits[b].x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (rank, &i) in v.iter().enumerate() {
+                pos[i] = rank;
+            }
+        }
+
+        let mut links: Vec<PatchLink> = Vec::new();
+        // lane pair -> one-commit-per-lane match pairs (rebase candidates)
+        let mut pair_runs: HashMap<(String, String), Vec<(usize, usize)>> = HashMap::new();
+        // groups with >2 copies or uneven lane splits: plain cherry-picks
+        let mut simple_groups: Vec<Vec<usize>> = Vec::new();
+
+        for idxs in by_hash.values() {
+            if idxs.len() < 2 {
+                continue;
+            }
+            let lanes: HashSet<&str> = idxs
+                .iter()
+                .map(|&i| commits[i].lane_owner.as_str())
+                .collect();
+            if lanes.len() < 2 {
+                continue; // same-lane duplicate: not a branch relationship
+            }
+            if idxs.len() == 2 {
+                let (a, b) = (idxs[0], idxs[1]);
+                let (la, lb) = (commits[a].lane_owner.clone(), commits[b].lane_owner.clone());
+                let key = if la <= lb { (la, lb) } else { (lb, la) };
+                pair_runs.entry(key).or_default().push((a, b));
+            } else {
+                simple_groups.push(idxs.clone());
+            }
+        }
+
+        for ((_la, _lb), mut pairs) in pair_runs {
+            pairs.sort_by_key(|&(a, _)| pos[a]);
+            let is_rebase = pairs.len() >= 2
+                && pairs
+                    .windows(2)
+                    .all(|w| pos[w[1].0] == pos[w[0].0] + 1 && pos[w[1].1] == pos[w[0].1] + 1);
+            let kind = if is_rebase { "rebase" } else { "cherry-pick" };
+            for (a, b) in pairs {
+                links.push(PatchLink {
+                    from: commits[a].id.clone(),
+                    to: commits[b].id.clone(),
+                    kind: kind.to_string(),
+                });
+            }
+        }
+
+        for idxs in simple_groups {
+            // Link every copy to the earliest one.
+            let mut sorted = idxs;
+            sorted.sort_by_key(|&i| commits[i].timestamp);
+            let anchor = sorted[0];
+            for &i in &sorted[1..] {
+                links.push(PatchLink {
+                    from: commits[anchor].id.clone(),
+                    to: commits[i].id.clone(),
+                    kind: "cherry-pick".to_string(),
+                });
+            }
+        }
+
+        log::info!("Patch links: {} detected", links.len());
+        Ok(links)
+    }
+
     pub fn get_commit_detail(&self, commit_id: &str) -> Result<CommitDetail, String> {
         let oid = Oid::from_str(commit_id).map_err(|e| format!("Invalid commit id: {}", e))?;
 
