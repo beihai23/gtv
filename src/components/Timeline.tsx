@@ -13,8 +13,8 @@ interface TimelineProps {
 }
 
 const LANE_HEIGHT = 80;
-const MINIMAP_W = 220;
-const MINIMAP_H = 120;
+const MINIMAP_W = 280;
+const MINIMAP_H = 170;
 
 interface LaneMenu {
   x: number;
@@ -120,6 +120,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.005, 40])
+      // Wheel events are handled by our own trackpad-friendly handler
+      // (scroll = pan, pinch/ctrl = zoom); d3 only keeps drag-pan.
+      .filter((event: Event) => event.type !== 'wheel')
       .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform.toString());
@@ -489,9 +492,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       }
       mm.append('rect')
         .attr('class', 'mm-viewport')
-        .attr('fill', 'none')
-        .attr('stroke', '#4A90D9')
-        .attr('stroke-width', 1);
+        .attr('fill', 'rgba(74, 144, 217, 0.14)')
+        .attr('stroke', '#7db8f0')
+        .attr('stroke-width', 1.5)
+        .attr('rx', 2);
       mm.on('click', (event: MouseEvent) => {
         const [px, py] = d3.pointer(event, minimapRef.current);
         const sceneX = px / s + minX;
@@ -545,6 +549,41 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .translate(width / 2 - (minX + sceneW / 2) * k, height / 2 - (minY + sceneH / 2) * k)
       .scale(k);
     d3.select(svgRef.current).call(zoomRef.current.transform, t);
+  }, []);
+
+  // Trackpad-friendly wheel handling (Figma-style):
+  //   two-finger scroll (plain wheel)  -> pan
+  //   pinch (ctrlKey wheel) / cmd+wheel -> zoom around the cursor
+  useEffect(() => {
+    const node = svgRef.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const zoom = zoomRef.current;
+      if (!zoom) return;
+      const t = transformRef.current;
+      const unit = event.deltaMode === 1 ? 16 : 1; // Firefox line mode
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+
+      let next: d3.ZoomTransform;
+      if (event.ctrlKey || event.metaKey) {
+        const rect = node.getBoundingClientRect();
+        const mx = event.clientX - rect.left;
+        const my = event.clientY - rect.top;
+        const k2 = Math.min(40, Math.max(0.005, t.k * Math.exp(-dy * 0.0022)));
+        const s = k2 / t.k;
+        // keep the scene point under the cursor fixed on screen
+        next = d3.zoomIdentity
+          .translate(mx - s * (mx - t.x), my - s * (my - t.y))
+          .scale(k2);
+      } else {
+        next = d3.zoomIdentity.translate(t.x - dx, t.y - dy).scale(t.k);
+      }
+      d3.select(node).call(zoom.transform, next);
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
   return (

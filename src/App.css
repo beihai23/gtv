@@ -482,11 +482,12 @@
 /* --- minimap (bottom-right overlay) --- */
 .minimap {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
-  background: rgba(20, 20, 20, 0.85);
-  border: 1px solid #333;
-  border-radius: 6px;
+  right: 16px;
+  bottom: 16px;
+  background: rgba(14, 14, 20, 0.96);
+  border: 1px solid #4a4a58;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
   z-index: 15;
   cursor: crosshair;
 }
@@ -557,6 +558,6 @@
 }
 
 .minimap {
-  width: 220px !important;
-  height: 120px !important;
+  width: 280px !important;
+  height: 170px !important;
 }
