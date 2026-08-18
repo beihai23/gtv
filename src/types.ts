@@ -42,11 +42,19 @@ export interface BranchLane {
   is_active: boolean;
 }
 
+export interface TimeGap {
+  t_start: number;
+  t_end: number;
+  x_start: number;
+  x_end: number;
+}
+
 export interface GitData {
   commits: CommitNode[];
   edges: CommitEdge[];
   branches: BranchLane[];
   main_branch: string;
+  time_gaps: TimeGap[];
 }
 
 export interface FileChange {

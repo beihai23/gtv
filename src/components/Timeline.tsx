@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
-import type { GitData, BranchLane, CommitNode, CommitEdge } from '../types';
+import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap } from '../types';
 
 interface TimelineProps {
   data: GitData;
@@ -63,6 +63,8 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
+  /** Scene→minimap mapping, set during minimap draw; viewport rect reads it. */
+  const minimapMapRef = useRef({ sx: 1, sy: 1, x0: 0, y0: 0 });
 
   const commitMap = useMemo(() => new Map(data.commits.map(c => [c.id, c])), [data]);
   const branchColorMap = useMemo(() => new Map(data.branches.map(b => [b.name, b.color])), [data]);
@@ -116,21 +118,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     const minimapViewport = () => {
       if (!minimapRef.current) return;
       const t = transformRef.current;
-      const allX = data.commits.map(c => c.x);
-      const scene = {
-        x0: Math.min(...allX, 0) - 180,
-        x1: Math.max(...allX, 100) + 200,
-        y0: -LANE_HEIGHT,
-        y1: (data.branches.length) * LANE_HEIGHT,
-      };
-      const sx = MINIMAP_W / (scene.x1 - scene.x0);
-      const sy = MINIMAP_H / (scene.y1 - scene.y0);
-      const s = Math.min(sx, sy);
-      // screen = t * scene ; scene->mini = s ; viewport rect in mini coords:
-      const vx = (-t.x / t.k - scene.x0) * s;
-      const vy = (-t.y / t.k - scene.y0) * s;
-      const vw = (width / t.k) * s;
-      const vh = (height / t.k) * s;
+      const m = minimapMapRef.current;
+      // screen = t * scene ; scene->mini = per-axis scale (non-uniform)
+      const vx = (-t.x / t.k - m.x0) * m.sx;
+      const vy = (-t.y / t.k - m.y0) * m.sy;
+      const vw = (width / t.k) * m.sx;
+      const vh = (height / t.k) * m.sy;
       d3.select(minimapRef.current).select('.mm-viewport')
         .attr('x', vx).attr('y', vy)
         .attr('width', Math.max(6, vw)).attr('height', Math.max(6, vh));
@@ -172,16 +165,38 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
     // --- sticky time ruler ---------------------------------------------------
     // Lives OUTSIDE the zoomable scene: pinned to the top of the canvas with
-    // an opaque backdrop. On every zoom/pan we rescale the time scale through
-    // the current transform, so tick positions stay glued to the graph below.
+    // an opaque backdrop. The time→x mapping is piecewise: linear inside
+    // committed ranges, with a steep ramp across each folded time gap (the
+    // backend collapses >45-day empty stretches to a 120px axis break).
+    // Ticks are generated for the VISIBLE time window only, so zooming in
+    // refines their precision; ticks falling inside a folded gap are dropped.
     let updateRuler: (() => void) | null = null;
     if (data.commits.length > 1) {
       const tMin = Math.min(...data.commits.map(c => c.timestamp));
       const tMax = Math.max(...data.commits.map(c => c.timestamp));
-      const xOf = new Map(data.commits.map(c => [c.timestamp, c.x]));
-      const timeScale = d3.scaleTime()
-        .domain([new Date(tMin * 1000), new Date(tMax * 1000)])
-        .range([xOf.get(tMin) ?? 0, xOf.get(tMax) ?? 1]);
+      const xMinC = Math.min(...data.commits.map(c => c.x));
+      const xMaxC = Math.max(...data.commits.map(c => c.x));
+      const gaps = [...(data.time_gaps ?? [])].sort((a, b) => a.x_start - b.x_start);
+
+      // Piecewise anchors: [tMin, g1.t_start, g1.t_end, ..., tMax] paired with
+      // [xMin, g1.x_start, g1.x_end, ..., xMax]; linear between anchors.
+      const times: number[] = [tMin];
+      const xs: number[] = [xMinC];
+      for (const gp of gaps) { times.push(gp.t_start, gp.t_end); xs.push(gp.x_start, gp.x_end); }
+      times.push(tMax); xs.push(xMaxC);
+      const lerpAnchors = (v: number, from: number[], to: number[]): number => {
+        if (v <= from[0]) return to[0];
+        for (let i = 1; i < from.length; i++) {
+          if (v <= from[i]) {
+            const d = from[i] - from[i - 1];
+            return d <= 0 ? to[i] : to[i - 1] + (to[i] - to[i - 1]) * (v - from[i - 1]) / d;
+          }
+        }
+        return to[to.length - 1];
+      };
+      const timeToX = (t: number) => lerpAnchors(t, times, xs);
+      const xToTime = (x: number) => lerpAnchors(x, xs, times);
+      const inGap = (t: number) => gaps.some(gp => t > gp.t_start && t < gp.t_end);
 
       const ruler = svg.append('g')
         .attr('class', 'time-ruler-sticky')
@@ -198,17 +213,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
 
       const pad2 = (n: number) => String(n).padStart(2, '0');
+      const fmtDuration = (sec: number): string => {
+        const days = sec / 86400;
+        if (days < 90) return `${Math.max(1, Math.round(days))}d`;
+        if (days < 730) return `${Math.round(days / 30.4)}mo`;
+        return `${(days / 365.25).toFixed(1)}y`;
+      };
+
       updateRuler = () => {
-        const screenScale = transformRef.current.rescaleX(timeScale);
-        const ticks = screenScale.ticks(Math.max(3, Math.floor(width / 150)));
+        const t = transformRef.current;
+        // Visible time window (with margin), so ticks adapt to the zoom level.
+        const vt0 = xToTime(-t.x / t.k - 100);
+        const vt1 = xToTime((width - t.x) / t.k + 100);
+        if (!(vt1 > vt0)) return;
+        const shown = d3.scaleTime()
+          .domain([new Date(vt0 * 1000), new Date(vt1 * 1000)])
+          .ticks(Math.max(3, Math.floor(width / 150)))
+          .filter(d => !inGap(d.getTime() / 1000));
+
         // Pick a precision strictly finer than the tightest tick gap, so two
         // adjacent labels can never read the same (e.g. four "2026-01" ticks).
         let minGapSec = Infinity;
-        for (let i = 1; i < ticks.length; i++) {
-          minGapSec = Math.min(minGapSec, (ticks[i].getTime() - ticks[i - 1].getTime()) / 1000);
+        for (let i = 1; i < shown.length; i++) {
+          minGapSec = Math.min(minGapSec, (shown[i].getTime() - shown[i - 1].getTime()) / 1000);
         }
-        const fmtTick = (d: Date | d3.NumberValue): string => {
-          const dt = d as Date;
+        const fmtTick = (dt: Date): string => {
           const date = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
           if (minGapSec >= 250 * 86400) return `${dt.getFullYear()}`;
           if (minGapSec >= 25 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
@@ -217,16 +246,56 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           if (minGapSec >= 40 * 60) return `${date} ${time}`;
           return `${date} ${time}:${pad2(dt.getSeconds())}`;
         };
-        axisG.call(
-          d3.axisTop(screenScale)
-            .tickValues(ticks)
-            .tickSize(5)
-            .tickFormat(fmtTick)
-        );
-        axisG.selectAll('text').attr('fill', '#888').attr('font-size', '10px');
-        axisG.selectAll('line,path').attr('stroke', '#555');
+
+        const tick = axisG
+          .selectAll<SVGGElement, Date>('.rtick')
+          .data(shown, d => String(+d));
+        const tickEnter = tick.enter().append('g').attr('class', 'rtick');
+        tickEnter.append('line')
+          .attr('y1', -5).attr('y2', 0)
+          .attr('stroke', '#555');
+        tickEnter.append('text')
+          .attr('y', -8).attr('text-anchor', 'middle')
+          .attr('fill', '#888').attr('font-size', '10px');
+        const tickMerged = tickEnter.merge(tick);
+        tickMerged.attr('transform', d => `translate(${t.applyX(timeToX(d.getTime() / 1000))},0)`);
+        tickMerged.select('text').text(fmtTick);
+        tick.exit().remove();
+
+        // Axis-break markers: "// 45d" at the center of each folded gap.
+        const brk = axisG
+          .selectAll<SVGGElement, TimeGap>('.rbreak')
+          .data(gaps, d => String(d.t_start));
+        const brkEnter = brk.enter().append('g').attr('class', 'rbreak');
+        brkEnter.append('text')
+          .attr('y', -8).attr('text-anchor', 'middle')
+          .attr('fill', '#a06a3a').attr('font-size', '9px');
+        brkEnter.merge(brk)
+          .attr('transform', d => `translate(${t.applyX((d.x_start + d.x_end) / 2)},0)`)
+          .select('text')
+          .text(d => `// ${fmtDuration(d.t_end - d.t_start)}`);
+        brk.exit().remove();
       };
       updateRuler();
+    }
+
+    // --- folded-gap scene markers ---------------------------------------------
+    // Low-key vertical dashed lines where the time axis is broken, so the
+    // discontinuity is visible inside the graph itself.
+    if (data.time_gaps && data.time_gaps.length > 0) {
+      g.selectAll('.gap-break')
+        .data(data.time_gaps)
+        .enter()
+        .append('line')
+        .attr('class', 'gap-break')
+        .attr('x1', (d: TimeGap) => (d.x_start + d.x_end) / 2)
+        .attr('x2', (d: TimeGap) => (d.x_start + d.x_end) / 2)
+        .attr('y1', minY)
+        .attr('y2', maxY)
+        .attr('stroke', '#a06a3a')
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '6,5')
+        .attr('opacity', 0.35);
     }
 
     // --- lane guide lines ------------------------------------------------------
@@ -630,6 +699,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           if (!a || !b) return 'none';
           return inView(a.x, a.y) || inView(b.x, b.y) ? null : 'none';
         });
+      g.selectAll<SVGLineElement, TimeGap>('.gap-break')
+        .style('display', d => {
+          const x = (d.x_start + d.x_end) / 2;
+          return x >= x0 && x <= x1 ? null : 'none';
+        });
       g.selectAll<SVGLineElement, BranchLane>('.lane,.lane-bar')
         .style('display', d => {
           const y = d.lane_index * LANE_HEIGHT;
@@ -658,44 +732,87 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
 
     // --- minimap ----------------------------------------------------------------------
+    // Non-uniform scale: x and y stretch independently, so even an extremely
+    // wide-flat scene (big repo, time-proportional x) fills the whole map.
+    // Lanes render as activity bars spanning their commits; key commits are
+    // bright dots. The map answers "where is the activity", not "where are
+    // individual commits".
     if (minimapRef.current) {
       const mm = d3.select(minimapRef.current);
       mm.selectAll('*').remove();
       mm.attr('width', MINIMAP_W).attr('height', MINIMAP_H);
-      const sceneW = maxX - minX;
-      const sceneH = maxY - minY;
-      const s = Math.min(MINIMAP_W / sceneW, MINIMAP_H / sceneH);
-      const mx = (x: number) => (x - minX) * s;
-      const my = (y: number) => (y - minY) * s;
+      const sceneW = Math.max(maxX - minX, 1);
+      const sceneH = Math.max(maxY - minY, 1);
+      const sx = MINIMAP_W / sceneW;
+      const sy = MINIMAP_H / sceneH;
+      minimapMapRef.current = { sx, sy, x0: minX, y0: minY };
+      const mx = (x: number) => (x - minX) * sx;
+      const my = (y: number) => (y - minY) * sy;
+
       for (const b of data.branches) {
+        const span = laneSpan.get(b.lane_index);
+        if (!span) continue;
+        const y = my(b.lane_index * LANE_HEIGHT);
         mm.append('line')
-          .attr('x1', 0).attr('x2', MINIMAP_W)
-          .attr('y1', my(b.lane_index * LANE_HEIGHT))
-          .attr('y2', my(b.lane_index * LANE_HEIGHT))
-          .attr('stroke', b.color).attr('stroke-width', 0.8).attr('opacity', 0.35);
+          .attr('x1', mx(span.min))
+          .attr('x2', Math.max(mx(span.max), mx(span.min) + 2))
+          .attr('y1', y).attr('y2', y)
+          .attr('stroke', b.color)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-linecap', 'round')
+          .attr('opacity', dimOthers(b.name) ? 0.15 : 0.75);
       }
       for (const c of data.commits) {
+        if (!c.is_key) continue;
         mm.append('circle')
           .attr('cx', mx(c.x)).attr('cy', my(c.y))
-          .attr('r', c.is_key ? 2 : 1.1)
-          .attr('fill', branchColorMap.get(c.lane_owner) ?? '#888');
+          .attr('r', 1.8)
+          .attr('fill', '#fff')
+          .attr('opacity', 0.85);
       }
+
+      // time anchors: oldest ↔ newest month
+      const fmtMY = (ts: number) => {
+        const d = new Date(ts * 1000);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      };
+      const tMin = Math.min(...data.commits.map(c => c.timestamp));
+      const tMax = Math.max(...data.commits.map(c => c.timestamp));
+      mm.append('text')
+        .attr('x', 3).attr('y', MINIMAP_H - 4)
+        .attr('font-size', '9px').attr('fill', '#777')
+        .text(fmtMY(tMin));
+      mm.append('text')
+        .attr('x', MINIMAP_W - 3).attr('y', MINIMAP_H - 4)
+        .attr('font-size', '9px').attr('fill', '#777')
+        .attr('text-anchor', 'end')
+        .text(fmtMY(tMax));
+
       mm.append('rect')
         .attr('class', 'mm-viewport')
-        .attr('fill', 'rgba(74, 144, 217, 0.14)')
-        .attr('stroke', '#7db8f0')
+        .attr('fill', 'rgba(125, 184, 240, 0.16)')
+        .attr('stroke', '#8ec6ff')
         .attr('stroke-width', 1.5)
-        .attr('rx', 2);
-      mm.on('click', (event: MouseEvent) => {
+        .attr('rx', 2)
+        .attr('pointer-events', 'none');
+
+      // Click to jump; hold and drag to scrub the viewport across the map.
+      const jump = (event: MouseEvent) => {
         const [px, py] = d3.pointer(event, minimapRef.current);
-        const sceneX = px / s + minX;
-        const sceneY = py / s + minY;
-        const t = transformRef.current;
-        const next = d3.zoomIdentity
-          .translate(width / 2 - sceneX * t.k, height / 2 - sceneY * t.k)
-          .scale(t.k);
-        svg.call(zoom.transform, next);
+        centerOn(px / sx + minX, py / sy + minY);
+      };
+      mm.on('mousedown', (event: MouseEvent) => {
+        event.preventDefault();
+        jump(event);
+        const move = (ev: MouseEvent) => jump(ev);
+        const up = () => {
+          window.removeEventListener('mousemove', move);
+          window.removeEventListener('mouseup', up);
+        };
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
       });
+      mm.on('click', (event: MouseEvent) => event.stopPropagation());
     }
 
     // --- viewport: reset only when a repo was (re)opened ------------------------------
