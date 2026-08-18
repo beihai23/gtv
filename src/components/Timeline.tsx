@@ -537,10 +537,8 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .attr('pointer-events', 'none');
     }
 
-    nodes.append('title')
-      .text((d: CommitNode) =>
-        `${d.short_id}\n${d.message}\n${d.author_name}\n${formatTime(d.timestamp)}` +
-        (d.branch_refs.length ? `\nrefs: ${d.branch_refs.map(r => r.name).join(', ')}` : ''));
+    // NOTE: no SVG <title> on nodes — the custom HTML tooltip below covers
+    // hover; a native title would show up as a second, redundant popup.
 
     // --- node labels (short id + message), greedily thinned per lane ---------
     // Labels on a lane are laid out left-to-right; a label is only drawn when
