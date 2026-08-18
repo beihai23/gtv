@@ -787,6 +787,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   return (
     <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
       <svg ref={svgRef}></svg>
+      <div className="lane-rail-blur"></div>
       <div ref={laneRailRef} className="lane-rail"></div>
 
       <div className="view-toolbar">
