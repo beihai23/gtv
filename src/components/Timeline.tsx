@@ -49,6 +49,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
+  const laneRailRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef(d3.zoomIdentity);
   const resetKeyRef = useRef(-1);
   const [hoveredCommit, setHoveredCommit] = useState<CommitNode | null>(null);
@@ -270,18 +271,20 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
       });
 
-    // --- lane labels (pinned to the left edge, chip-style) -------------------
-    // Each label is a small group: opaque backdrop rect + colored text, so it
-    // stays readable when nodes/edges scroll beneath it. cull() re-pins the
-    // group's x to the viewport's left edge on every pan/zoom.
-    const laneLabelG = g.selectAll('.lane-label')
-      .data(data.branches)
-      .enter()
-      .append('g')
-      .attr('class', 'lane-label')
-      .attr('transform', (d: BranchLane) => `translate(${minX + 8}, ${d.lane_index * LANE_HEIGHT + 4})`)
-      .attr('opacity', (d: BranchLane) => laneOpacity(d.name))
-      .style('cursor', 'pointer')
+    // --- lane chips: HTML overlay pinned to the left edge --------------------
+    // Rendered OUTSIDE the svg as a frosted-glass rail on the highest z-layer,
+    // so labels stay crisp and readable when the graph scrolls beneath them
+    // (SVG-in-scene labels can't do backdrop blur). cull() repositions them on
+    // every pan/zoom and thins them at heavy zoom-out.
+    const rail = d3.select(laneRailRef.current);
+    rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
+      .data(data.branches, (d: BranchLane) => d.name)
+      .join('div')
+      .attr('class', 'lane-chip')
+      .style('color', (d: BranchLane) => d.color)
+      .style('border-color', (d: BranchLane) => d.color)
+      .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
+      .text((d: BranchLane) => d.name)
       .on('click', (_e: MouseEvent, d: BranchLane) => {
         setFocusedLane(prev => (prev === d.name ? null : d.name));
       })
@@ -289,27 +292,6 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         event.preventDefault();
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
       });
-    laneLabelG.append('text')
-      .attr('font-size', '11px')
-      .attr('fill', (d: BranchLane) => d.color)
-      .attr('text-anchor', 'start')
-      .text((d: BranchLane) => d.name);
-    laneLabelG.each(function (d: BranchLane) {
-      const grp = d3.select(this);
-      const t = grp.select('text').node() as SVGTextElement | null;
-      if (!t) return;
-      const bb = t.getBBox();
-      grp.insert('rect', 'text')
-        .attr('x', bb.x - 5)
-        .attr('y', bb.y - 1.5)
-        .attr('width', bb.width + 10)
-        .attr('height', bb.height + 3)
-        .attr('rx', 4)
-        .attr('fill', '#14141f')
-        .attr('fill-opacity', 0.88)
-        .attr('stroke', d.color)
-        .attr('stroke-opacity', 0.45);
-    });
 
     // --- edges -----------------------------------------------------------------
     const visibleIds = new Set(visibleCommits.map(c => c.id));
@@ -653,19 +635,20 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           const y = d.lane_index * LANE_HEIGHT;
           return y >= y0 && y <= y1 ? null : 'none';
         });
-      g.selectAll<SVGGElement, BranchLane>('.lane-label')
-        // Pin to the viewport's left edge and counter-scale, so the chips keep
-        // a constant on-screen size at any zoom level.
-        .attr('transform', d => `translate(${x0 + M + 8}, ${d.lane_index * LANE_HEIGHT + 4}) scale(${1 / t.k})`)
+      rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
         .style('display', d => {
           const y = d.lane_index * LANE_HEIGHT;
           if (y < y0 || y > y1) return 'none';
+          // keep clear of the sticky ruler band
+          const sy = y * t.k + t.y;
+          if (sy < 34 || sy > height - 8) return 'none';
           // At heavy zoom-out lanes squeeze together; thin the pinned chips so
           // they never overlap on screen (every Nth lane keeps its label).
           const rowH = LANE_HEIGHT * t.k;
           if (rowH < 18 && d.lane_index % Math.ceil(18 / rowH) !== 0) return 'none';
           return null;
-        });
+        })
+        .style('top', d => `${d.lane_index * LANE_HEIGHT * t.k + t.y - 9}px`);
       g.selectAll<SVGGElement, { lane: BranchLane; hidden: number }>('.collapse-chip')
         .style('display', d => {
           const span = laneSpan.get(d.lane.lane_index);
@@ -804,6 +787,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   return (
     <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
       <svg ref={svgRef}></svg>
+      <div ref={laneRailRef} className="lane-rail"></div>
 
       <div className="view-toolbar">
         {compressed && expandedLanes.size > 0 && (
