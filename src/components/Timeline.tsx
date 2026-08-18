@@ -139,6 +139,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         g.attr('transform', event.transform.toString());
         cull();
         minimapViewport();
+        updateRuler?.();
       });
     svg.call(zoom);
     zoomRef.current = zoom;
@@ -153,7 +154,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     // owns all scaling. (viewBox + zoom double-scales, which made large repos
     // render microscopically small.)
 
-    // --- time ruler (top, inside the zoomable scene) --------------------------
+    // --- sticky time ruler ---------------------------------------------------
+    // Lives OUTSIDE the zoomable scene: pinned to the top of the canvas with
+    // an opaque backdrop. On every zoom/pan we rescale the time scale through
+    // the current transform, so tick positions stay glued to the graph below.
+    let updateRuler: (() => void) | null = null;
     if (data.commits.length > 1) {
       const tMin = Math.min(...data.commits.map(c => c.timestamp));
       const tMax = Math.max(...data.commits.map(c => c.timestamp));
@@ -161,14 +166,32 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const timeScale = d3.scaleTime()
         .domain([new Date(tMin * 1000), new Date(tMax * 1000)])
         .range([xOf.get(tMin) ?? 0, xOf.get(tMax) ?? 1]);
-      g.append('g')
-        .attr('class', 'time-ruler')
-        .attr('transform', `translate(0, ${minY + 18})`)
-        .call(d3.axisTop(timeScale).ticks(8).tickSize(4))
-        .call(sel => {
-          sel.selectAll('text').attr('fill', '#666').attr('font-size', '10px');
-          sel.selectAll('line,path').attr('stroke', '#444');
-        });
+
+      const ruler = svg.append('g')
+        .attr('class', 'time-ruler-sticky')
+        .attr('pointer-events', 'none');
+      ruler.append('rect')
+        .attr('x', 0).attr('y', 0)
+        .attr('width', width).attr('height', 26)
+        .attr('fill', '#1a1a2e');
+      ruler.append('line')
+        .attr('x1', 0).attr('x2', width)
+        .attr('y1', 26).attr('y2', 26)
+        .attr('stroke', '#2c2c3e')
+        .attr('stroke-width', 1);
+      const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
+
+      updateRuler = () => {
+        const screenScale = transformRef.current.rescaleX(timeScale);
+        axisG.call(
+          d3.axisTop(screenScale)
+            .ticks(Math.max(3, Math.floor(width / 110)))
+            .tickSize(5)
+        );
+        axisG.selectAll('text').attr('fill', '#888').attr('font-size', '10px');
+        axisG.selectAll('line,path').attr('stroke', '#555');
+      };
+      updateRuler();
     }
 
     // --- lane guide lines ------------------------------------------------------
