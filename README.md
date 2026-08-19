@@ -10,7 +10,14 @@ life left-to-right, and folds back into its parent at a merge. One glance tells 
 which lines are alive, where they came from, and where they landed.
 
 <p align="center">
-  <img src="docs/assets/gtv-tour-after.png" alt="gtv timeline view"/>
+  <img src="docs/assets/screenshot-timeline.png" alt="gtv timeline view (Midnight theme)"/>
+</p>
+<p align="center">
+  <img src="docs/assets/screenshot-light.png" width="49%" alt="gtv timeline (GitHub Light theme)"/>
+  <img src="docs/assets/screenshot-branches.png" width="49%" alt="branch panel: search, All/None, solo a branch"/>
+</p>
+<p align="center">
+  <img src="docs/assets/screenshot-settings.png" width="60%" alt="settings (⌘,): Chinese/English, preset themes, About"/>
 </p>
 
 ## Why gtv
@@ -54,6 +61,9 @@ from the commit graph itself.
   parent, `Shift+click` jumps to the child
 - Minimap with live viewport rectangle and click-to-jump
 - Commit detail panel: author, full message, refs, changed files with `+/-` stats
+  and per-file diffs
+- Settings (`⌘,`): Chinese/English UI, five preset themes (Midnight, Nord,
+  Dracula, Solarized Dark, GitHub Light)
 - Remembers your last repository
 
 **Read-only.** gtv never modifies your repository.
