@@ -20,12 +20,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Universal macOS build (Apple Silicon + Intel in one artifact),
-          # built on the arm64 runner — no dependence on the legacy
-          # macos-13 Intel runner label.
+          # Separate per-arch macOS builds (Apple Silicon / Intel), both
+          # cross-compiled on the arm64 runner. Apple is dropping x86
+          # support, so the ARM package must be explicit — a universal
+          # bundle would keep working on ARM, but ships a dead x86 half.
           - os: macos-latest
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - os: macos-latest
+            rust_targets: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
           - os: windows-latest
             rust_targets: x86_64-pc-windows-msvc
             args: ''
