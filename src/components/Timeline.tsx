@@ -167,25 +167,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
     // --- sticky time ruler ---------------------------------------------------
     // Lives OUTSIDE the zoomable scene: pinned to the top of the canvas with
-    // an opaque backdrop. The time→x mapping is piecewise: linear inside
-    // committed ranges, with a steep ramp across each folded time gap (the
-    // backend collapses >45-day empty stretches to a 120px axis break).
+    // an opaque backdrop. The time→x mapping is piecewise-linear, anchored on
+    // the commits THEMSELVES — not just the time span endpoints: the backend
+    // stretches x with a per-lane min-spacing cascade, so a two-endpoint map
+    // drifts by days in dense regions. Same-timestamp commits on different
+    // lanes can sit at different x; their mean is the compromise anchor.
     // Ticks are generated for the VISIBLE time window only, so zooming in
     // refines their precision; ticks falling inside a folded gap are dropped.
     let updateRuler: (() => void) | null = null;
     if (data.commits.length > 1) {
-      const tMin = Math.min(...data.commits.map(c => c.timestamp));
-      const tMax = Math.max(...data.commits.map(c => c.timestamp));
-      const xMinC = Math.min(...data.commits.map(c => c.x));
-      const xMaxC = Math.max(...data.commits.map(c => c.x));
       const gaps = [...(data.time_gaps ?? [])].sort((a, b) => a.x_start - b.x_start);
 
-      // Piecewise anchors: [tMin, g1.t_start, g1.t_end, ..., tMax] paired with
-      // [xMin, g1.x_start, g1.x_end, ..., xMax]; linear between anchors.
-      const times: number[] = [tMin];
-      const xs: number[] = [xMinC];
-      for (const gp of gaps) { times.push(gp.t_start, gp.t_end); xs.push(gp.x_start, gp.x_end); }
-      times.push(tMax); xs.push(xMaxC);
+      // One anchor per distinct commit timestamp (mean x), x forced
+      // non-decreasing so the map stays monotone.
+      const byTime = new Map<number, { sum: number; n: number }>();
+      for (const c of data.commits) {
+        const e = byTime.get(c.timestamp);
+        if (e) { e.sum += c.x; e.n++; } else byTime.set(c.timestamp, { sum: c.x, n: 1 });
+      }
+      const times: number[] = [];
+      const xs: number[] = [];
+      for (const [t, agg] of [...byTime.entries()].sort((a, b) => a[0] - b[0])) {
+        times.push(t);
+        const x = agg.sum / agg.n;
+        xs.push(xs.length > 0 ? Math.max(x, xs[xs.length - 1]) : x);
+      }
       const lerpAnchors = (v: number, from: number[], to: number[]): number => {
         if (v <= from[0]) return to[0];
         for (let i = 1; i < from.length; i++) {
@@ -251,7 +257,19 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
         const tick = axisG
           .selectAll<SVGGElement, Date>('.rtick')
-          .data(shown, d => String(+d));
+          // Ticks are uniform in TIME, but the scene x is not (dense regions
+          // are cascade-stretched), so labels can bunch up in x. Greedily
+          // keep only ticks whose label clears the previous kept one.
+          .data((() => {
+            const kept: Date[] = [];
+            let lastX = -Infinity;
+            for (const d of shown) {
+              const x = t.applyX(timeToX(d.getTime() / 1000));
+              const w = fmtTick(d).length * 5.8 + 12;
+              if (x - lastX >= w) { kept.push(d); lastX = x; }
+            }
+            return kept;
+          })(), d => String(+d));
         const tickEnter = tick.enter().append('g').attr('class', 'rtick');
         tickEnter.append('line')
           .attr('y1', -5).attr('y2', 0)
@@ -372,6 +390,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     });
 
     // Edge direction (from the backend): from = child commit, to = parent.
+    //
+    // Routing rule: a connector may NEVER run horizontally along a live lane
+    // — there it rides on top of the lane's own track and becomes
+    // indistinguishable from it. Horizontal travel is only allowed before
+    // the lane's first commit (fork edges, approaching the lane birth) or
+    // after its last commit (merge edges, leaving a lane that folds back).
+    // Everything else routes as an S-curve with vertical tangents, which
+    // only ever touches the two endpoint commits.
+    const sCurveV = (x1: number, y1: number, x2: number, y2: number): string => {
+      const midY = (y1 + y2) / 2;
+      return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+    };
     const edgePath = (d: CommitEdge): string => {
       const from = commitMap.get(d.from);
       const to = commitMap.get(d.to);
@@ -380,31 +410,32 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
       }
       if (d.edge_type === 'Merge') {
-        // merge link: mirrored fork routing — run along the merged lane past
+        // Merge link: mirrored fork routing — run along the merged lane PAST
         // its tip (empty track), then straight up into the merge commit.
-        // Orthogonal segments hug their own lane/commit x, so fork and merge
-        // lines rarely cross; the old diagonal bezier swept across the whole
-        // graph and crossed every fork drop in between.
-        if (to.x <= from.x) {
+        // Only legal when the parent really is the lane's last commit: if
+        // the merged branch lives on (or time runs inverted), the
+        // horizontal leg would overlap a live lane.
+        const span = laneSpan.get(to.lane);
+        const laneEndsAtParent = !!span && to.x >= span.max - 0.5;
+        if (to.x <= from.x && laneEndsAtParent) {
           return `M ${from.x} ${from.y} L ${from.x} ${to.y} L ${to.x} ${to.y}`;
         }
-        // time-inverted merge (tip timestamp newer than the merge commit):
-        // plain S-curve fallback
-        const midX = (from.x + to.x) / 2;
-        return `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`;
+        return sCurveV(from.x, from.y, to.x, to.y);
       }
       // fork (Branch): drop straight down from the fork-point commit to the
       // child lane, then run along the child lane into its first commit.
       // One 90° turn; nothing rides on top of the parent lane, and the drop
-      // is time-aligned with the commit the branch was born at.
-      if (from.x >= to.x) {
+      // is time-aligned with the commit the branch was born at. Only legal
+      // when the child really is the lane's leftmost commit (otherwise the
+      // horizontal leg overlaps the already-live child lane).
+      const span = laneSpan.get(from.lane);
+      const laneBornAtChild = !!span && from.x <= span.min + 0.5;
+      if (to.x <= from.x && laneBornAtChild) {
         return `M ${to.x} ${to.y} L ${to.x} ${from.y} L ${from.x} ${from.y}`;
       }
       // Time-inverted fork (child commit timestamps earlier than the fork
-      // commit — rebase/amend artifacts): a right angle would turn
-      // backwards, so fall back to a plain S-curve.
-      const midY = (from.y + to.y) / 2;
-      return `M ${to.x} ${to.y} C ${to.x} ${midY}, ${from.x} ${midY}, ${from.x} ${from.y}`;
+      // commit — rebase/amend artifacts) or displaced lane birth.
+      return sCurveV(to.x, to.y, from.x, from.y);
     };
     const isHotEdge = (d: CommitEdge) =>
       edgeHighlight !== null && edgeHighlight.from === d.from && edgeHighlight.to === d.to;
@@ -467,6 +498,26 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       });
     edgeHit.append('title')
       .text('Click: highlight endpoints\nCtrl+Click: go to parent\nShift+Click: go to child');
+
+    // Flow-direction overlay on the clicked edge: round dots marching from
+    // the PARENT commit to the CHILD commit — the direction data flows — so
+    // fork (downstream into the new lane) vs merge (upstream into the merge
+    // commit) is obvious at a glance. March direction follows the path's
+    // authoring direction: fork paths start at the parent, merge/direct
+    // paths at the child.
+    g.selectAll('.edge-flow')
+      .data(visibleEdges.filter(isHotEdge))
+      .enter()
+      .append('path')
+      .attr('class', (d: CommitEdge) =>
+        `edge-flow ${d.edge_type === 'Branch' ? 'flow-fwd' : 'flow-rev'}`)
+      .attr('d', edgePath)
+      .attr('fill', 'none')
+      .attr('stroke', '#FFF3C4')
+      .attr('stroke-width', 5)
+      .attr('stroke-linecap', 'round')
+      .attr('stroke-dasharray', '0 18')
+      .attr('pointer-events', 'none');
 
     // --- patch links: cherry-pick / rebase copies ------------------------------
     // Dashed S-curves between commits carrying the same patch (Copies

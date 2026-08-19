@@ -743,3 +743,26 @@
   width: 280px !important;
   height: 170px !important;
 }
+
+/* Clicked-edge flow animation: dots march parent -> child (data flow). */
+@keyframes edge-flow-fwd {
+  to { stroke-dashoffset: -18px; }
+}
+@keyframes edge-flow-rev {
+  to { stroke-dashoffset: 18px; }
+}
+.timeline-container .edge-flow.flow-fwd {
+  animation: edge-flow-fwd 0.6s linear infinite;
+}
+.timeline-container .edge-flow.flow-rev {
+  animation: edge-flow-rev 0.6s linear infinite;
+}
+
+/* Patch links (Copies toggle): dashes march from the original commit toward
+   the copy — the direction the patch travelled. Period = 5+4 dash cycle. */
+@keyframes edge-flow-patch {
+  to { stroke-dashoffset: -9px; }
+}
+.timeline-container .patch-link {
+  animation: edge-flow-patch 0.9s linear infinite;
+}

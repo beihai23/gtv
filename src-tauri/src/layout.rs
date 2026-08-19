@@ -275,83 +275,67 @@ pub fn compute_layout(
             || !has_same_lane_child.contains(&i);
     }
 
-    // Time-proportional x. The min-spacing cascade runs over KEY commits
-    // only: they are the nodes visible in the default compressed view, so
-    // they alone decide the scene's extent. (Cascading over every commit
-    // lets one dense lane — e.g. main with 2-3 commits/day at 28px each —
-    // stretch the whole time axis to 8x its honest width, breaking Fit, the
-    // ruler and the minimap.) Non-key commits are interpolated inside the
-    // segment between their neighbouring key commits; they only appear when
-    // the user expands a lane.
+    // Time-proportional x with ONE global min-spacing cascade over the key
+    // commits of all lanes, in time order. (An earlier version cascaded per
+    // lane: a dense lane like main stretched its own x while sparse lanes
+    // kept honest time-x, so the same timestamp sat at different x on
+    // different lanes and no time ruler could track the nodes — the ruler
+    // read days away from the hovered commit's real time.) With a single
+    // cascade, x is a monotone function of time shared by every lane, and
+    // the ruler's piecewise map is exact at every commit.
     commits.sort_by_key(|c| c.timestamp);
     let t_min = commits.first().map(|c| c.timestamp).unwrap_or(0);
     const PX_PER_DAY: f64 = 10.0;
     const MIN_SPACING: f64 = 28.0;
     let time_x = |ts: i64| (ts - t_min) as f64 / 86400.0 * PX_PER_DAY;
 
-    let mut by_lane: HashMap<i32, Vec<usize>> = HashMap::new();
-    for (i, c) in commits.iter().enumerate() {
-        by_lane.entry(c.lane).or_default().push(i);
+    // Pass 1: cascade the key commits (the nodes visible in the default
+    // compressed view — they decide the scene's extent).
+    let mut last_key_x: Option<f64> = None;
+    for c in commits.iter_mut() {
+        if !c.is_key {
+            continue;
+        }
+        let tx = time_x(c.timestamp);
+        let x = match last_key_x {
+            Some(l) => tx.max(l + MIN_SPACING),
+            None => tx,
+        };
+        c.x = x;
+        last_key_x = Some(x);
     }
-    for idxs in by_lane.values() {
-        // idxs is already time-ordered (commits sorted by timestamp above).
-        // Pass 1: cascade the key commits of this lane.
-        let mut last_key_x: Option<f64> = None;
-        for &i in idxs {
-            if !commits[i].is_key {
-                continue;
-            }
-            let tx = time_x(commits[i].timestamp);
-            let x = match last_key_x {
-                Some(l) => tx.max(l + MIN_SPACING),
-                None => tx,
-            };
-            commits[i].x = x;
-            last_key_x = Some(x);
+
+    // Pass 2: each non-key commit sits ON the piecewise line between the
+    // key commits bracketing its timestamp, so it too obeys the shared
+    // time→x map. (Non-key nodes only appear when a lane is expanded.)
+    let key_positions: Vec<(i64, f64)> = commits
+        .iter()
+        .filter(|c| c.is_key)
+        .map(|c| (c.timestamp, c.x))
+        .collect();
+    for c in commits.iter_mut() {
+        if c.is_key {
+            continue;
         }
-        // Pass 2: interpolate each run of non-key commits between the key
-        // commits bracketing it. Every run is bracketed on both sides (a
-        // lane's first own commit and its tip are always key).
-        let key_positions: Vec<(usize, i64, f64)> = idxs
-            .iter()
-            .filter(|&&i| commits[i].is_key)
-            .map(|&i| (i, commits[i].timestamp, commits[i].x))
-            .collect();
-        let mut placed: HashSet<usize> = HashSet::new();
-        for w in key_positions.windows(2) {
-            let (_, ta, xa) = w[0];
-            let (_, tb, xb) = w[1];
-            let run: Vec<usize> = idxs
-                .iter()
-                .copied()
-                .filter(|&i| !commits[i].is_key && commits[i].timestamp > ta && commits[i].timestamp < tb)
-                .collect();
-            let n = run.len();
-            for (j, i) in run.into_iter().enumerate() {
-                let frac = if tb > ta {
-                    ((commits[i].timestamp - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95)
+        let t = c.timestamp;
+        c.x = match key_positions.binary_search_by(|&(kt, _)| kt.cmp(&t)) {
+            // Same second as a key commit: nudge just right of it.
+            Ok(idx) => key_positions[idx].1 + MIN_SPACING * 0.4,
+            Err(ins) => {
+                if ins == 0 {
+                    // Before the first key commit (oldest window commits of a
+                    // lane can be non-key): honest time-x, still monotone.
+                    time_x(t)
+                } else if ins >= key_positions.len() {
+                    key_positions[key_positions.len() - 1].1
                 } else {
-                    (j + 1) as f64 / (n + 1) as f64
-                };
-                commits[i].x = xa + (xb - xa) * frac;
-                placed.insert(i);
+                    let (ta, xa) = key_positions[ins - 1];
+                    let (tb, xb) = key_positions[ins];
+                    let frac = ((t - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95);
+                    xa + (xb - xa) * frac
+                }
             }
-        }
-        // Non-key commits exactly at a boundary timestamp (same second as a
-        // key commit): nudge them just right of that key.
-        for &i in idxs {
-            if commits[i].is_key || placed.contains(&i) {
-                continue;
-            }
-            let t = commits[i].timestamp;
-            let anchor = key_positions
-                .iter()
-                .filter(|&&(_, kt, _)| kt <= t)
-                .last()
-                .map(|&(_, _, kx)| kx)
-                .unwrap_or_else(|| time_x(t));
-            commits[i].x = anchor + MIN_SPACING * 0.4;
-        }
+        };
     }
     for c in commits.iter_mut() {
         c.y = c.lane as f64 * LANE_HEIGHT;
