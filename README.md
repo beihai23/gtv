@@ -68,6 +68,21 @@ from the commit graph itself.
 
 **Read-only.** gtv never modifies your repository.
 
+## Download
+
+Prebuilt binaries for macOS (universal), Windows, and Linux are on the
+[Releases](https://github.com/beihai23/gtv/releases) page.
+
+**macOS note:** the app is not notarized, so Gatekeeper may refuse to open it
+("app is damaged" / "can't be opened"). Remove the quarantine flag once after
+installing:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Git\ Timeline\ Viewer.app/
+```
+
+(Adjust the path if you moved the app somewhere else.)
+
 ## Development
 
 ```bash
