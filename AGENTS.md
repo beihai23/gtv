@@ -43,10 +43,16 @@ src-tauri/examples/
 src/
   api.ts          thin wrappers around tauri invoke(), one per backend command
   types.ts        TypeScript mirror of models.rs — keep in sync by hand
+  settings.tsx    Settings context: zh/en i18n dictionaries + preset theme
+                  palettes (CSS custom properties applied to :root; App.css
+                  consumes them via var(--x)), persisted in localStorage
+                  (gtv_lang / gtv_theme)
   App.tsx         top-level state: repo opening, branch panel, view options
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
+  components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
+                                About
 mock.html         browser-only preview harness: mocks window.__TAURI_INTERNALS__
                   and feeds public/mock-data.json, so the frontend can be debugged
                   in a plain browser without the Rust backend

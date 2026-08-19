@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
+import { useSettings, cssVar } from '../settings';
 
 interface TimelineProps {
   data: GitData;
@@ -48,6 +49,7 @@ function nodeRadius(c: CommitNode): number {
 }
 
 export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal }: TimelineProps) {
+  const { t, theme, lang } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
@@ -212,11 +214,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       ruler.append('rect')
         .attr('x', 0).attr('y', 0)
         .attr('width', width).attr('height', 26)
-        .attr('fill', '#1a1a2e');
+        .attr('fill', cssVar('--bg-canvas', '#1a1a2e'));
       ruler.append('line')
         .attr('x1', 0).attr('x2', width)
         .attr('y1', 26).attr('y2', 26)
-        .attr('stroke', '#2c2c3e')
+        .attr('stroke', cssVar('--ruler-line', '#2c2c3e'))
         .attr('stroke-width', 1);
       const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
 
@@ -273,10 +275,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         const tickEnter = tick.enter().append('g').attr('class', 'rtick');
         tickEnter.append('line')
           .attr('y1', -5).attr('y2', 0)
-          .attr('stroke', '#555');
+          .attr('stroke', cssVar('--tick-line', '#555'));
         tickEnter.append('text')
           .attr('y', -8).attr('text-anchor', 'middle')
-          .attr('fill', '#888').attr('font-size', '10px');
+          .attr('fill', cssVar('--text-dim', '#888')).attr('font-size', '10px');
         const tickMerged = tickEnter.merge(tick);
         tickMerged.attr('transform', d => `translate(${t.applyX(timeToX(d.getTime() / 1000))},0)`);
         tickMerged.select('text').text(fmtTick);
@@ -497,7 +499,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         }
       });
     edgeHit.append('title')
-      .text('Click: highlight endpoints\nCtrl+Click: go to parent\nShift+Click: go to child');
+      .text(t('edgeTip'));
 
     // Flow-direction overlay on the clicked edge: round dots marching from
     // the PARENT commit to the CHILD commit — the direction data flows — so
@@ -1004,7 +1006,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       svg.call(zoom.transform, transformRef.current);
     }
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t]);
 
   useEffect(() => {
     draw();
@@ -1099,13 +1101,13 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           onClick={e => e.stopPropagation()}
         >
           <button onClick={() => { setFocusedLane(f => f === laneMenu.lane.name ? null : laneMenu.lane.name); setLaneMenu(null); }}>
-            {focusedLane === laneMenu.lane.name ? 'Unfocus lane' : 'Focus this lane'}
+            {focusedLane === laneMenu.lane.name ? t('unfocusLane') : t('focusLane')}
           </button>
           <button onClick={() => { setExpandedLanes(prev => new Set(prev).add(laneMenu.lane.name)); setLaneMenu(null); }}>
-            Expand all commits
+            {t('expandAll')}
           </button>
           <button onClick={() => { onViewFromBranch(laneMenu.lane.name); setLaneMenu(null); }}>
-            View from this branch
+            {t('viewFromBranch')}
           </button>
         </div>
       )}

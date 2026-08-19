@@ -2,6 +2,8 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
+import { SettingsDialog } from './components/SettingsDialog';
+import { useSettings } from './settings';
 import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks } from './api';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
@@ -21,6 +23,7 @@ function truncateMiddle(name: string, max: number = CHIP_LABEL_MAX): string {
 }
 
 function App() {
+  const { t } = useSettings();
   const [gitData, setGitData] = useState<GitData | null>(null);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,6 +32,19 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Cmd/Ctrl + , toggles the settings dialog (macOS convention).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault();
+        setShowSettings(s => !s);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // Version-tag flood control: hides tag chips from the toolbar and panel.
   const [showTags, setShowTags] = useState(() => localStorage.getItem(SHOW_TAGS_KEY) !== '0');
   const toggleShowTags = useCallback(() => {
@@ -238,7 +254,7 @@ function App() {
       }}
       onClick={() => toggleBranchFilter(branch.name)}
       onDoubleClick={() => handleFilterChange([branch.name])}
-      title={`${branch.name}\nClick: toggle · Double-click: only this one`}
+      title={`${branch.name}\n${t('chipTip')}`}
     >
       {truncateMiddle(branch.name)}
     </button>
@@ -253,7 +269,7 @@ function App() {
           )}
           {gitData && (
             <span className="repo-info">
-              {gitData.main_branch} • {gitData.commits.length} commits
+              {gitData.main_branch} • {t('commitCount', { n: gitData.commits.length })}
             </span>
           )}
           <button
@@ -261,7 +277,7 @@ function App() {
             onClick={handleOpenRepo}
             disabled={loading}
           >
-            {loading ? 'Loading...' : 'Open Repository'}
+            {loading ? t('loading') : t('openRepo')}
           </button>
         </div>
 
@@ -275,7 +291,7 @@ function App() {
                 className="filter-tag show-more"
                 onClick={() => setShowAllTags(!showAllTags)}
               >
-                {showAllTags ? 'Close ▴' : `+${filteredBranches.length - inlineBranches.length} more ▾`}
+                {showAllTags ? t('closeUp') : t('more', { n: filteredBranches.length - inlineBranches.length })}
               </button>
             )}
           </div>
@@ -287,38 +303,45 @@ function App() {
               <button
                 className={`view-btn ${compressed ? 'active' : ''}`}
                 onClick={() => setCompressed(v => !v)}
-                title="Smart compression: show only lane births, tips, merges, tags, HEAD"
+                title={t('compressTip')}
               >
-                Compress
+                {t('compress')}
               </button>
               <button
                 className={`view-btn ${showMergeLinks ? 'active' : ''}`}
                 onClick={() => setShowMergeLinks(v => !v)}
               >
-                Merge links
+                {t('mergeLinks')}
               </button>
               <button
                 className={`view-btn ${showRefLabels ? 'active' : ''}`}
                 onClick={() => setShowRefLabels(v => !v)}
               >
-                Labels
+                {t('labels')}
               </button>
               <button
                 className={`view-btn ${showPatchLinks ? 'active' : ''}`}
                 onClick={() => setShowPatchLinks(v => !v)}
-                title="Detect cherry-picked / rebased commits (same patch, different commit)"
+                title={t('copiesTip')}
               >
-                {patchLinksLoading ? 'Copies…' : 'Copies'}
+                {patchLinksLoading ? t('copiesLoading') : t('copies')}
               </button>
               <button
                 className="view-btn"
                 onClick={() => setFitSignal(n => n + 1)}
-                title="Fit whole graph into view"
+                title={t('fitTip')}
               >
-                Fit
+                {t('fit')}
               </button>
             </div>
           )}
+          <button
+            className="view-btn settings-btn"
+            onClick={() => setShowSettings(true)}
+            title={`${t('settings')} (⌘,)`}
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
@@ -329,27 +352,27 @@ function App() {
               <input
                 type="text"
                 className="search-input branch-panel-search"
-                placeholder="Filter branches/tags..."
+                placeholder={t('filterRefs')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus
               />
-              <span className="branch-panel-count">{filteredBranches.length} refs ({selectedBranches.length} shown)</span>
+              <span className="branch-panel-count">{t('refsShown', { n: filteredBranches.length, m: selectedBranches.length })}</span>
               <button
                 className={`view-btn ${showTags ? 'active' : ''}`}
                 onClick={toggleShowTags}
-                title="Show/hide tag chips (e.g. version tags)"
+                title={t('tagsTip')}
               >
-                Tags
+                {t('tags')}
               </button>
-              <button className="view-btn" onClick={() => handleFilterChange(branchList.map(b => b.name))}>All</button>
-              <button className="view-btn" onClick={() => handleFilterChange([])}>None</button>
-              <button className="view-btn" onClick={() => setShowAllTags(false)}>Close</button>
+              <button className="view-btn" onClick={() => handleFilterChange(branchList.map(b => b.name))}>{t('all')}</button>
+              <button className="view-btn" onClick={() => handleFilterChange([])}>{t('none')}</button>
+              <button className="view-btn" onClick={() => setShowAllTags(false)}>{t('close')}</button>
             </div>
             <div className="branch-panel-list">
               {panelEnabled.length > 0 && (
                 <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">Enabled ({panelEnabled.length})</div>
+                  <div className="branch-panel-group-title">{t('enabled', { n: panelEnabled.length })}</div>
                   <div className="branch-panel-chips">
                     {panelEnabled.map(renderBranchChip)}
                   </div>
@@ -357,7 +380,7 @@ function App() {
               )}
               {panelDisabled.length > 0 && (
                 <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">Disabled ({panelDisabled.length})</div>
+                  <div className="branch-panel-group-title">{t('disabled', { n: panelDisabled.length })}</div>
                   <div className="branch-panel-chips">
                     {panelDisabled.map(renderBranchChip)}
                   </div>
@@ -365,7 +388,7 @@ function App() {
               )}
             </div>
             <div className="branch-panel-footer">
-              Double-click a chip to solo it — for daily work: None, then double-click the 2-3 branches you care about.
+              {t('panelFooter')}
             </div>
           </div>
         </div>
@@ -380,16 +403,16 @@ function App() {
       <main className="main">
         {!gitData ? (
           <div className="welcome">
-            <h2>Welcome to Git Timeline Viewer</h2>
-            <p>Click "Open Repository" to select a Git repository</p>
-            <p className="hint">Only reads data - no modifications will be made</p>
+            <h2>{t('welcomeTitle')}</h2>
+            <p>{t('welcomeSubtitle')}</p>
+            <p className="hint">{t('welcomeHint')}</p>
             {latestRepo && (
               <button 
                 className="latest-repo-btn" 
                 onClick={handleOpenLatestRepo}
                 disabled={loading}
               >
-                Open Latest: {latestRepo.split('/').pop()}
+                {t('openLatest', { name: latestRepo.split('/').pop() ?? '' })}
               </button>
             )}
           </div>
@@ -414,6 +437,8 @@ function App() {
           </>
         )}
       </main>
+
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

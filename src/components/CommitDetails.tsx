@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CommitDetail } from '../types';
 import { getFileDiff } from '../api';
+import { useSettings } from '../settings';
 
 interface CommitDetailsProps {
   commit: CommitDetail | null;
@@ -13,6 +14,7 @@ interface FileDiffState {
 }
 
 export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
+  const { t } = useSettings();
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
   if (!commit) return null;
 
   const date = new Date(commit.timestamp * 1000);
-  const timeAgo = getTimeAgo(commit.timestamp);
+  const timeAgo = getTimeAgo(commit.timestamp, t);
 
   const toggleFile = async (path: string) => {
     if (expandedPath === path) {
@@ -51,34 +53,34 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
   return (
     <div className="commit-details">
       <div className="commit-details-header">
-        <h3>Commit Details</h3>
+        <h3>{t('details')}</h3>
         <button className="close-btn" onClick={onClose}>×</button>
       </div>
 
       <div className="commit-details-content">
         <div className="detail-row">
-          <span className="label">Hash:</span>
+          <span className="label">{t('hash')}</span>
           <code className="value">{commit.id}</code>
         </div>
 
         <div className="detail-row">
-          <span className="label">Author:</span>
+          <span className="label">{t('author')}</span>
           <span className="value">{commit.author_name}</span>
         </div>
 
         <div className="detail-row">
-          <span className="label">Email:</span>
+          <span className="label">{t('email')}</span>
           <span className="value">{commit.author_email}</span>
         </div>
 
         <div className="detail-row">
-          <span className="label">Date:</span>
+          <span className="label">{t('date')}</span>
           <span className="value">{date.toLocaleString()} ({timeAgo})</span>
         </div>
 
         {commit.branch_refs.length > 0 && (
           <div className="detail-row">
-            <span className="label">Branches:</span>
+            <span className="label">{t('branches')}</span>
             <div className="tags">
               {commit.branch_refs.map((ref, i) => (
                 <span key={i} className={`tag ${ref.is_tag ? 'tag-tag' : 'tag-branch'}`}>
@@ -90,14 +92,14 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
         )}
 
         <div className="detail-row">
-          <span className="label">Message:</span>
+          <span className="label">{t('message')}</span>
           <div className="message">{commit.full_message}</div>
         </div>
 
         {commit.files.length > 0 && (
           <div className="files-section">
             <h4>
-              Changed Files ({commit.files.length})
+              {t('changedFiles', { n: commit.files.length })}
               <span className="diff-total">
                 {' '}<span className="diff-add">+{commit.total_additions}</span>
                 {' '}<span className="diff-del">−{commit.total_deletions}</span>
@@ -116,7 +118,7 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
                   </div>
                   {expandedPath === file.path && (
                     loadingPath === file.path ? (
-                      <div className="file-diff file-diff-loading">Loading diff…</div>
+                      <div className="file-diff file-diff-loading">{t('loadingDiff')}</div>
                     ) : diffs[file.path] ? (
                       diffs[file.path].isError ? (
                         <div className="file-diff file-diff-error">{diffs[file.path].text}</div>
@@ -151,14 +153,14 @@ function DiffView({ text }: { text: string }) {
   );
 }
 
-function getTimeAgo(timestamp: number): string {
+function getTimeAgo(timestamp: number, t: (key: string, vars?: Record<string, string | number>) => string): string {
   const now = Date.now() / 1000;
   const diff = now - timestamp;
 
-  if (diff < 60) return `${Math.floor(diff)} seconds ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
-  if (diff < 2592000) return `${Math.floor(diff / 86400)} days ago`;
-  if (diff < 31536000) return `${Math.floor(diff / 2592000)} months ago`;
-  return `${Math.floor(diff / 31536000)} years ago`;
+  if (diff < 60) return t('agoSeconds', { n: Math.floor(diff) });
+  if (diff < 3600) return t('agoMinutes', { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t('agoHours', { n: Math.floor(diff / 3600) });
+  if (diff < 2592000) return t('agoDays', { n: Math.floor(diff / 86400) });
+  if (diff < 31536000) return t('agoMonths', { n: Math.floor(diff / 2592000) });
+  return t('agoYears', { n: Math.floor(diff / 31536000) });
 }
