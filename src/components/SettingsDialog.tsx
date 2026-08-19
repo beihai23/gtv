@@ -61,7 +61,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
           <div className="about-app">Git Timeline Viewer</div>
           <div className="about-row">
             <span>{t('version')}</span>
-            <span>{pkg.version}</span>
+            {/* 0.0.0 is the in-repo placeholder; release builds get the real
+                version from the git tag (CI "Sync version from tag" step). */}
+            <span>{pkg.version === '0.0.0' ? 'dev' : pkg.version}</span>
           </div>
           <div className="about-row">
             <span>{t('aboutAuthor')}</span>

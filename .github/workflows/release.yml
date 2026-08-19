@@ -2,8 +2,10 @@ name: Release
 
 # Cut a release by pushing a version tag:
 #   git tag v0.1.0 && git push origin v0.1.0
-# The workflow builds all platform bundles and attaches them to a draft
-# GitHub release — review and publish it manually.
+# A "Sync version from tag" step rewrites package.json / tauri.conf.json /
+# Cargo.toml versions from the tag before building, so artifact names always
+# match the tag. The workflow builds all platform bundles and attaches them
+# to a draft GitHub release — review and publish it manually.
 on:
   push:
     tags:
@@ -59,6 +61,20 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Bundle filenames come from tauri.conf.json's version field, NOT from
+      # the git tag — so overwrite every version field from the tag before
+      # building. Tagging alone is then enough; no manual version bump needed.
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          echo "Syncing all version fields to $V"
+          npm version "$V" --no-git-tag-version --allow-same-version
+          sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"$V\"/" src-tauri/tauri.conf.json
+          sed -i.bak "s/^version = .*/version = \"$V\"/" src-tauri/Cargo.toml
+          grep '"version"' package.json src-tauri/tauri.conf.json | head -2
+          grep '^version' src-tauri/Cargo.toml
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@v0
