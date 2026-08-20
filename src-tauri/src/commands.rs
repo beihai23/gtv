@@ -91,6 +91,13 @@ pub fn is_valid_git_repo(path: String) -> bool {
     }
 }
 
+/// Recent formatted backend log lines (oldest first) for the issue-report
+/// dialog; see `log_buffer`.
+#[tauri::command]
+pub fn get_recent_logs() -> Vec<String> {
+    crate::log_buffer::global().snapshot()
+}
+
 #[tauri::command]
 pub fn get_branch_list(state: tauri::State<AppState>) -> Result<Vec<BranchLane>, String> {
     let current_repo = state.current_repo.lock().unwrap();

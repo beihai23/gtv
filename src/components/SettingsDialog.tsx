@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useSettings, THEMES, openExternal } from '../settings';
+import { IssueReportDialog } from './IssueReportDialog';
 import pkg from '../../package.json';
 
 interface SettingsDialogProps {
@@ -7,6 +9,7 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const { lang, theme, setLang, setTheme, t } = useSettings();
+  const [showReport, setShowReport] = useState(false);
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -74,8 +77,14 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
           <button className="about-link" onClick={() => openExternal('https://github.com/beihai23/gtv')}>
             {t('viewSource')}
           </button>
+          {/* Issue-report entry that also works without an active error. */}
+          <button className="about-link" onClick={() => setShowReport(true)}>
+            {t('reportIssue')}
+          </button>
         </div>
       </div>
+
+      {showReport && <IssueReportDialog currentError={null} onClose={() => setShowReport(false)} />}
     </div>
   );
 }

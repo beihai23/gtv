@@ -3,8 +3,10 @@ import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
+import { IssueReportDialog } from './components/IssueReportDialog';
 import { useSettings } from './settings';
 import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks } from './api';
+import { recordFrontendError } from './issueContext';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
@@ -22,6 +24,11 @@ function truncateMiddle(name: string, max: number = CHIP_LABEL_MAX): string {
   return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
+// Caught values are `unknown`; the issue-report ring buffer wants the message.
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function App() {
   const { t } = useSettings();
   const [gitData, setGitData] = useState<GitData | null>(null);
@@ -33,6 +40,7 @@ function App() {
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showIssueReport, setShowIssueReport] = useState(false);
 
   // Cmd/Ctrl + , toggles the settings dialog (macOS convention).
   useEffect(() => {
@@ -112,7 +120,8 @@ function App() {
       }
     } catch (err) {
       console.error('Error:', err);
-      setError(err instanceof Error ? err.message : String(err));
+      recordFrontendError(errText(err));
+      setError(errText(err));
     } finally {
       setLoading(false);
     }
@@ -134,7 +143,8 @@ function App() {
       setSearchQuery('');
     } catch (err) {
       console.error('Error:', err);
-      setError(err instanceof Error ? err.message : String(err));
+      recordFrontendError(errText(err));
+      setError(errText(err));
       localStorage.removeItem(LATEST_REPO_KEY);
       setLatestRepo(null);
     } finally {
@@ -148,6 +158,7 @@ function App() {
       setSelectedCommit(detail);
     } catch (err) {
       console.error('Failed to get commit detail:', err);
+      recordFrontendError(errText(err));
     }
   }, []);
 
@@ -162,7 +173,8 @@ function App() {
       const data = await filterByBranches(branchNames);
       setGitData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      recordFrontendError(errText(err));
+      setError(errText(err));
     } finally {
       setLoading(false);
     }
@@ -177,7 +189,8 @@ function App() {
       setSelectedCommit(null);
       setViewResetKey(k => k + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      recordFrontendError(errText(err));
+      setError(errText(err));
     } finally {
       setLoading(false);
     }
@@ -396,7 +409,13 @@ function App() {
 
       {error && (
         <div className="error">
-          {error}
+          <span className="error-msg">{error}</span>
+          <button
+            className="error-report-btn"
+            onClick={() => setShowIssueReport(true)}
+          >
+            {t('reportIssue')}
+          </button>
         </div>
       )}
 
@@ -439,6 +458,15 @@ function App() {
       </main>
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+
+      {showIssueReport && (
+        <IssueReportDialog
+          currentError={error}
+          repoName={latestRepo?.split('/').pop() ?? null}
+          commitCount={gitData?.commits.length ?? null}
+          onClose={() => setShowIssueReport(false)}
+        />
+      )}
     </div>
   );
 }
