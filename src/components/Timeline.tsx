@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
 import { useSettings, cssVar } from '../settings';
+import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 
 interface TimelineProps {
   data: GitData;
@@ -67,8 +68,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
-  /** Scene→minimap mapping, set during minimap draw; viewport rect reads it. */
-  const minimapMapRef = useRef({ sx: 1, sy: 1, x0: 0, y0: 0 });
+  /** Scene→minimap mapping (uniform scale, letterbox-centered), set during
+   *  minimap draw; viewport rect and jump hit-testing read it. */
+  const minimapMapRef = useRef<MinimapMap>({ s: 1, x0: 0, y0: 0 });
 
   const commitMap = useMemo(() => new Map(data.commits.map(c => [c.id, c])), [data]);
   const branchColorMap = useMemo(() => new Map(data.branches.map(b => [b.name, b.color])), [data]);
@@ -122,15 +124,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     const minimapViewport = () => {
       if (!minimapRef.current) return;
       const t = transformRef.current;
-      const m = minimapMapRef.current;
-      // screen = t * scene ; scene->mini = per-axis scale (non-uniform)
-      const vx = (-t.x / t.k - m.x0) * m.sx;
-      const vy = (-t.y / t.k - m.y0) * m.sy;
-      const vw = (width / t.k) * m.sx;
-      const vh = (height / t.k) * m.sy;
+      // screen = t * scene ; scene->mini = uniform scale + letterbox (./minimap)
+      const r = viewportRect(t.k, t.x, t.y, width, height, minimapMapRef.current);
       d3.select(minimapRef.current).select('.mm-viewport')
-        .attr('x', vx).attr('y', vy)
-        .attr('width', Math.max(6, vw)).attr('height', Math.max(6, vh));
+        .attr('x', r.x).attr('y', r.y)
+        .attr('width', r.w).attr('height', r.h);
     };
 
     const zoom = d3.zoom<SVGSVGElement, unknown>()
@@ -904,8 +902,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
 
     // --- minimap ----------------------------------------------------------------------
-    // Non-uniform scale: x and y stretch independently, so even an extremely
-    // wide-flat scene (big repo, time-proportional x) fills the whole map.
+    // Uniform scale: one factor for both axes, with the scene letterboxed
+    // (centered) inside the map. The previous per-axis stretch filled the map
+    // with an extremely wide-flat scene, but it is exactly why the viewport
+    // rect's aspect ratio could never match the timeline window's — the rect
+    // is derived from the same uniform map, so both now share one ratio at
+    // any pan/zoom.
     // Lanes render as activity bars spanning their commits; key commits are
     // bright dots. The map answers "where is the activity", not "where are
     // individual commits".
@@ -915,11 +917,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       mm.attr('width', MINIMAP_W).attr('height', MINIMAP_H);
       const sceneW = Math.max(maxX - minX, 1);
       const sceneH = Math.max(maxY - minY, 1);
-      const sx = MINIMAP_W / sceneW;
-      const sy = MINIMAP_H / sceneH;
-      minimapMapRef.current = { sx, sy, x0: minX, y0: minY };
-      const mx = (x: number) => (x - minX) * sx;
-      const my = (y: number) => (y - minY) * sy;
+      const map = minimapMap(sceneW, sceneH, MINIMAP_W, MINIMAP_H, minX, minY);
+      minimapMapRef.current = map;
+      const mx = (x: number) => (x - map.x0) * map.s;
+      const my = (y: number) => (y - map.y0) * map.s;
 
       for (const b of data.branches) {
         const span = laneSpan.get(b.lane_index);
@@ -969,9 +970,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .attr('pointer-events', 'none');
 
       // Click to jump; hold and drag to scrub the viewport across the map.
+      // Invert the same map the drawing used, so the jump lands exactly on
+      // what was clicked.
       const jump = (event: MouseEvent) => {
         const [px, py] = d3.pointer(event, minimapRef.current);
-        centerOn(px / sx + minX, py / sy + minY);
+        const m = minimapMapRef.current;
+        centerOn(px / m.s + m.x0, py / m.s + m.y0);
       };
       mm.on('mousedown', (event: MouseEvent) => {
         event.preventDefault();
