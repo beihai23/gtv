@@ -951,16 +951,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           .attr('x2', Math.max(mx(span.max), mx(span.min) + 2))
           .attr('y1', y).attr('y2', y)
           .attr('stroke', b.color)
-          .attr('stroke-width', 2.5)
+          .attr('stroke-width', 3)
           .attr('stroke-linecap', 'round')
-          .attr('opacity', dimOthers(b.name) ? 0.15 : 0.75);
+          .attr('opacity', dimOthers(b.name) ? 0.15 : 0.9);
       }
       for (const c of data.commits) {
         if (!c.is_key) continue;
         mm.append('circle')
           .attr('cx', mx(c.x)).attr('cy', my(c.y))
           .attr('r', 1.8)
-          .attr('fill', '#fff')
+          // Lane-colored like the main graph; hardcoded white vanished on
+          // light themes, --text turned into a black blob.
+          .attr('fill', branchColorMap.get(c.lane_owner) ?? cssVar('--text', '#fff'))
           .attr('opacity', 0.85);
       }
 
