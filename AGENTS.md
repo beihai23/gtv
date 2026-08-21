@@ -13,9 +13,12 @@ gtv **never modifies the repository** it opens. Keep it that way.
 ## Tech stack
 
 - **Desktop shell**: Tauri 2 (`src-tauri/`), app identifier `com.gtv.app`.
-- **Backend**: Rust (edition 2021). Key crates: `git2` (0.19) for all git access,
+- **Backend**: Rust (edition 2021). Key crates: `git2` (0.20) for all git access,
   `tokio` (only used for `task::spawn_blocking` around git work), `serde`/`serde_json`,
-  `chrono`, `thiserror`, `anyhow`, `log` + `env_logger`.
+  `chrono`, `thiserror`, `anyhow`, `log` + `env_logger`. The libgit2 bundled via
+  `git2`/`libgit2-sys` must stay >= 1.9.4: older versions refuse to open repos whose
+  config carries `extensions.relativeWorktrees` (written by git >= 2.48
+  `worktree add --relative-paths`). Guarded by `tests/relative_worktrees_ext.rs`.
 - **Frontend**: React 19 + TypeScript (strict) + Vite 7, D3 v7 for the timeline
   rendering (used directly, not via React wrappers — D3 owns the SVG DOM inside
   `Timeline.tsx`). Tauri plugins: `dialog`, `opener`.
@@ -37,6 +40,8 @@ src-tauri/src/
 src-tauri/tests/
   layout_pure.rs  9 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
+  relative_worktrees_ext.rs  regression: repos created by git >= 2.48
+                  `worktree add --relative-paths` must open (libgit2 >= 1.9.4)
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
