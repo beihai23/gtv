@@ -33,31 +33,38 @@ src-tauri/src/
                   the single source of truth for the IPC contract
   layout.rs       pure lane-propagation engine; NO git2 dependency, operates only
                   on models so it is unit-testable with hand-built graphs
-  git_reader.rs   all git2 access: refs, revwalk from branch tips, diff stats;
+  git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
+                  (walk_commits + load_more pagination), lazy diff stats;
                   feeds layout::compute_layout and returns GitData
   commands.rs     #[tauri::command] handlers + AppState (Mutex-guarded current
-                  repo/path/branch)
+                  repo/path/branch/view + pagination ViewSession)
 src-tauri/tests/
   layout_pure.rs  9 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
   relative_worktrees_ext.rs  regression: repos created by git >= 2.48
                   `worktree add --relative-paths` must open (libgit2 >= 1.9.4)
+  pagination.rs   builds a temp repo via the git CLI and pages through it in
+                  small chunks: paged result must equal the full walk, the
+                  loaded set must stay downward-closed, and excluded stale
+                  seeds must never be loaded
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
+  dump_paged.rs   dev tool: page through a repo's ENTIRE history via load_more
+                  and dump the final GitData (pagination stress test)
 src/
   api.ts          thin wrappers around tauri invoke(), one per backend command
   types.ts        TypeScript mirror of models.rs — keep in sync by hand
   settings.tsx    Settings context: zh/en i18n dictionaries + preset theme
                   palettes (CSS custom properties applied to :root; App.css
                   consumes them via var(--x)), persisted in localStorage
-                  (gtv_lang / gtv_theme)
+                  (gtv_lang / gtv_theme / gtv_show_stale)
   App.tsx         top-level state: repo opening, branch panel, view options
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
-                                About
+                                stale-branches toggle, About
 mock.html         browser-only preview harness: mocks window.__TAURI_INTERNALS__
                   and feeds public/mock-data.json, so the frontend can be debugged
                   in a plain browser without the Rust backend
@@ -98,7 +105,21 @@ automated testing lives in Rust.
   it) and asserts exact lane ownership against what gmaster's own demo renders.
   If a layout change alters lane assignment, this test is the arbiter of whether
   the change is correct.
-- The revwalk is capped (currently 2000 commits per view); tests use the same cap.
+- **Pagination, not a hard cap.** Each view walks the newest 2000 commits;
+  `load_older_commits` pages in older history 2000 at a time (skipping
+  already-loaded oids — NOT `revwalk.hide`, whose uninteresting flag
+  propagates to ancestors and would suppress the very history being paged).
+  The whole loaded set is re-laid out per chunk because lane ownership and
+  x coordinates are global; `GitData.has_more` tells the frontend whether
+  more history exists, and the Timeline keeps the viewport anchored on a
+  commit across the relayout. `AppState.session` (ViewSession) tracks the
+  seeds/stale set/loaded oids.
+- **Stale branches** (tip outside the loaded window) are controlled by the
+  `showStaleBranches` setting (`localStorage` `gtv_show_stale`, default on),
+  passed to `open_repository` as `include_stale`. Off = stale seeds are
+  removed from the pagination session and hidden from the branch list.
+- The revwalk chunk size (2000) is shared by all views; tests use small
+  limits to exercise the same paths.
 
 ## Code conventions and gotchas
 

@@ -11,11 +11,13 @@ export type Lang = 'zh' | 'en';
 
 const LANG_KEY = 'gtv_lang';
 const THEME_KEY = 'gtv_theme';
+const STALE_KEY = 'gtv_show_stale';
 
 const en: Record<string, string> = {
   openRepo: 'Open Repository',
   loading: 'Loading...',
   commitCount: '{n} commits',
+  commitCountMore: '{n}+ commits',
   more: '+{n} more ▾',
   closeUp: 'Close ▴',
   compress: 'Compress',
@@ -80,12 +82,16 @@ const en: Record<string, string> = {
   copyAndReport: 'Copy & Open Issue Page',
   copiedTip: 'Context copied to clipboard — opening the issue page, paste there directly.',
   copyFailed: 'Copy failed — select the text and copy manually.',
+  showStale: 'Show stale branches',
+  showStaleTip: 'Process and show branches whose tip lies outside the loaded history window. Turn off to reduce work on huge repos.',
+  loadingOlder: 'Loading older history…',
 };
 
 const zh: Record<string, string> = {
   openRepo: '打开仓库',
   loading: '加载中…',
   commitCount: '{n} 个提交',
+  commitCountMore: '已加载 {n}+ 个提交',
   more: '+{n} 更多 ▾',
   closeUp: '收起 ▴',
   compress: '压缩',
@@ -150,6 +156,9 @@ const zh: Record<string, string> = {
   copyAndReport: '复制并打开 issue 页面',
   copiedTip: '上下文已复制到剪贴板，即将打开 issue 创建页面，可直接粘贴快速完成提交',
   copyFailed: '复制失败，请手动全选复制',
+  showStale: '显示不活跃分支',
+  showStaleTip: '处理并显示 tip 在已加载历史窗口之外的分支。超大仓库可关闭以减少加载量。',
+  loadingOlder: '正在加载更早的历史…',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };
@@ -263,8 +272,12 @@ export async function openExternal(url: string) {
 interface SettingsCtx {
   lang: Lang;
   theme: string;
+  /** Whether stale branches (tips outside the loaded window) are processed
+   *  and shown; persisted as gtv_show_stale. */
+  showStaleBranches: boolean;
   setLang: (l: Lang) => void;
   setTheme: (t: string) => void;
+  setShowStaleBranches: (v: boolean) => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
@@ -300,6 +313,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     applyTheme(id);
     setThemeState(id);
   };
+  // Default on: preserve the long-standing "all branches" behavior.
+  const [showStaleBranches, setShowStaleBranchesState] = useState(
+    () => localStorage.getItem(STALE_KEY) !== '0',
+  );
+  const setShowStaleBranches = (v: boolean) => {
+    localStorage.setItem(STALE_KEY, v ? '1' : '0');
+    setShowStaleBranchesState(v);
+  };
 
   const t = (key: string, vars?: Record<string, string | number>): string => {
     let s = DICTS[lang][key] ?? DICTS.en[key] ?? key;
@@ -309,7 +330,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return s;
   };
 
-  return <Ctx.Provider value={{ lang, theme, setLang, setTheme, t }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ lang, theme, showStaleBranches, setLang, setTheme, setShowStaleBranches, t }}>{children}</Ctx.Provider>;
 }
 
 export function useSettings(): SettingsCtx {

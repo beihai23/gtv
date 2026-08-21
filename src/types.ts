@@ -55,6 +55,8 @@ export interface GitData {
   branches: BranchLane[];
   main_branch: string;
   time_gaps: TimeGap[];
+  /** True while older history can still be paged in via loadOlderCommits. */
+  has_more: boolean;
 }
 
 export interface FileChange {
@@ -68,6 +70,13 @@ export interface PatchLink {
   from: string;
   to: string;
   kind: string; // 'rebase' | 'cherry-pick'
+}
+
+/** Diff volume of one commit, fetched lazily after the view renders. */
+export interface CommitStat {
+  id: string;
+  additions: number;
+  deletions: number;
 }
 
 export interface CommitDetail {

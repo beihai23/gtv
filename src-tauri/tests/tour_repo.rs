@@ -27,7 +27,7 @@ fn short(id: &str) -> &str {
 #[test]
 fn tour_repo_lane_ownership_matches_gmaster_ground_truth() {
     let mut reader = GitReader::new(tour_repo_path().to_str().unwrap()).expect("open tour repo");
-    let data = reader.read_git_data(2000).expect("read git data");
+    let data = reader.read_git_data(2000).expect("read git data").data;
 
     assert_eq!(data.commits.len(), 14, "tour repo has exactly 14 commits");
     assert_eq!(data.main_branch, "master");
@@ -127,7 +127,8 @@ fn tour_repo_filter_keeps_full_lineage() {
     let mut reader = GitReader::new(tour_repo_path().to_str().unwrap()).expect("open tour repo");
     let data = reader
         .filter_by_branches(&["MoveMethod".to_string()])
-        .expect("filter");
+        .expect("filter")
+        .data;
 
     // Walking from MoveMethod's tip reaches: its own 2 commits, Xdiff's 2,
     // and the root — 5 commits, not just the 1 commit the ref points at.

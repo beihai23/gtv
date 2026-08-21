@@ -1,11 +1,11 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
 import { useSettings } from './settings';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks } from './api';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits } from './api';
 import { recordFrontendError } from './issueContext';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
@@ -30,7 +30,7 @@ function errText(err: unknown): string {
 }
 
 function App() {
-  const { t } = useSettings();
+  const { t, showStaleBranches } = useSettings();
   const [gitData, setGitData] = useState<GitData | null>(null);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -97,13 +97,40 @@ function App() {
     }
   }, []);
 
+  // Diff volume (node sizing) loads lazily after the first paint — one
+  // tree diff per key commit is too expensive to block the open path on.
+  // Stats are a pure function of the commit id, so merging late-arriving
+  // results into a newer view is still correct.
+  const loadDiffStats = useCallback((data: GitData) => {
+    // Newest first: the backend caps at 150 and recent key commits are what
+    // the user is looking at. Skip commits that already have stats filled.
+    const ids = data.commits
+      .filter(c => c.is_key && c.additions + c.deletions === 0)
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .map(c => c.id);
+    if (ids.length === 0) return;
+    getCommitStats(ids)
+      .then(stats => {
+        const byId = new Map(stats.map(s => [s.id, s]));
+        setGitData(prev => prev && ({
+          ...prev,
+          commits: prev.commits.map(c => {
+            const s = byId.get(c.id);
+            return s ? { ...c, additions: s.additions, deletions: s.deletions } : c;
+          }),
+        }));
+      })
+      .catch(() => {});
+  }, []);
+
   const handleOpenRepo = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await selectAndOpenRepository();
+      const data = await selectAndOpenRepository(showStaleBranches);
       if (data) {
         setGitData(data);
+        loadDiffStats(data);
         setSelectedCommit(null);
         setViewResetKey(k => k + 1);
         
@@ -125,15 +152,16 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showStaleBranches]);
 
   const handleOpenLatestRepo = useCallback(async () => {
     if (!latestRepo) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await openRepository(latestRepo);
+      const data = await openRepository(latestRepo, showStaleBranches);
       setGitData(data);
+      loadDiffStats(data);
       setSelectedCommit(null);
       setViewResetKey(k => k + 1);
       
@@ -150,7 +178,40 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [latestRepo]);
+  }, [latestRepo, showStaleBranches]);
+
+  // Changing the stale-branches setting re-opens the current repo so the
+  // backend session is rebuilt with the new policy.
+  const staleSettingRef = useRef(showStaleBranches);
+  useEffect(() => {
+    if (staleSettingRef.current === showStaleBranches) return;
+    staleSettingRef.current = showStaleBranches;
+    if (latestRepo) handleOpenLatestRepo();
+  }, [showStaleBranches, latestRepo, handleOpenLatestRepo]);
+
+  // Page in the next chunk of older history. The backend re-lays out the
+  // whole loaded set; Timeline keeps the viewport anchored (no resetKey bump).
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const handleLoadOlder = useCallback(async () => {
+    if (loadingOlder || !gitData?.has_more) return;
+    setLoadingOlder(true);
+    try {
+      const data = await loadOlderCommits();
+      if (!data) return;
+      setGitData(data);
+      loadDiffStats(data);
+      // Paging may have reached a previously stale branch tip: new lanes
+      // mean the chip list needs a refresh (lane colors come from the view).
+      if (data.branches.length !== gitData.branches.length) {
+        const branches = await getBranchList();
+        setBranchList(branches);
+      }
+    } catch (err) {
+      recordFrontendError(errText(err));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [loadingOlder, gitData, loadDiffStats]);
 
   const handleCommitClick = useCallback(async (commitId: string) => {
     try {
@@ -172,6 +233,7 @@ function App() {
     try {
       const data = await filterByBranches(branchNames);
       setGitData(data);
+      loadDiffStats(data);
     } catch (err) {
       recordFrontendError(errText(err));
       setError(errText(err));
@@ -186,6 +248,7 @@ function App() {
     try {
       const data = await switchBranch(branchName);
       setGitData(data);
+      loadDiffStats(data);
       setSelectedCommit(null);
       setViewResetKey(k => k + 1);
     } catch (err) {
@@ -282,7 +345,7 @@ function App() {
           )}
           {gitData && (
             <span className="repo-info">
-              {gitData.main_branch} • {t('commitCount', { n: gitData.commits.length })}
+              {gitData.main_branch} • {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: gitData.commits.length })}
             </span>
           )}
           <button
@@ -448,6 +511,9 @@ function App() {
               showRefLabels={showRefLabels}
               patchLinks={showPatchLinks ? patchLinks : []}
               fitSignal={fitSignal}
+              hasMore={gitData.has_more ?? false}
+              loadingOlder={loadingOlder}
+              onLoadOlder={handleLoadOlder}
             />
             <CommitDetails 
               commit={selectedCommit}

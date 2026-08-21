@@ -7,6 +7,16 @@ pub struct GitReader {
     repo: Repository,
 }
 
+/// Open-view result: the view plus the session info the caller needs for
+/// pagination — the seeds that produced it and the stale branches (tips
+/// outside the walked window).
+pub struct ViewResult {
+    pub data: GitData,
+    pub seeds: Vec<LaneSeed>,
+    /// Seed names whose tip is not in the walked window.
+    pub stale_names: Vec<String>,
+}
+
 impl GitReader {
     pub fn new(path: &str) -> Result<Self, String> {
         let repo =
@@ -128,11 +138,21 @@ impl GitReader {
         self.repo.head().ok()?.target().map(|t| t.to_string())
     }
 
-    /// Shared pipeline: walk from the given seed tips, then lay out.
-    fn build_view(&self, seeds: &[LaneSeed], limit: usize) -> Result<GitData, String> {
+    /// Walk commits from the given seed tips (TIME|TOPO, newest first),
+    /// skipping oids in `hide` (pagination continuation), capped at `limit`
+    /// NEW commits.
+    ///
+    /// `hide` is applied by skipping, NOT via revwalk.hide(): hide marks an
+    /// oid uninteresting, which propagates to all its ancestors and would
+    /// suppress the entire older history we are trying to page in. Skipping
+    /// costs a re-walk of the already-loaded prefix per chunk — accepted.
+    fn walk_commits(
+        &self,
+        seeds: &[LaneSeed],
+        hide: &HashSet<String>,
+        limit: usize,
+    ) -> Result<Vec<CommitNode>, String> {
         let refs_map = self.get_all_references()?;
-        let main_branch = self.detect_main_branch(seeds);
-        let head_id = self.head_oid();
 
         let mut revwalk = self
             .repo
@@ -160,12 +180,15 @@ impl GitReader {
         let mut commits: Vec<CommitNode> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
 
-        for (i, oid_result) in revwalk.enumerate() {
-            if i >= limit {
+        for oid_result in revwalk {
+            if commits.len() >= limit {
                 break;
             }
             let oid = oid_result.map_err(|e| format!("Failed to get oid: {}", e))?;
             let oid_str = oid.to_string();
+            if hide.contains(&oid_str) {
+                continue;
+            }
             if !seen.insert(oid_str.clone()) {
                 continue;
             }
@@ -197,21 +220,23 @@ impl GitReader {
             });
         }
 
+        Ok(commits)
+    }
+
+    /// Shared pipeline: walk from the given seed tips, then lay out.
+    fn build_view(&self, seeds: &[LaneSeed], limit: usize) -> Result<GitData, String> {
+        let main_branch = self.detect_main_branch(seeds);
+        let head_id = self.head_oid();
+        let mut commits = self.walk_commits(seeds, &HashSet::new(), limit)?;
+        // A full chunk means older history may still be out there.
+        let has_more = commits.len() == limit;
+
         let (branches, edges, time_gaps) =
             layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
 
-        // Diff volume for key commits only (bounded): feeds node sizing.
-        let mut stats_done = 0usize;
-        for c in commits.iter_mut() {
-            if !c.is_key || stats_done >= 150 {
-                continue;
-            }
-            if let Ok((a, d)) = self.diff_stats(&c.id) {
-                c.additions = a;
-                c.deletions = d;
-                stats_done += 1;
-            }
-        }
+        // Diff volume (node sizing) is intentionally NOT computed here:
+        // one tree diff per key commit is too expensive for the open path.
+        // The frontend fetches it lazily via get_commit_stats.
 
         log::info!(
             "Built view: {} commits, {} lanes, {} edges",
@@ -226,47 +251,123 @@ impl GitReader {
             branches,
             main_branch,
             time_gaps,
+            has_more,
         })
     }
 
-    pub fn read_git_data(&mut self, limit: usize) -> Result<GitData, String> {
+    /// Load the next older chunk for an already-open view: walk from the
+    /// same seed tips while hiding everything already loaded, append the
+    /// chunk, then re-lay-out the WHOLE set. The relayout is required, not
+    /// cosmetic: lane ownership is global (a stale branch's tip claims its
+    /// lineage once the window reaches it) and x coordinates cascade from
+    /// the oldest commit, so prepending history shifts every coordinate.
+    pub fn load_more(
+        &self,
+        seeds: &[LaneSeed],
+        seen: &HashSet<String>,
+        mut existing: Vec<CommitNode>,
+        limit: usize,
+    ) -> Result<GitData, String> {
+        let chunk = self.walk_commits(seeds, seen, limit)?;
+        let has_more = chunk.len() == limit;
+
+        // fork_branch_name accumulates via push_str during layout; reset the
+        // annotation fields before re-running layout on laid-out commits.
+        for c in existing.iter_mut() {
+            c.fork_branch_name = None;
+            c.merge_branch_name = None;
+        }
+        existing.extend(chunk);
+
+        let main_branch = self.detect_main_branch(seeds);
+        let head_id = self.head_oid();
+        let mut commits = existing;
+        let (branches, edges, time_gaps) =
+            layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
+
+        log::info!(
+            "Loaded older chunk: {} commits total, has_more={}",
+            commits.len(),
+            has_more
+        );
+
+        Ok(GitData {
+            commits,
+            edges,
+            branches,
+            main_branch,
+            time_gaps,
+            has_more,
+        })
+    }
+
+    fn stale_seeds(seeds: &[LaneSeed], data: &GitData) -> Vec<String> {
+        let ids: HashSet<&str> = data.commits.iter().map(|c| c.id.as_str()).collect();
+        seeds
+            .iter()
+            .filter(|s| !ids.contains(s.tip.as_str()))
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
+    pub fn read_git_data(&mut self, limit: usize) -> Result<ViewResult, String> {
         let seeds = self.collect_lane_seeds()?;
-        self.build_view(&seeds, limit)
+        let data = self.build_view(&seeds, limit)?;
+        let stale_names = Self::stale_seeds(&seeds, &data);
+        Ok(ViewResult {
+            data,
+            seeds,
+            stale_names,
+        })
     }
 
     pub fn read_git_data_from_branch(
         &mut self,
         branch_name: &str,
         limit: usize,
-    ) -> Result<GitData, String> {
+    ) -> Result<ViewResult, String> {
         let seeds = self.collect_lane_seeds()?;
         let seed = seeds
             .iter()
             .find(|s| s.name == branch_name)
             .cloned()
             .ok_or_else(|| format!("Branch not found: {}", branch_name))?;
-        self.build_view(&[seed], limit)
+        let seeds = vec![seed];
+        let data = self.build_view(&seeds, limit)?;
+        let stale_names = Self::stale_seeds(&seeds, &data);
+        Ok(ViewResult {
+            data,
+            seeds,
+            stale_names,
+        })
     }
 
     /// Keep the complete lineage of the selected branches: walk from each
     /// selected tip and take the union, instead of keeping only commits the
     /// refs point at directly.
-    pub fn filter_by_branches(&mut self, branch_names: &[String]) -> Result<GitData, String> {
+    pub fn filter_by_branches(&mut self, branch_names: &[String]) -> Result<ViewResult, String> {
         let all_seeds = self.collect_lane_seeds()?;
         let selected: Vec<LaneSeed> = all_seeds
             .into_iter()
             .filter(|s| branch_names.iter().any(|n| n == &s.name))
             .collect();
-        self.build_view(&selected, 2000)
+        let data = self.build_view(&selected, 2000)?;
+        let stale_names = Self::stale_seeds(&selected, &data);
+        Ok(ViewResult {
+            data,
+            seeds: selected,
+            stale_names,
+        })
     }
 
-    /// Branch/tag list for the header filter chips. Colors come from the
-    /// same layout run as the timeline so chips and lanes always match.
-    pub fn get_branch_list(&self) -> Result<Vec<BranchLane>, String> {
+    /// Branch/tag list for the header filter chips. Lane colors are read
+    /// from the already-built view instead of re-running the full
+    /// walk+layout — chips and lanes always match because they come from
+    /// the same layout run.
+    pub fn get_branch_list(&self, view: &GitData) -> Result<Vec<BranchLane>, String> {
         let seeds = self.collect_lane_seeds()?;
-        let data = self.build_view(&seeds, 2000)?;
 
-        let lane_color_of: HashMap<String, String> = data
+        let lane_color_of: HashMap<String, String> = view
             .branches
             .iter()
             .map(|b| (b.name.clone(), b.color.clone()))
@@ -318,6 +419,23 @@ impl GitReader {
         }
 
         Ok(list)
+    }
+
+    /// Diff volume (additions, deletions) for the given commits, capped at
+    /// 150. Runs on demand after the view has rendered, so the open path
+    /// doesn't pay for one tree diff per key commit.
+    pub fn get_commit_stats(&self, commit_ids: &[String]) -> Result<Vec<CommitStat>, String> {
+        let mut stats = Vec::new();
+        for id in commit_ids.iter().take(150) {
+            if let Ok((a, d)) = self.diff_stats(id) {
+                stats.push(CommitStat {
+                    id: id.clone(),
+                    additions: a,
+                    deletions: d,
+                });
+            }
+        }
+        Ok(stats)
     }
 
     /// (additions, deletions) of a commit vs its first parent
@@ -480,7 +598,20 @@ impl GitReader {
     /// Detect copied commits inside the current view by matching normalized
     /// patch hashes. A run of ≥2 consecutive matching pairs between two
     /// lanes is classified as a rebase; anything else is a cherry-pick.
+    /// Capped to the newest 4000 commits: one diff per commit, and
+    /// paginated views can grow unbounded.
     pub fn get_patch_links(&self, commits: &[CommitNode]) -> Result<Vec<PatchLink>, String> {
+        const PATCH_LINK_WINDOW: usize = 4000;
+        let commits = if commits.len() > PATCH_LINK_WINDOW {
+            log::info!(
+                "Patch links: capped to newest {} of {} commits",
+                PATCH_LINK_WINDOW,
+                commits.len()
+            );
+            &commits[commits.len() - PATCH_LINK_WINDOW..]
+        } else {
+            commits
+        };
         let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
         for (i, c) in commits.iter().enumerate() {
             if let Some(h) = self.patch_hash(&c.id) {

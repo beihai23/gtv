@@ -20,6 +20,12 @@ interface TimelineProps {
   patchLinks: PatchLink[];
   /** Increment to trigger "Fit to view" from outside. */
   fitSignal: number;
+  /** True while older history can still be paged in. */
+  hasMore: boolean;
+  /** An older-history page load is in flight. */
+  loadingOlder: boolean;
+  /** Called when the user pans near the oldest (left) edge of the scene. */
+  onLoadOlder: () => void;
 }
 
 const LANE_HEIGHT = 80;
@@ -49,7 +55,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder }: TimelineProps) {
   const { t, theme, lang } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -57,6 +63,8 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const laneRailRef = useRef<HTMLDivElement>(null);
   const transformRef = useRef(d3.zoomIdentity);
   const resetKeyRef = useRef(-1);
+  /** Previous frame's data — viewport anchoring across pagination relayouts. */
+  const prevDataRef = useRef<GitData | null>(null);
   const [hoveredCommit, setHoveredCommit] = useState<CommitNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [laneMenu, setLaneMenu] = useState<LaneMenu | null>(null);
@@ -131,6 +139,17 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .attr('width', r.w).attr('height', r.h);
     };
 
+    // Near the oldest (left) edge of the scene? Page in the next chunk of
+    // history. Covers drag-pan, wheel-pan and minimap jumps — all of them
+    // funnel through this zoom handler.
+    const maybeLoadOlder = (t: d3.ZoomTransform) => {
+      if (!hasMore || loadingOlder) return;
+      const visibleLeft = -t.x / t.k;
+      if (visibleLeft < sceneBoundsRef.current.minX + width / t.k) {
+        onLoadOlder();
+      }
+    };
+
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.005, 40])
       // Wheel events are handled by our own trackpad-friendly handler
@@ -142,6 +161,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         cull();
         minimapViewport();
         updateRuler?.();
+        maybeLoadOlder(event.transform);
       });
     svg.call(zoom);
     zoomRef.current = zoom;
@@ -1007,10 +1027,36 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       svg.call(zoom.transform, t);
       transformRef.current = t;
     } else {
-      svg.call(zoom.transform, transformRef.current);
+      // Data changed without a view reset (older history paged in, or diff
+      // stats merged in): the backend re-laid out the whole set, so scene x
+      // coordinates may have shifted. Keep the commit nearest the viewport
+      // center fixed on screen; everything else drifts smoothly around it.
+      let t = transformRef.current;
+      const prev = prevDataRef.current;
+      if (prev && prev.commits !== data.commits) {
+        const centerSceneX = (width / 2 - t.x) / t.k;
+        let anchor: CommitNode | null = null;
+        let best = Infinity;
+        for (const c of prev.commits) {
+          const d = Math.abs(c.x - centerSceneX);
+          if (d < best) {
+            best = d;
+            anchor = c;
+          }
+        }
+        const moved = anchor ? commitMap.get(anchor.id) : undefined;
+        if (anchor && moved && moved.x !== anchor.x) {
+          t = d3.zoomIdentity
+            .translate(t.x + (anchor.x - moved.x) * t.k, t.y)
+            .scale(t.k);
+          transformRef.current = t;
+        }
+      }
+      svg.call(zoom.transform, t);
     }
+    prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder]);
 
   useEffect(() => {
     draw();
@@ -1084,6 +1130,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       <div ref={laneRailRef} className="lane-rail"></div>
 
       <div className="view-toolbar">
+        {loadingOlder && (
+          <span className="view-btn loading-older">{t('loadingOlder')}</span>
+        )}
         {compressed && expandedLanes.size > 0 && (
           <button className="view-btn" onClick={() => setExpandedLanes(new Set())}>
             Collapse all

@@ -23,7 +23,7 @@ pub struct CommitNode {
     /// merge source or target, tagged, HEAD...).
     #[serde(default)]
     pub is_key: bool,
-    /// Diff volume vs first parent (filled for key commits only).
+    /// Diff volume vs first parent (filled lazily via get_commit_stats).
     #[serde(default)]
     pub additions: u32,
     #[serde(default)]
@@ -86,6 +86,10 @@ pub struct GitData {
     /// Folded empty time gaps on the x-axis (axis breaks), sorted by time.
     #[serde(default)]
     pub time_gaps: Vec<TimeGap>,
+    /// True while older history beyond the loaded window can still be
+    /// paged in via load_older_commits.
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 /// An anomalous empty time range that was folded to a fixed pixel width.
@@ -137,6 +141,15 @@ pub struct PatchLink {
     pub from: String,
     pub to: String,
     pub kind: String,
+}
+
+/// Diff volume of one commit, computed lazily after the view renders —
+/// one tree diff per commit is too expensive for the open path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitStat {
+    pub id: String,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 /// Detailed commit info

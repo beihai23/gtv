@@ -665,6 +665,9 @@
   cursor: pointer;
 }
 .view-btn:hover { border-color: var(--text-faint); color: var(--text); }
+/* Passive status pill (older-history paging), not clickable. */
+span.view-btn.loading-older { cursor: default; }
+span.view-btn.loading-older:hover { border-color: var(--border); color: var(--text-dim); }
 .view-btn.active {
   color: var(--text);
   border-color: var(--link);
@@ -854,6 +857,18 @@
 .settings-segmented button.active {
   background: rgba(var(--link-rgb), 0.3);
   color: var(--text);
+}
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-toggle input {
+  accent-color: var(--link);
+  cursor: pointer;
 }
 .settings-themes {
   display: grid;

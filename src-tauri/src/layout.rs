@@ -71,14 +71,16 @@ pub fn compute_layout(
     let mut ordered_seeds: Vec<&LaneSeed> = seeds.iter().collect();
     ordered_seeds.sort_by_key(|s| {
         if s.name == main_branch {
-            (0, i64::MAX)
+            (0, std::cmp::Reverse(i64::MAX))
         } else {
             let ts = index_of
                 .get(&s.tip)
                 .map(|&i| commits[i].timestamp)
                 .unwrap_or(i64::MIN);
             let class = if merged_tips.contains(s.tip.as_str()) { 1 } else { 2 };
-            (class, -ts)
+            // Reverse(newest first) instead of negation: -i64::MIN overflows
+            // for tips outside the walked window.
+            (class, std::cmp::Reverse(ts))
         }
     });
 

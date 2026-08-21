@@ -63,7 +63,7 @@ fn opens_repo_with_extensions_relative_worktrees() {
     //  extensions.relativeWorktrees; class=Repository (6)"
     let mut reader = GitReader::new(dir.to_str().unwrap())
         .expect("repo with extensions.relativeWorktrees must open");
-    let data = reader.read_git_data(100).expect("read_git_data");
+    let data = reader.read_git_data(100).expect("read_git_data").data;
 
     assert_eq!(data.commits.len(), 1, "fixture has exactly one commit");
     assert_eq!(data.main_branch, "main");

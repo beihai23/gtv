@@ -8,7 +8,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const { lang, theme, setLang, setTheme, t } = useSettings();
+  const { lang, theme, setLang, setTheme, showStaleBranches, setShowStaleBranches, t } = useSettings();
   const [showReport, setShowReport] = useState(false);
 
   return (
@@ -56,6 +56,17 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="settings-section">
+            <label className="settings-toggle" title={t('showStaleTip')}>
+              <input
+                type="checkbox"
+                checked={showStaleBranches}
+                onChange={e => setShowStaleBranches(e.target.checked)}
+              />
+              <span>{t('showStale')}</span>
+            </label>
           </div>
         </div>
 

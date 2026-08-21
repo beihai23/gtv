@@ -34,7 +34,9 @@ pub fn run() {
             commands::get_branch_list,
             commands::switch_branch,
             commands::filter_by_branches,
+            commands::load_older_commits,
             commands::get_patch_links,
+            commands::get_commit_stats,
             commands::get_recent_logs,
         ])
         .run(tauri::generate_context!())
