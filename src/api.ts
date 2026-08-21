@@ -54,3 +54,10 @@ export async function filterByBranches(branchNames: string[]): Promise<GitData> 
 export async function getPatchLinks(): Promise<PatchLink[]> {
   return invoke<PatchLink[]>('get_patch_links');
 }
+
+/// Recent backend log lines for the issue-report dialog. Falls back to an
+/// empty list when the backend returns null (e.g. browser mock preview).
+export async function getRecentLogs(): Promise<string[]> {
+  const logs = await invoke<string[] | null>('get_recent_logs');
+  return logs ?? [];
+}

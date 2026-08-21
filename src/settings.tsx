@@ -74,6 +74,12 @@ const en: Record<string, string> = {
   themeDracula: 'Dracula',
   themeSolarized: 'Solarized Dark',
   themeGithubLight: 'GitHub Light',
+  reportIssue: 'Report Issue',
+  issueContextNote: 'Please review the context below before sending — logs may contain local file paths or other private information. Feel free to edit or delete anything sensitive, then copy.',
+  copyContext: 'Copy',
+  copyAndReport: 'Copy & Open Issue Page',
+  copiedTip: 'Context copied to clipboard — opening the issue page, paste there directly.',
+  copyFailed: 'Copy failed — select the text and copy manually.',
 };
 
 const zh: Record<string, string> = {
@@ -138,6 +144,12 @@ const zh: Record<string, string> = {
   themeDracula: 'Dracula',
   themeSolarized: 'Solarized 暗色',
   themeGithubLight: 'GitHub 浅色',
+  reportIssue: '反馈问题',
+  issueContextNote: '提交前请先检查下方将要收集的上下文——日志中可能包含本地文件路径等隐私信息，可先删改敏感内容再复制。',
+  copyContext: '复制',
+  copyAndReport: '复制并打开 issue 页面',
+  copiedTip: '上下文已复制到剪贴板，即将打开 issue 创建页面，可直接粘贴快速完成提交',
+  copyFailed: '复制失败，请手动全选复制',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

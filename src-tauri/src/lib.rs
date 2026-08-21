@@ -1,13 +1,22 @@
 mod commands;
 pub mod git_reader;
 pub mod layout;
+pub mod log_buffer;
 pub mod models;
 
 use commands::AppState;
+use log::LevelFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // BufferedLogger mirrors every record into the in-memory ring buffer
+    // (issue-report context) before delegating to env_logger on stderr.
+    let env_logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .build();
+    log::set_boxed_logger(Box::new(log_buffer::BufferedLogger::new(env_logger)))
+        .expect("failed to install buffered logger");
+    log::set_max_level(LevelFilter::Info);
 
     log::info!("Starting Git Timeline Viewer");
 
@@ -26,6 +35,7 @@ pub fn run() {
             commands::switch_branch,
             commands::filter_by_branches,
             commands::get_patch_links,
+            commands::get_recent_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
