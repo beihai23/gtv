@@ -26,6 +26,8 @@ interface TimelineProps {
   loadingOlder: boolean;
   /** Called when the user pans near the oldest (left) edge of the scene. */
   onLoadOlder: () => void;
+  /** External "jump to commit" (header search); seq increments per jump. */
+  focusCommit: { id: string; seq: number } | null;
 }
 
 const LANE_HEIGHT = 80;
@@ -55,7 +57,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit }: TimelineProps) {
   const { t, theme, lang } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -622,9 +624,26 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
     nodes.append('circle')
       .attr('r', nodeRadius)
-      .attr('fill', (d: CommitNode) => branchColorMap.get(d.lane_owner) ?? '#4A90D9')
-      .attr('stroke', (d: CommitNode) => d.id === selectedCommitId ? '#fff' : 'transparent')
-      .attr('stroke-width', (d: CommitNode) => d.id === selectedCommitId ? 3 : 0);
+      .attr('fill', (d: CommitNode) => branchColorMap.get(d.lane_owner) ?? '#4A90D9');
+
+    // Selection halo: a crisp accent ring over a soft wide glow. The accent
+    // contrasts with the canvas in every theme (a plain white stroke was
+    // invisible on light themes and washed out on pale lane colors).
+    const accent = cssVar('--accent', '#e94560');
+    const selectedNodes = nodes.filter((d: CommitNode) => d.id === selectedCommitId);
+    selectedNodes.append('circle')
+      .attr('r', (d: CommitNode) => nodeRadius(d) + 8)
+      .attr('fill', 'none')
+      .attr('stroke', accent)
+      .attr('stroke-opacity', 0.3)
+      .attr('stroke-width', 6)
+      .attr('pointer-events', 'none');
+    selectedNodes.append('circle')
+      .attr('r', (d: CommitNode) => nodeRadius(d) + 4)
+      .attr('fill', 'none')
+      .attr('stroke', accent)
+      .attr('stroke-width', 2.5)
+      .attr('pointer-events', 'none');
 
     const headNodes = nodes.filter((d: CommitNode) => d.is_head);
     headNodes.append('circle')
@@ -1089,6 +1108,28 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     fitSignalRef.current = fitSignal;
     fitToView();
   }, [fitSignal, fitToView]);
+
+  // Header search jump: make sure the target node is visible (expanding
+  // its lane in compressed mode — x/y are backend-computed and do not
+  // change on expand) and center on it, zooming to at least 1x so the
+  // node is legible when jumping from a zoomed-out overview.
+  const focusSeqRef = useRef(0);
+  useEffect(() => {
+    if (!focusCommit || focusSeqRef.current === focusCommit.seq) return;
+    focusSeqRef.current = focusCommit.seq;
+    const c = commitMap.get(focusCommit.id);
+    if (!c || !svgRef.current || !zoomRef.current || !containerRef.current) return;
+    if (compressed && !c.is_key && !expandedLanes.has(c.lane_owner)) {
+      setExpandedLanes(prev => new Set(prev).add(c.lane_owner));
+    }
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    const k = Math.max(transformRef.current.k, 1);
+    const next = d3.zoomIdentity
+      .translate(width / 2 - c.x * k, height / 2 - c.y * k)
+      .scale(k);
+    d3.select(svgRef.current).call(zoomRef.current.transform, next);
+  }, [focusCommit, commitMap, compressed, expandedLanes]);
 
   // Trackpad-friendly wheel handling (Figma-style):
   //   two-finger scroll (plain wheel)  -> pan

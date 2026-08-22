@@ -1035,3 +1035,77 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 .timeline-container .patch-link {
   animation: edge-flow-patch 0.9s linear infinite;
 }
+
+/* Floating graph search (Cmd/Ctrl+F) */
+.locate-float {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 130;
+}
+.locate-input {
+  width: 320px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.locate-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+}
+.locate-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.locate-item.active {
+  background: var(--bg-input);
+}
+.locate-branch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.locate-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.locate-hash {
+  font-family: monospace;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.locate-msg {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.locate-empty,
+.locate-footer {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.locate-footer {
+  border-top: 1px solid var(--border);
+}

@@ -12,6 +12,11 @@ import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 const LATEST_REPO_KEY = 'gtv_latest_repo';
 const SHOW_TAGS_KEY = 'gtv_show_tags';
 
+// Header search (jump to commit hash / branch name) result.
+type LocateResult =
+  | { kind: 'branch'; name: string; color: string; commitId: string }
+  | { kind: 'commit'; id: string; message: string };
+
 // Branch/tag chip labels: show the full name up to this many chars; longer
 // names keep head and tail with an ellipsis in the middle (CSS can only
 // truncate at the end, which hides the distinguishing tail of long names).
@@ -62,6 +67,12 @@ function App() {
     });
   }, []);
   const [viewResetKey, setViewResetKey] = useState(0);
+  // Header search: jump to a commit by hash prefix or branch name.
+  const [locateQuery, setLocateQuery] = useState('');
+  const [locateOpen, setLocateOpen] = useState(false);
+  const [locateIndex, setLocateIndex] = useState(0);
+  const [focusTarget, setFocusTarget] = useState<{ id: string; seq: number } | null>(null);
+  const focusSeqRef = useRef(0);
   // View options live here so the header owns the whole toolbar row.
   const [compressed, setCompressed] = useState(true);
   const [showMergeLinks, setShowMergeLinks] = useState(true);
@@ -144,6 +155,8 @@ function App() {
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
         setSearchQuery('');
+        setLocateQuery('');
+        setLocateOpen(false);
       }
     } catch (err) {
       console.error('Error:', err);
@@ -169,6 +182,8 @@ function App() {
       setBranchList(branches);
       setSelectedBranches(branches.map(b => b.name));
       setSearchQuery('');
+      setLocateQuery('');
+      setLocateOpen(false);
     } catch (err) {
       console.error('Error:', err);
       recordFrontendError(errText(err));
@@ -319,6 +334,90 @@ function App() {
     () => filteredBranches.filter(b => !selectedBranches.includes(b.name)),
     [filteredBranches, selectedBranches]
   );
+
+  // Header search results: branch/ref names (substring) + commit hash
+  // (prefix, >=4 hex chars). Only the currently loaded view is searched —
+  // the dropdown footer says so when more history exists.
+  const locateResults = useMemo((): LocateResult[] => {
+    const q = locateQuery.trim().toLowerCase();
+    if (!q || !gitData) return [];
+    const colorOf = new Map(gitData.branches.map(b => [b.name, b.color]));
+    const refTarget = new Map<string, string>(); // ref name -> commit it points at
+    const laneTip = new Map<string, { id: string; x: number }>();
+    for (const c of gitData.commits) {
+      for (const r of c.branch_refs) {
+        if (!r.is_tag && !refTarget.has(r.name)) refTarget.set(r.name, c.id);
+      }
+      const lt = laneTip.get(c.lane_owner);
+      if (!lt || c.x > lt.x) laneTip.set(c.lane_owner, { id: c.id, x: c.x });
+    }
+    const out: LocateResult[] = [];
+    const names = new Set([...refTarget.keys(), ...laneTip.keys()]);
+    for (const name of names) {
+      if (!name.toLowerCase().includes(q)) continue;
+      const commitId = refTarget.get(name) ?? laneTip.get(name)!.id;
+      out.push({ kind: 'branch', name, color: colorOf.get(name) ?? '#888', commitId });
+    }
+    out.sort((a, b) => (a.kind === 'branch' && b.kind === 'branch' ? a.name.localeCompare(b.name) : 0));
+    if (/^[0-9a-f]{4,}$/.test(q)) {
+      for (const c of gitData.commits) {
+        if (c.id.startsWith(q)) {
+          out.push({ kind: 'commit', id: c.id, message: c.message.split('\n')[0] });
+        }
+      }
+    }
+    return out.slice(0, 12);
+  }, [gitData, locateQuery]);
+
+  // Cmd/Ctrl + F toggles the floating search over the graph.
+  const locateInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        if (!gitData) return;
+        e.preventDefault();
+        setLocateOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gitData]);
+  useEffect(() => {
+    if (locateOpen) locateInputRef.current?.focus();
+  }, [locateOpen]);
+
+  // ←/→ step to the previous/next commit on the SAME lane while the
+  // detail panel is open. commits are in ascending (time, topo) order —
+  // i.e. visual left→right — so index ±1 is the visual neighbor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!selectedCommit || !gitData) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      const current = gitData.commits.find(c => c.id === selectedCommit.id);
+      if (!current) return;
+      const lane = gitData.commits.filter(c => c.lane_owner === current.lane_owner);
+      const i = lane.findIndex(c => c.id === current.id);
+      const next = e.key === 'ArrowRight' ? lane[i + 1] : lane[i - 1];
+      if (!next) return;
+      e.preventDefault();
+      focusSeqRef.current += 1;
+      setFocusTarget({ id: next.id, seq: focusSeqRef.current });
+      handleCommitClick(next.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedCommit, gitData, handleCommitClick]);
+
+  const handleLocate = useCallback((r: LocateResult) => {
+    const id = r.kind === 'branch' ? r.commitId : r.id;
+    focusSeqRef.current += 1;
+    setFocusTarget({ id, seq: focusSeqRef.current });
+    handleCommitClick(id);
+    setLocateQuery('');
+    setLocateOpen(false);
+  }, [handleCommitClick]);
 
   const renderBranchChip = (branch: BranchLane) => (
     <button
@@ -500,8 +599,8 @@ function App() {
           </div>
         ) : (
           <>
-            <Timeline 
-              data={gitData} 
+            <Timeline
+              data={gitData}
               onCommitClick={handleCommitClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
@@ -514,8 +613,65 @@ function App() {
               hasMore={gitData.has_more ?? false}
               loadingOlder={loadingOlder}
               onLoadOlder={handleLoadOlder}
+              focusCommit={focusTarget}
             />
-            <CommitDetails 
+            {locateOpen && (
+              <div className="locate-float">
+                <input
+                  ref={locateInputRef}
+                  type="text"
+                  className="search-input locate-input"
+                  placeholder={t('locatePlaceholder')}
+                  value={locateQuery}
+                  onChange={(e) => { setLocateQuery(e.target.value); setLocateIndex(0); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setLocateIndex(i => Math.min(i + 1, locateResults.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setLocateIndex(i => Math.max(i - 1, 0));
+                    } else if (e.key === 'Enter') {
+                      const r = locateResults[locateIndex] ?? locateResults[0];
+                      if (r) handleLocate(r);
+                    } else if (e.key === 'Escape') {
+                      setLocateOpen(false);
+                    }
+                  }}
+                />
+                {locateQuery.trim() && (
+                  <div className="locate-dropdown">
+                    {locateResults.length === 0 && (
+                      <div className="locate-empty">{t('locateNoResults')}</div>
+                    )}
+                    {locateResults.map((r, i) => (
+                      <button
+                        key={r.kind === 'branch' ? `b:${r.name}` : `c:${r.id}`}
+                        className={`locate-item ${i === locateIndex ? 'active' : ''}`}
+                        onMouseDown={(e) => { e.preventDefault(); handleLocate(r); }}
+                        onMouseEnter={() => setLocateIndex(i)}
+                      >
+                        {r.kind === 'branch' ? (
+                          <>
+                            <span className="locate-branch-dot" style={{ backgroundColor: r.color }} />
+                            <span className="locate-name">{r.name}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="locate-hash">{r.id.slice(0, 7)}</span>
+                            <span className="locate-msg">{r.message}</span>
+                          </>
+                        )}
+                      </button>
+                    ))}
+                    {gitData.has_more && (
+                      <div className="locate-footer">{t('locateScopeHint')}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            <CommitDetails
               commit={selectedCommit}
               onClose={handleCloseDetails}
             />
