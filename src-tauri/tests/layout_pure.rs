@@ -294,3 +294,43 @@ fn small_time_gap_is_not_folded() {
     let x_of = |id: &str| commits.iter().find(|c| c.id == id).unwrap().x;
     assert!((x_of("a2") - x_of("a1") - 100.0).abs() < 1e-6);
 }
+
+#[test]
+fn same_second_commits_order_topologically() {
+    // A rebase rewrites a whole branch in one second: every commit gets
+    // the SAME committer timestamp. The layout must still order the
+    // chain parent→child left→right (the walk feeds newest-first, so a
+    // plain stable sort would invert the tie group) and no two commits
+    // may share an x (they would render as one stacked blob).
+    // Input is intentionally newest-first, mimicking the revwalk order.
+    let base = 1_000_000;
+    let mut commits = vec![
+        commit("r5", base, &["r4"]),
+        commit("r4", base, &["r3"]),
+        commit("r3", base, &["r2"]),
+        commit("r2", base, &["r1"]),
+        commit("r1", base, &["m1"]),
+        commit("m1", base - 86400, &[]),
+    ];
+    let (lanes, _edges, _) =
+        compute_layout(&mut commits, &[seed("feat", "r5"), seed("main", "m1")], "main", Some("m1"));
+
+    let x_of = |id: &str| commits.iter().find(|c| c.id == id).unwrap().x;
+    let ids = ["r1", "r2", "r3", "r4", "r5"];
+    for w in ids.windows(2) {
+        assert!(
+            x_of(w[0]) < x_of(w[1]),
+            "parent {} must sit left of child {}: {} vs {}",
+            w[0],
+            w[1],
+            x_of(w[0]),
+            x_of(w[1])
+        );
+    }
+    // All five belong to the feat lane and sit right of the fork point.
+    assert_eq!(lane(&lanes, "feat").fork_point.as_deref(), Some("m1"));
+    for id in ids {
+        assert_eq!(lane_of(&commits, id), "feat");
+        assert!(x_of(id) > x_of("m1"));
+    }
+}

@@ -36,6 +36,51 @@ pub struct LaneSeed {
 
 const LANE_HEIGHT: f64 = 80.0;
 
+/// Longest-path depth of each commit above its oldest loaded ancestor
+/// (0 = no parent in the loaded set). Used only as the within-second
+/// sort tiebreak so equal-timestamp commits order parents before
+/// children. Iterative post-order walk — recursion would overflow the
+/// stack on a 10k-commit window. A parent still on the DFS stack would
+/// mean a cycle (corrupt repo); it is ignored rather than looping.
+fn topo_depth(commits: &[CommitNode], index_of: &HashMap<String, usize>) -> Vec<u32> {
+    const ON_STACK: u8 = 1;
+    const DONE: u8 = 2;
+    let n = commits.len();
+    let mut state = vec![0u8; n];
+    let mut depth = vec![0u32; n];
+    for start in 0..n {
+        if state[start] != 0 {
+            continue;
+        }
+        state[start] = ON_STACK;
+        let mut stack = vec![start];
+        while let Some(&i) = stack.last() {
+            let mut all_done = true;
+            let mut max_parent: Option<u32> = None;
+            for p in &commits[i].parents {
+                let Some(&pi) = index_of.get(p) else { continue };
+                match state[pi] {
+                    DONE => {
+                        max_parent = Some(max_parent.map_or(depth[pi], |m| m.max(depth[pi])))
+                    }
+                    ON_STACK => {} // defensive: cycle in corrupt data
+                    _ => {
+                        state[pi] = ON_STACK;
+                        stack.push(pi);
+                        all_done = false;
+                    }
+                }
+            }
+            if all_done {
+                depth[i] = max_parent.map_or(0, |m| m + 1);
+                state[i] = DONE;
+                stack.pop();
+            }
+        }
+    }
+    depth
+}
+
 /// Core entry point. `commits` may be in any order; they are sorted by
 /// timestamp (oldest first) inside. Mutates commits in place (lane,
 /// lane_owner, x, y, is_head, fork/merge labels) and returns the lane
@@ -285,7 +330,20 @@ pub fn compute_layout(
     // read days away from the hovered commit's real time.) With a single
     // cascade, x is a monotone function of time shared by every lane, and
     // the ruler's piecewise map is exact at every commit.
-    commits.sort_by_key(|c| c.timestamp);
+    // Sort by timestamp, breaking ties topologically (parents first).
+    // Same-second committer timestamps are common — a rebase rewrites a
+    // whole branch in one second — and the walk feeds us newest-first,
+    // so a plain stable sort would order a tied group child-before-
+    // parent and the cascade below would place branch tips LEFT of
+    // their own ancestors.
+    let depth = topo_depth(commits, &index_of);
+    let mut order: Vec<usize> = (0..commits.len()).collect();
+    order.sort_by_key(|&i| (commits[i].timestamp, depth[i]));
+    let mut taken: Vec<Option<CommitNode>> =
+        std::mem::take(commits).into_iter().map(Some).collect();
+    for &idx in &order {
+        commits.push(taken[idx].take().expect("each index used once"));
+    }
     let t_min = commits.first().map(|c| c.timestamp).unwrap_or(0);
     const PX_PER_DAY: f64 = 10.0;
     const MIN_SPACING: f64 = 28.0;
@@ -308,36 +366,54 @@ pub fn compute_layout(
     }
 
     // Pass 2: each non-key commit sits ON the piecewise line between the
-    // key commits bracketing its timestamp, so it too obeys the shared
-    // time→x map. (Non-key nodes only appear when a lane is expanded.)
-    let key_positions: Vec<(i64, f64)> = commits
-        .iter()
-        .filter(|c| c.is_key)
-        .map(|c| (c.timestamp, c.x))
-        .collect();
-    for c in commits.iter_mut() {
-        if c.is_key {
+    // key commits bracketing it in the sorted order, so it too obeys the
+    // shared time→x map. (Non-key nodes only appear when a lane is
+    // expanded.) Inside a bracket the fraction is the timestamp fraction
+    // raised to at least the even-spread rank fraction, so commits
+    // sharing one second (rebase artifacts) fan out in topological
+    // order instead of stacking on one x; a small monotone cascade
+    // keeps the run strictly increasing even when several commits clamp
+    // to the same fraction.
+    let mut i = 0;
+    let mut prev_key: Option<(i64, f64)> = None;
+    while i < commits.len() {
+        if commits[i].is_key {
+            prev_key = Some((commits[i].timestamp, commits[i].x));
+            i += 1;
             continue;
         }
-        let t = c.timestamp;
-        c.x = match key_positions.binary_search_by(|&(kt, _)| kt.cmp(&t)) {
-            // Same second as a key commit: nudge just right of it.
-            Ok(idx) => key_positions[idx].1 + MIN_SPACING * 0.4,
-            Err(ins) => {
-                if ins == 0 {
-                    // Before the first key commit (oldest window commits of a
-                    // lane can be non-key): honest time-x, still monotone.
-                    time_x(t)
-                } else if ins >= key_positions.len() {
-                    key_positions[key_positions.len() - 1].1
-                } else {
-                    let (ta, xa) = key_positions[ins - 1];
-                    let (tb, xb) = key_positions[ins];
-                    let frac = ((t - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95);
-                    xa + (xb - xa) * frac
-                }
-            }
+        let mut j = i;
+        while j < commits.len() && !commits[j].is_key {
+            j += 1;
+        }
+        let next_key = if j < commits.len() {
+            Some((commits[j].timestamp, commits[j].x))
+        } else {
+            None
         };
+        let m = (j - i) as f64;
+        let mut last_f = 0.0f64;
+        for (k, c) in commits[i..j].iter_mut().enumerate() {
+            c.x = match (prev_key, next_key) {
+                // Before the first key commit (oldest window commits of a
+                // lane can be non-key): honest time-x, still monotone.
+                (None, _) => time_x(c.timestamp),
+                // After the last key: march right in fixed steps.
+                (Some((_, xa)), None) => xa + (k as f64 + 1.0) * MIN_SPACING * 0.4,
+                (Some((ta, xa)), Some((tb, xb))) => {
+                    let ft = if tb > ta {
+                        ((c.timestamp - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95)
+                    } else {
+                        0.0
+                    };
+                    let fr = (k + 1) as f64 / (m + 1.0);
+                    let f = ft.max(fr).max(last_f + 0.5 / (m + 1.0)).min(0.98);
+                    last_f = f;
+                    xa + (xb - xa) * f
+                }
+            };
+        }
+        i = j;
     }
     for c in commits.iter_mut() {
         c.y = c.lane as f64 * LANE_HEIGHT;
