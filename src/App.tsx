@@ -614,6 +614,10 @@ function App() {
               loadingOlder={loadingOlder}
               onLoadOlder={handleLoadOlder}
               focusCommit={focusTarget}
+              hiddenIds={new Set<string>()}
+              traceRows={[]}
+              traceBars={[]}
+              onExpandTraceGroup={() => {}}
             />
             {locateOpen && (
               <div className="locate-float">

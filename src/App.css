@@ -645,6 +645,8 @@
   cursor: pointer;
   user-select: none;
 }
+/* Sediment-row chips (collapsed inactive lanes) read as quieter than branches. */
+.lane-chip.trace-chip { font-style: italic; opacity: 0.85; }
 
 /* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
 .view-toolbar {

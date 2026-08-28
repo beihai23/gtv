@@ -3,6 +3,8 @@ import * as d3 from 'd3';
 import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
 import { useSettings, cssVar } from '../settings';
 import { minimapMap, viewportRect, type MinimapMap } from './minimap';
+import { LANE_HEIGHT } from '../inactive';
+import type { TraceRow, TraceBar, DeadKind } from '../inactive';
 
 interface TimelineProps {
   data: GitData;
@@ -28,9 +30,15 @@ interface TimelineProps {
   onLoadOlder: () => void;
   /** External "jump to commit" (header search); seq increments per jump. */
   focusCommit: { id: string; seq: number } | null;
+  /** Inactive-lane collapse (frontend display state). Empty values = the
+   *  pre-collapse rendering, byte for byte. */
+  hiddenIds: Set<string>;
+  traceRows: TraceRow[];
+  traceBars: TraceBar[];
+  /** Trace-row / trace-chip click: expand the whole group. */
+  onExpandTraceGroup: (kind: DeadKind) => void;
 }
 
-const LANE_HEIGHT = 80;
 const MINIMAP_W = 280;
 const MINIMAP_H = 170;
 
@@ -57,7 +65,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup }: TimelineProps) {
   const { t, theme, lang } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -94,20 +102,22 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   }, [resetKey]);
 
   const visibleCommits = useMemo(() => {
-    if (!compressed) return data.commits;
-    return data.commits.filter(c => c.is_key || expandedLanes.has(c.lane_owner));
-  }, [data, compressed, expandedLanes]);
+    const alive = data.commits.filter(c => !hiddenIds.has(c.id));
+    if (!compressed) return alive;
+    return alive.filter(c => c.is_key || expandedLanes.has(c.lane_owner));
+  }, [data, compressed, expandedLanes, hiddenIds]);
 
   const hiddenCountByLane = useMemo(() => {
     const m = new Map<string, number>();
     if (!compressed) return m;
     for (const c of data.commits) {
+      if (hiddenIds.has(c.id)) continue;
       if (!c.is_key && !expandedLanes.has(c.lane_owner)) {
         m.set(c.lane_owner, (m.get(c.lane_owner) ?? 0) + 1);
       }
     }
     return m;
-  }, [data, compressed, expandedLanes]);
+  }, [data, compressed, expandedLanes, hiddenIds]);
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000);
@@ -382,6 +392,45 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
       });
 
+    // --- inactive-lane sediment rows ----------------------------------------
+    // Dead lanes get no rows of their own; their spans draw as thin
+    // translucent bars inside one trace row per group (bars only — no
+    // nodes, no edges). Overlapping bars darken naturally, so a dense pile
+    // of dead history reads as darker sediment. Click expands the group.
+    g.selectAll('.trace-bar')
+      .data(traceBars)
+      .enter()
+      .append('line')
+      .attr('class', 'trace-bar')
+      .attr('x1', (d: TraceBar) => d.x1)
+      .attr('x2', (d: TraceBar) => d.x2)
+      .attr('y1', (d: TraceBar) => d.laneIndex * LANE_HEIGHT)
+      .attr('y2', (d: TraceBar) => d.laneIndex * LANE_HEIGHT)
+      .attr('stroke', (d: TraceBar) => d.color)
+      .attr('stroke-width', 2)
+      .attr('stroke-linecap', 'round')
+      .attr('opacity', 0.3)
+      .attr('pointer-events', 'none');
+    const traceLabel = (r: TraceRow) =>
+      t(r.kind === 'archived' ? 'archivedLanes' : 'dormantLanes', { n: r.count });
+    g.selectAll('.trace-hit')
+      .data(traceRows)
+      .enter()
+      .append('rect')
+      .attr('class', 'trace-hit')
+      .attr('x', minX - 50)
+      .attr('width', maxX + 100 - (minX - 50))
+      .attr('y', (d: TraceRow) => d.laneIndex * LANE_HEIGHT - 12)
+      .attr('height', 24)
+      .attr('fill', 'rgba(0,0,0,0)')
+      .style('cursor', 'pointer')
+      .on('click', (event: MouseEvent, d: TraceRow) => {
+        event.stopPropagation();
+        onExpandTraceGroup(d.kind);
+      })
+      .append('title')
+      .text((d: TraceRow) => `${traceLabel(d)} — ${t('expandGroup')}`);
+
     // --- lane chips: HTML overlay pinned to the left edge --------------------
     // Rendered OUTSIDE the svg as a frosted-glass rail on the highest z-layer,
     // so labels stay crisp and readable when the graph scrolls beneath them
@@ -402,6 +451,28 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
         event.preventDefault();
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
+      });
+    // Trace-row chips ride the same rail; datum is BranchLane-shaped so the
+    // shared cull() code path (lane_index-keyed) handles them unchanged.
+    rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip.trace-chip')
+      .data(traceRows.map(r => ({
+        name: traceLabel(r),
+        lane_index: r.laneIndex,
+        color: '#888888',
+        is_tag: false,
+        fork_point: null,
+        merged_into: null,
+        is_active: false,
+      })), (d: BranchLane) => d.name)
+      .join('div')
+      .attr('class', 'lane-chip trace-chip')
+      .style('color', (d: BranchLane) => d.color)
+      .style('border-color', (d: BranchLane) => d.color)
+      .text((d: BranchLane) => d.name)
+      .style('cursor', 'pointer')
+      .on('click', (_e: MouseEvent, d: BranchLane) => {
+        const r = traceRows.find(tr => tr.laneIndex === d.lane_index);
+        if (r) onExpandTraceGroup(r.kind);
       });
 
     // --- edges -----------------------------------------------------------------
@@ -938,6 +1009,13 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           if (!span) return 'none';
           return inView((span.min + span.max) / 2, d.lane.lane_index * LANE_HEIGHT) ? null : 'none';
         });
+      g.selectAll<SVGLineElement, TraceBar>('.trace-bar')
+        .style('display', d => (d.x2 >= x0 && d.x1 <= x1 ? null : 'none'));
+      g.selectAll<SVGRectElement, TraceRow>('.trace-hit')
+        .style('display', d => {
+          const y = d.laneIndex * LANE_HEIGHT;
+          return y >= y0 && y <= y1 ? null : 'none';
+        });
     }
 
     // --- minimap ----------------------------------------------------------------------
@@ -974,8 +1052,19 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           .attr('stroke-linecap', 'round')
           .attr('opacity', dimOthers(b.name) ? 0.15 : 0.9);
       }
+      // Sediment rows in the map too: low-opacity dead-lane bars.
+      for (const tb of traceBars) {
+        const y = my(tb.laneIndex * LANE_HEIGHT);
+        mm.append('line')
+          .attr('x1', mx(tb.x1))
+          .attr('x2', Math.max(mx(tb.x2), mx(tb.x1) + 1))
+          .attr('y1', y).attr('y2', y)
+          .attr('stroke', tb.color)
+          .attr('stroke-width', 2)
+          .attr('opacity', 0.35);
+      }
       for (const c of data.commits) {
-        if (!c.is_key) continue;
+        if (!c.is_key || hiddenIds.has(c.id)) continue;
         mm.append('circle')
           .attr('cx', mx(c.x)).attr('cy', my(c.y))
           .attr('r', 1.8)
@@ -1040,7 +1129,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       // (HEAD when known) — latest activity sits right-of-center, its lane
       // vertically centered. Pan/zoom out from there, or use the minimap.
       const newest = data.commits.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
-      const target = data.commits.find(c => c.is_head) ?? newest;
+      const head = data.commits.find(c => c.is_head && !hiddenIds.has(c.id));
+      const newestVisible = visibleCommits.length > 0
+        ? visibleCommits.reduce((a, b) => (b.timestamp > a.timestamp ? b : a))
+        : null;
+      const target = head ?? newestVisible ?? data.commits.find(c => c.is_head) ?? newest;
       const k = 1;
       const t = d3.zoomIdentity
         .translate(width * 0.7 - target.x * k, height / 2 - target.y * k)
@@ -1077,7 +1170,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup]);
 
   useEffect(() => {
     draw();
