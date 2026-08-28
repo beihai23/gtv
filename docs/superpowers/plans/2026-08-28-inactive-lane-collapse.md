@@ -83,7 +83,6 @@ Frontend had no test setup (all automated testing lived in Rust); the
 inactive-lane collapse arc needs unit tests for its pure TS pipeline.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -461,7 +460,6 @@ protection list, fork-parent closure over live lanes, tag pseudo-lanes
 excluded. Frontend's first unit-tested module (vitest).
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -701,7 +699,6 @@ trace bars keep pre-collapse spans and lane colors. Original data identity
 is returned when nothing is collapsed.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -827,7 +824,6 @@ toggle's zh label to 显示窗口外分支 — the loading-window concept was
 masquerading under the name the new activity concept needs.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -1050,7 +1046,6 @@ trace chips ride the lane rail. Viewport reset prefers visible commits.
 Empty props render byte-for-byte as before.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -1309,7 +1304,6 @@ panel gets Archived/Dormant groups with per-lane restore; locate auto-
 expands the target lane; arrow-key nav walks visible commits only.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
@@ -1422,7 +1416,6 @@ release/* pile, protected env branches) for the ≤30-lane acceptance.
 AGENTS.md records the vitest setup; roadmap ticks M1.2.
 
 Backstory: docs/work-backstory/inactive-lane-collapse.md
-
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 

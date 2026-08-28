@@ -2,7 +2,7 @@
 arc: inactive-lane-collapse
 started: 4eca091
 status: active
-commits: [1dbc1ba, f21513c]
+commits: [4a519f1, 6a7872d, 7154f11]
 ---
 
 # M1.2 非活跃泳道收拢
