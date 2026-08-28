@@ -93,3 +93,13 @@ export interface CommitDetail {
   total_additions: number;
   total_deletions: number;
 }
+
+/** One full-history search hit (Cmd+F); `in_view` flags membership in the
+ *  currently loaded window — outside hits jump via jumpToCommit. */
+export interface SearchHit {
+  id: string;
+  message: string;
+  author_name: string;
+  timestamp: number;
+  in_view: boolean;
+}

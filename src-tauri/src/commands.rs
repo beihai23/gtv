@@ -318,6 +318,35 @@ pub async fn get_commit_stats(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Full-history commit search (Cmd+F). Read-only: walks every commit from
+/// the branch tips and matches subject/author substrings. `in_view` marks
+/// commits inside the current pagination window.
+#[tauri::command]
+pub async fn search_commits(
+    query: String,
+    limit: usize,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SearchHit>, String> {
+    let path = {
+        let current_path = state.current_path.lock().unwrap();
+        current_path.clone().ok_or("No repository opened")?
+    };
+    let loaded: HashSet<String> = {
+        let session = state.session.lock().unwrap();
+        session
+            .as_ref()
+            .map(|s| s.seen.clone())
+            .unwrap_or_default()
+    };
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.search_commits(&query, limit, &loaded)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 /// Cherry-pick / rebase detection across the current view's commits.
 /// Expensive (one diff per commit), so it runs on demand via the Copies
 /// toggle, inside spawn_blocking.

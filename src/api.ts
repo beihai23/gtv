@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit } from './types';
 
 export async function selectAndOpenRepository(includeStale: boolean): Promise<GitData | null> {
   const selected = await open({
@@ -73,4 +73,8 @@ export async function loadOlderCommits(): Promise<GitData | null> {
 export async function getRecentLogs(): Promise<string[]> {
   const logs = await invoke<string[] | null>('get_recent_logs');
   return logs ?? [];
+}
+
+export async function searchCommits(query: string, limit: number): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>('search_commits', { query, limit });
 }

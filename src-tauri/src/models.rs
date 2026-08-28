@@ -171,3 +171,15 @@ pub struct CommitDetail {
     #[serde(default)]
     pub total_deletions: i32,
 }
+
+/// One full-history search hit (Cmd+F). `in_view` tells the frontend
+/// whether the commit is inside the currently loaded window — hits outside
+/// it jump via `jump_to_commit` instead of in-graph focus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub id: String,
+    pub message: String,
+    pub author_name: String,
+    pub timestamp: i64,
+    pub in_view: bool,
+}

@@ -310,6 +310,79 @@ impl GitReader {
             .collect()
     }
 
+    /// Full-history commit search: case-insensitive substring on the commit
+    /// subject or author name; a >=4-hex query also matches commit-id
+    /// prefixes (inside the same walk, so ambiguous prefixes all surface).
+    /// Hits come back newest-first (walk order) and stop at `limit`.
+    /// `loaded` is the pagination session's oid set — membership becomes
+    /// the `in_view` flag.
+    pub fn search_commits(
+        &self,
+        query: &str,
+        limit: usize,
+        loaded: &HashSet<String>,
+    ) -> Result<Vec<SearchHit>, String> {
+        let q = query.trim().to_lowercase();
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let is_hex = q.len() >= 4 && q.chars().all(|c| c.is_ascii_hexdigit());
+
+        let seeds = self.collect_lane_seeds()?;
+        let mut revwalk = self
+            .repo
+            .revwalk()
+            .map_err(|e| format!("Failed to create revwalk: {}", e))?;
+        revwalk
+            .set_sorting(Sort::TIME | Sort::TOPOLOGICAL)
+            .map_err(|e| format!("Failed to set sorting: {}", e))?;
+        let mut pushed = false;
+        for seed in &seeds {
+            if let Ok(oid) = Oid::from_str(&seed.tip) {
+                revwalk
+                    .push(oid)
+                    .map_err(|e| format!("Failed to push tip {}: {}", seed.name, e))?;
+                pushed = true;
+            }
+        }
+        if !pushed {
+            revwalk
+                .push_head()
+                .map_err(|e| format!("Failed to push HEAD: {}", e))?;
+        }
+
+        let mut hits: Vec<SearchHit> = Vec::new();
+        for oid_result in revwalk {
+            if hits.len() >= limit {
+                break;
+            }
+            let oid = oid_result.map_err(|e| format!("Failed to get oid: {}", e))?;
+            let commit = self
+                .repo
+                .find_commit(oid)
+                .map_err(|e| format!("Failed to find commit: {}", e))?;
+            let summary = commit.summary().unwrap_or("").to_lowercase();
+            let author = commit.author().name().unwrap_or("").to_lowercase();
+            let id = oid.to_string();
+            let text_match =
+                (!q.is_empty() && (summary.contains(&q) || author.contains(&q)))
+                    || (is_hex && id.starts_with(&q));
+            if !text_match {
+                continue;
+            }
+            hits.push(SearchHit {
+                id: id.clone(),
+                message: commit.summary().unwrap_or("").to_string(),
+                author_name: commit.author().name().unwrap_or("Unknown").to_string(),
+                timestamp: commit.time().seconds(),
+                in_view: loaded.contains(&id),
+            });
+        }
+
+        log::info!("Search {:?}: {} hits (limit {})", query, hits.len(), limit);
+        Ok(hits)
+    }
+
     pub fn read_git_data(&mut self, limit: usize) -> Result<ViewResult, String> {
         let seeds = self.collect_lane_seeds()?;
         let data = self.build_view(&seeds, limit)?;
