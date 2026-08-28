@@ -9,7 +9,7 @@ import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
-import { matchLoaded, mergeLocate } from './locate';
+import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 import type { SearchHit } from './types';
@@ -458,7 +458,7 @@ function App() {
     let cancelled = false;
     setRemotePending(true);
     const timer = setTimeout(() => {
-      searchCommits(q, 50)
+      searchCommits(q, SEARCH_LIMIT)
         .then(hits => { if (!cancelled) { setRemoteHits(hits ?? []); setRemotePending(false); } })
         .catch(() => { if (!cancelled) { setRemoteHits([]); setRemotePending(false); } });
     }, 200);
@@ -845,8 +845,8 @@ function App() {
                     {remotePending && (
                       <div className="locate-footer">{t('locateSearching')}</div>
                     )}
-                    {!remotePending && remoteHits.length >= 50 && (
-                      <div className="locate-footer">{t('locateHitsCapped')}</div>
+                    {!remotePending && remoteHits.length >= SEARCH_LIMIT && (
+                      <div className="locate-footer">{t('locateHitsCapped', { n: SEARCH_LIMIT })}</div>
                     )}
                   </div>
                 )}

@@ -6,6 +6,10 @@ import type { BranchLane, CommitNode, SearchHit } from './types';
 // fills in full-history hits, which mergeLocate dedupes and orders.
 // ---------------------------------------------------------------------------
 
+// Remote-search hit cap: the backend stops its walk at this many hits, so the
+// footer's "{n}+ matches" hint and the request limit must both read from here.
+export const SEARCH_LIMIT = 50;
+
 export type LocateResult =
   | { kind: 'branch'; name: string; color: string; commitId: string }
   | { kind: 'commit'; id: string; message: string; author: string; timestamp: number; in_view: boolean };

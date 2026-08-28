@@ -8,8 +8,8 @@
 <body>
   <div id="root"></div>
   <script>
-    // Mock Tauri v2 internals BEFORE app code runs; data from a real dump
-    // of a large repo (taskon-server: 2000 commits, 37 lanes).
+    // Mock Tauri v2 internals BEFORE app code runs; data from a GitData
+    // dump (see docs/tools/gen_inactive_repo.sh; regenerate any repo via dump_json).
     let DATA = null;
     const ready = fetch('/mock-data.json').then(r => r.json()).then(d => { DATA = d; });
     window.__TAURI_INTERNALS__ = {

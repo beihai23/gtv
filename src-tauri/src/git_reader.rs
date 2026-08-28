@@ -324,6 +324,12 @@ impl GitReader {
         loaded: &HashSet<String>,
     ) -> Result<Vec<SearchHit>, String> {
         let q = query.trim().to_lowercase();
+        // Empty (or whitespace-only) query: nothing can match, so skip the
+        // full revwalk entirely. The frontend gates this today; future
+        // callers should not pay for a whole-repo walk that yields nothing.
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
         if limit == 0 {
             return Ok(Vec::new());
         }
