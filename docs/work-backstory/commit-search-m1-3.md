@@ -2,7 +2,7 @@
 arc: commit-search-m1-3
 started: 05c4d37
 status: active
-commits: []
+commits: [a7c2a7f]
 ---
 
 # M1.3 提交搜索定位补全（message/author + 全历史）
