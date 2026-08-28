@@ -1,0 +1,92 @@
+import { describe, it, expect } from 'vitest';
+import { matchLoaded, mergeLocate } from './locate';
+import type { BranchLane, CommitNode, SearchHit } from './types';
+
+function commit(over: Partial<CommitNode>): CommitNode {
+  return {
+    id: 'aa00000000000000000000000000000000000000', short_id: 'aa00000',
+    message: 'm', author_name: 'a', author_email: 'e', timestamp: 1000,
+    parents: [], branch_refs: [], fork_branch_name: null, merge_branch_name: null,
+    lane_owner: 'main', is_head: false, is_key: true, additions: 0, deletions: 0,
+    x: 0, y: 0, lane: 0, ...over,
+  };
+}
+
+function lane(name: string, over: Partial<BranchLane> = {}): BranchLane {
+  return {
+    name, lane_index: 0, color: '#00f', is_tag: false, fork_point: null,
+    merged_into: null, is_active: true, ...over,
+  };
+}
+
+function hit(over: Partial<SearchHit>): SearchHit {
+  return {
+    id: 'bb00000000000000000000000000000000000000', message: 'm',
+    author_name: 'a', timestamp: 1000, in_view: true, ...over,
+  };
+}
+
+const commits = (): CommitNode[] => [
+  commit({ id: 'a1c0f00000000000000000000000000000000000', lane_owner: 'main', x: 10, message: 'Fix Login Bug', author_name: 'Alice', timestamp: 300 }),
+  commit({ id: 'd4e5f6000000000000000000000000000000000', lane_owner: 'feat/x', x: 20, message: 'add settings', author_name: 'bob', timestamp: 200, branch_refs: [{ name: 'feat/x', is_remote: false, is_tag: false, color: '#0f0' }] }),
+  commit({ id: '99990f0000000000000000000000000000000000', lane_owner: 'main', x: 30, message: 'old thing', author_name: 'Carol', timestamp: 100 }),
+];
+
+describe('matchLoaded', () => {
+  it('matches branch names by substring (any length, case-insensitive)', () => {
+    const out = matchLoaded(commits(), [lane('feat/x'), lane('main')], 'FEAT');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: 'branch', name: 'feat/x', commitId: 'd4e5f6000000000000000000000000000000000' });
+  });
+
+  it('matches subject and author when query >= 2 chars', () => {
+    const out = matchLoaded(commits(), [lane('main')], 'login');
+    expect(out.filter(r => r.kind === 'commit')).toHaveLength(1);
+    const byAuthor = matchLoaded(commits(), [lane('main')], 'carol');
+    expect(byAuthor.filter(r => r.kind === 'commit')).toHaveLength(1);
+  });
+
+  it('skips message/author matching for 1-char queries (noise control)', () => {
+    expect(matchLoaded(commits(), [lane('main')], 'x').filter(r => r.kind === 'commit')).toHaveLength(0);
+  });
+
+  it('matches hash prefix >= 4 hex, newest first', () => {
+    const out = matchLoaded(commits(), [lane('main')], 'a1c0');
+    const cs = out.filter(r => r.kind === 'commit') as Array<{ id: string; in_view: boolean; author: string }>;
+    expect(cs).toHaveLength(1);
+    expect(cs[0].in_view).toBe(true);
+    expect(cs[0].author).toBe('Alice');
+  });
+
+  it('empty query returns nothing', () => {
+    expect(matchLoaded(commits(), [lane('main')], '')).toHaveLength(0);
+    expect(matchLoaded(commits(), [lane('main')], '   ')).toHaveLength(0);
+  });
+});
+
+describe('mergeLocate', () => {
+  it('branch hits first, commit hits newest-first, deduped by id (local wins)', () => {
+    const local = matchLoaded(commits(), [lane('feat/x')], 'login');
+    const remote: SearchHit[] = [
+      hit({ id: 'a1c0f00000000000000000000000000000000000', message: 'Fix Login Bug', timestamp: 300 }), // dup of local
+      hit({ id: 'cc00000000000000000000000000000000000000', message: 'older login fix', timestamp: 50, in_view: false }),
+    ];
+    const out = mergeLocate(local, remote);
+    const kinds = out.map(r => r.kind);
+    expect(kinds.indexOf('branch')).toBeLessThanOrEqual(0);
+    const cs = out.filter(r => r.kind === 'commit') as Array<{ id: string; in_view: boolean }>;
+    expect(cs.map(c => c.id)).toEqual(['a1c0f00000000000000000000000000000000000', 'cc00000000000000000000000000000000000000']);
+    expect(cs[0].in_view).toBe(true);
+    expect(cs[1].in_view).toBe(false);
+  });
+
+  it('caps the merged list', () => {
+    const many = Array.from({ length: 20 }, (_, i) =>
+      hit({ id: `f${i.toString().padStart(2, '0')}000000000000000000000000000000000000000`, timestamp: i }));
+    expect(mergeLocate([], many).length).toBeLessThanOrEqual(12);
+  });
+
+  it('empty inputs', () => {
+    expect(mergeLocate([], [])).toEqual([]);
+  });
+});
