@@ -2,7 +2,7 @@
 arc: commit-search-m1-3
 started: 05c4d37
 status: resolved
-commits: [a7c2a7f, 8da27a3, 73bfcca, be0b428, 955f587, 27de306]
+commits: [a7c2a7f, 8da27a3, 73bfcca, be0b428, 955f587, 27de306, d57ed79]
 ---
 
 # M1.3 提交搜索定位补全（message/author + 全历史）
