@@ -60,8 +60,10 @@ computeInactive(data, thresholdDays, expandedDead) → {
 判定管线（全部基于已加载数据，O(n)）：
 
 1. **泳道 tip 时间戳**：`max(timestamp)` over `c.lane === lane_index` 的
-   commits（walk 的种子就是各分支 tip，tip 必在已加载集内；无任何已加载
-   commit 的 lane 不参与判定——本就不可绘制）。
+   commits（walk 的种子就是各分支 tip，tip 必在已加载集内）。**兜底**：ref
+   挂在别的泳道 commit 上的"零自有 commit 泳道"（release/v1.x 型），用其
+   ref 目标 commit 的时间戳作为最后活动时间——否则这类泳道逃过收拢，
+   恰好砸坏验收 fixture。两者皆无的 lane 不参与判定（本就不可绘制）。
 2. **活跃** = tip ts ≥ `now − thresholdDays × 86400`；`thresholdDays = 0`
    即「不收拢」，`dead` 恒空。
 3. **保护名单**：确名精确匹配（大小写敏感，与 git 一致，见 §2）。匹配对象
@@ -96,9 +98,12 @@ collapseLanes(data, dead) → {
 ```
 
 - **`lane_index` 直接重写为紧凑行号**（活跃泳道保持相对顺序压到 0..k），
-  再追加两条伪 lane：已归档行、休眠行（各占一个 lane_index，无 commits）。
-  现有 `lane_index * LANE_HEIGHT` 的全部渲染点（guides / bars / chips /
-  minimap / +N chips）原样工作。
+  痕迹行占用其后的行号。**伪 lane 不进 `branches` 数组**（规划期修正：
+  隐藏 commit 的 lane/y 指向痕迹行号后，lane-bar join 会借 laneSpan 画出
+  一条合并 span 的伪 bar，rail chip 的点击语义也不同）——痕迹行的 bar 与
+  chip 由 `traceBars`/`traceRows` prop 单独渲染，Timeline 拿到的
+  `data.branches` 只含活跃泳道。现有 `lane_index * LANE_HEIGHT` 的渲染点
+  （guides / bars / chips / minimap / +N chips）对活跃泳道原样工作。
 - **commit 的 `y` 重写**为 `新行号 × LANE_HEIGHT`；收拢泳道的 commit 进
   `hiddenIds`，**不删除**（数据保留，展开零成本）。**隐藏 commit 的 y 一律
   改写为其所属组的痕迹行 y** —— fit 边界取全体 commits 的 y 极值，漏改则

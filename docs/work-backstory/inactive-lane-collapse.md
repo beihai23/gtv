@@ -2,7 +2,7 @@
 arc: inactive-lane-collapse
 started: 4eca091
 status: active
-commits: []
+commits: [1dbc1ba]
 ---
 
 # M1.2 非活跃泳道收拢
@@ -47,3 +47,18 @@ Roadmap M1.2（最高优先级里程碑 M1 的最后一项）：已合并且 tip
   超阈值但用户预期在场」的 env 基座。终版名单只收确名（每仓至多一两条）：
   main/master/dev/develop/test/testing/uat/staging/sit/qa/prod/production/
   integration/release/hotfix。v1 无通配匹配、无第二档时间上限。
+- 写实施计划（docs/superpowers/plans/2026-08-28-inactive-lane-collapse.md，
+  7 个任务 TDD）时自审揪出两个设计漏洞，已回修 spec：
+  1. **零自有 commit 泳道逃逸**：ref 挂在别的泳道 commit 上（release/v1.x
+     挂在旧 main commit 上）的泳道没有自有 commit，"tip = 本泳道 commit
+     最大时间戳"取不到值 → 不参与判定 → 不收拢。验收 fixture 里 100 条
+     release/* 恰好全是这种形态，规则砸自己脚。修复：判定加 ref 目标
+     commit 时间戳兜底。
+  2. **伪 lane 不能进 branches 数组**：spec 原文说"追加两条伪 lane 进
+     branches 让渲染点原样工作"，但隐藏 commit 的 lane/y 指向痕迹行号后，
+     laneSpan（按 lane 号聚合）会让 lane-bar join 画出一条合并 span 的
+     伪 bar；rail chip 的点击语义也不同（展开整组 vs 聚焦）。修复：伪
+     行不进 branches，bar/chip 走 traceBars/traceRows prop 单独渲染。
+- 视口锚定（分页重排）代码读完确认只按 x 补偿、而收拢不变 x——spec 里
+  "只在可见 commit 里取锚点"的预防性要求实际不需要改锚定路径（重置
+  视口的目标选择仍改为优先可见节点，防 HEAD 落在收拢泳道上）。
