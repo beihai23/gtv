@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeInactive, LANE_HEIGHT } from './inactive';
+import { computeInactive, collapseLanes, DeadKind, LANE_HEIGHT } from './inactive';
 import type { BranchLane, CommitNode, GitData } from './types';
 
 // --- fixtures -------------------------------------------------------------
@@ -200,5 +200,89 @@ describe('computeInactive', () => {
     );
     const info = computeInactive(data, 90, new Set(), NOW);
     expect(info.dead.get('old-rel')).toBe('archived');
+  });
+});
+
+describe('collapseLanes', () => {
+  const mk = () => gitData(
+    [
+      commit('m1', { lane: 0, lane_owner: 'main', x: 100, y: 0 }),
+      commit('m2', { lane: 0, lane_owner: 'main', x: 200, y: 0 }),
+      commit('a1', { lane: 1, lane_owner: 'arch1', x: 150, y: LANE_HEIGHT }),
+      commit('a2', { lane: 1, lane_owner: 'arch1', x: 170, y: LANE_HEIGHT }),
+      commit('u1', { lane: 2, lane_owner: 'dorm1', x: 180, y: LANE_HEIGHT * 2 }),
+      commit('k1', { lane: 3, lane_owner: 'keep1', x: 220, y: LANE_HEIGHT * 3 }),
+    ],
+    [
+      lane('main', 0),
+      lane('arch1', 1, { merged_into: 'm2', color: '#aa0000' }),
+      lane('dorm1', 2, { color: '#00aa00' }),
+      lane('keep1', 3, { color: '#0000aa' }),
+    ],
+  );
+
+  it('empty dead map returns the original data object', () => {
+    const data = mk();
+    expect(collapseLanes(data, new Map()).data).toBe(data);
+  });
+
+  it('compacts active lanes to hole-free rows, appends two trace rows', () => {
+    const dead: Map<string, DeadKind> = new Map([['arch1', 'archived'], ['dorm1', 'dormant']]);
+    const v = collapseLanes(mk(), dead);
+    const byName = new Map(v.data.branches.map(b => [b.name, b.lane_index]));
+    expect(byName.get('main')).toBe(0);
+    expect(byName.get('keep1')).toBe(1); // compacted, no hole
+    const rows = v.traceRows.map(r => r.kind);
+    expect(rows).toEqual(['archived', 'dormant']);
+    expect(v.traceRows[0].laneIndex).toBe(2);
+    expect(v.traceRows[1].laneIndex).toBe(3);
+    expect(v.traceRows[0].count).toBe(1);
+  });
+
+  it('hidden commits retarget to their group trace row; x never changes', () => {
+    const dead: Map<string, DeadKind> = new Map([['arch1', 'archived'], ['dorm1', 'dormant']]);
+    const v = collapseLanes(mk(), dead);
+    const a1 = v.data.commits.find(c => c.id === 'a1')!;
+    const u1 = v.data.commits.find(c => c.id === 'u1')!;
+    expect(a1.lane).toBe(2);
+    expect(a1.y).toBe(2 * LANE_HEIGHT);
+    expect(a1.x).toBe(150);
+    expect(u1.lane).toBe(3);
+    expect(u1.y).toBe(3 * LANE_HEIGHT);
+    expect(v.hiddenIds.has('a1')).toBe(true);
+    expect(v.hiddenIds.has('u1')).toBe(true);
+    const m1 = v.data.commits.find(c => c.id === 'm1')!;
+    expect(v.hiddenIds.has('m1')).toBe(false);
+    expect(m1.y).toBe(0);
+  });
+
+  it('kept-lane commits get compacted y consistent with their lane row', () => {
+    const dead: Map<string, DeadKind> = new Map([['arch1', 'archived'], ['dorm1', 'dormant']]);
+    const v = collapseLanes(mk(), dead);
+    const k1 = v.data.commits.find(c => c.id === 'k1')!;
+    expect(k1.lane).toBe(1);
+    expect(k1.y).toBe(1 * LANE_HEIGHT);
+  });
+
+  it('trace bars use PRE-collapse spans and lane colors', () => {
+    const dead: Map<string, DeadKind> = new Map([['arch1', 'archived'], ['dorm1', 'dormant']]);
+    const v = collapseLanes(mk(), dead);
+    const arch = v.traceBars.find(b => b.laneIndex === 2)!;
+    expect(arch.x1).toBe(150);
+    expect(arch.x2).toBe(170);
+    expect(arch.color).toBe('#aa0000');
+    const dorm = v.traceBars.find(b => b.laneIndex === 3)!;
+    expect(dorm.x1).toBe(180);
+    expect(dorm.x2).toBe(180);
+    expect(dorm.color).toBe('#00aa00');
+  });
+
+  it('a group with no collapsed lanes gets no trace row', () => {
+    const dead: Map<string, DeadKind> = new Map([['arch1', 'archived']]); // nothing dormant
+    const v = collapseLanes(mk(), dead);
+    expect(v.traceRows.map(r => r.kind)).toEqual(['archived']);
+    const u1 = v.data.commits.find(c => c.id === 'u1')!;
+    expect(u1.lane).toBe(1); // dorm1 kept, compacted
+    expect(v.hiddenIds.has('u1')).toBe(false);
   });
 });

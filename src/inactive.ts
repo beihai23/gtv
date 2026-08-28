@@ -117,3 +117,102 @@ export function computeInactive(
 
   return { dead, groups: { archived, dormant } };
 }
+
+// ---------------------------------------------------------------------------
+// Display transform: compact active lanes into hole-free rows and retarget
+// dead-lane commits to sediment trace rows.
+// ---------------------------------------------------------------------------
+
+export interface TraceRow {
+  /** Pseudo-lane row index the group's sediment bars draw on. */
+  laneIndex: number;
+  kind: DeadKind;
+  count: number;
+}
+
+export interface TraceBar {
+  laneIndex: number;
+  x1: number;
+  x2: number;
+  color: string;
+}
+
+export interface CollapsedView {
+  /** Display copy: active lanes compacted to rows 0..k-1 (dead lanes removed
+   *  from `branches`); hidden commits retargeted to their group's trace row.
+   *  x coordinates are NEVER touched. */
+  data: GitData;
+  /** Commits belonging to collapsed lanes (rendering skips them). */
+  hiddenIds: Set<string>;
+  traceRows: TraceRow[];
+  traceBars: TraceBar[];
+}
+
+export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): CollapsedView {
+  if (dead.size === 0) {
+    return { data, hiddenIds: new Set(), traceRows: [], traceBars: [] };
+  }
+
+  const deadIdx = new Set<number>();
+  for (const b of data.branches) {
+    if (dead.has(b.name)) deadIdx.add(b.lane_index);
+  }
+
+  // Row compaction: active lanes keep their relative order; trace rows go
+  // below all of them (sediment settles at the bottom).
+  const rowOf = new Map<number, number>();
+  let row = 0;
+  for (const b of data.branches) {
+    if (deadIdx.has(b.lane_index)) continue;
+    rowOf.set(b.lane_index, row++);
+  }
+  const traceRowOfKind = new Map<DeadKind, number>();
+  const counts: Record<DeadKind, number> = { archived: 0, dormant: 0 };
+  for (const kind of dead.values()) counts[kind]++;
+  if (counts.archived > 0) traceRowOfKind.set('archived', row++);
+  if (counts.dormant > 0) traceRowOfKind.set('dormant', row++);
+
+  // Commits: kept lanes get compacted lane/y; dead-lane commits are hidden
+  // and retargeted to the trace row so fit-bounds (min/max over ALL commit
+  // y) cannot explode from rows that no longer exist.
+  const hiddenIds = new Set<string>();
+  const commits = data.commits.map(c => {
+    if (!deadIdx.has(c.lane)) {
+      const r = rowOf.get(c.lane)!;
+      return r === c.lane ? c : { ...c, lane: r, y: r * LANE_HEIGHT };
+    }
+    hiddenIds.add(c.id);
+    const kind = dead.get(c.lane_owner) ?? 'archived';
+    const tr = traceRowOfKind.get(kind) ?? row - 1;
+    return { ...c, lane: tr, y: tr * LANE_HEIGHT };
+  });
+
+  const branches = data.branches
+    .filter(b => !deadIdx.has(b.lane_index))
+    .map(b => ({ ...b, lane_index: rowOf.get(b.lane_index)! }));
+
+  // Sediment bars: one bar per dead lane, spanning its PRE-collapse commits.
+  const traceBars: TraceBar[] = [];
+  for (const b of data.branches) {
+    const kind = dead.get(b.name);
+    if (!kind) continue;
+    const tr = traceRowOfKind.get(kind);
+    if (tr === undefined) continue;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const c of data.commits) {
+      if (c.lane !== b.lane_index) continue;
+      if (c.x < min) min = c.x;
+      if (c.x > max) max = c.x;
+    }
+    if (min <= max) traceBars.push({ laneIndex: tr, x1: min, x2: max, color: b.color });
+  }
+
+  const traceRows: TraceRow[] = [];
+  for (const kind of ['archived', 'dormant'] as const) {
+    const laneIndex = traceRowOfKind.get(kind);
+    if (laneIndex !== undefined) traceRows.push({ laneIndex, kind, count: counts[kind] });
+  }
+
+  return { data: { ...data, commits, branches }, hiddenIds, traceRows, traceBars };
+}
