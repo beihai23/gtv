@@ -75,6 +75,10 @@ export async function getRecentLogs(): Promise<string[]> {
   return logs ?? [];
 }
 
+export async function jumpToCommit(commitId: string): Promise<GitData> {
+  return invoke<GitData>('jump_to_commit', { commitId });
+}
+
 export async function searchCommits(query: string, limit: number): Promise<SearchHit[]> {
   return invoke<SearchHit[]>('search_commits', { query, limit });
 }

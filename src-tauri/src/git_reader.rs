@@ -10,6 +10,7 @@ pub struct GitReader {
 /// Open-view result: the view plus the session info the caller needs for
 /// pagination — the seeds that produced it and the stale branches (tips
 /// outside the walked window).
+#[derive(Debug)]
 pub struct ViewResult {
     pub data: GitData,
     pub seeds: Vec<LaneSeed>,
@@ -385,6 +386,37 @@ impl GitReader {
 
     pub fn read_git_data(&mut self, limit: usize) -> Result<ViewResult, String> {
         let seeds = self.collect_lane_seeds()?;
+        let data = self.build_view(&seeds, limit)?;
+        let stale_names = Self::stale_seeds(&seeds, &data);
+        Ok(ViewResult {
+            data,
+            seeds,
+            stale_names,
+        })
+    }
+
+    /// View "from one commit": a single-seed window over the target's
+    /// ancestry (search jumps land here). The seed claims the first lane
+    /// under the commit's short hash -- there may be no branch ref pointing
+    /// anywhere near it. Same shape as read_git_data_from_branch so the
+    /// pagination session takes over seamlessly.
+    pub fn read_git_data_from_commit(
+        &mut self,
+        commit_id: &str,
+        limit: usize,
+    ) -> Result<ViewResult, String> {
+        let oid = Oid::from_str(commit_id)
+            .map_err(|e| format!("Invalid commit id {}: {}", commit_id, e))?;
+        // find_commit rejects non-commit objects (e.g. annotated tags).
+        let commit = self
+            .repo
+            .find_commit(oid)
+            .map_err(|e| format!("Commit not found: {}", e))?;
+        let id = commit.id().to_string();
+        let seeds = vec![LaneSeed {
+            name: id[..7].to_string(),
+            tip: id,
+        }];
         let data = self.build_view(&seeds, limit)?;
         let stale_names = Self::stale_seeds(&seeds, &data);
         Ok(ViewResult {

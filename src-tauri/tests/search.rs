@@ -166,3 +166,71 @@ fn search_speed_on_thousand_commits() {
 
     std::fs::remove_dir_all(&dir).expect("clean up");
 }
+
+#[test]
+fn jump_builds_ancestry_window_and_pages_from_it() {
+    let dir = std::env::temp_dir().join(format!("gtv-jump-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    git(&dir, &["init", "-b", "main"], &day(1));
+    for i in 1..=12 {
+        commit(&dir, &format!("c{}", i), &day(i));
+    }
+    let c7 = git_sha(&dir, "HEAD~5");
+
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+
+    // The default window (newest 4) does not contain c7 -- that is exactly
+    // the situation a search jump lands in.
+    let window = reader.read_git_data(4).expect("window");
+    assert!(window.data.commits.iter().all(|c| c.id != c7));
+
+    let jumped = reader
+        .read_git_data_from_commit(&c7, 5)
+        .expect("jump view");
+    // Ancestry window of 5: c7 plus its 4 ancestors (c7 is the newest).
+    assert_eq!(jumped.data.commits.len(), 5);
+    let newest = jumped
+        .data
+        .commits
+        .iter()
+        .max_by_key(|c| c.timestamp)
+        .unwrap();
+    assert_eq!(newest.id, c7, "the jumped-to commit is the window's newest");
+    // The pseudo-seed lane is named by the short hash and owns the target.
+    assert_eq!(newest.lane_owner, c7[..7]);
+
+    // Pagination continues from the jumped window: the remaining older
+    // history (c1..c2) pages in and the walk terminates.
+    let seen: HashSet<String> = jumped.data.commits.iter().map(|c| c.id.clone()).collect();
+    let full = reader
+        .load_more(&jumped.seeds, &seen, jumped.data.commits.clone(), 5)
+        .expect("page after jump");
+    assert_eq!(full.commits.len(), 7, "c1..c7 total");
+    assert!(!full.has_more);
+
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}
+
+#[test]
+fn jump_rejects_bad_ids() {
+    let dir = std::env::temp_dir().join(format!("gtv-jump-bad-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    git(&dir, &["init", "-b", "main"], &day(1));
+    commit(&dir, "c1", &day(1));
+    // Annotated tag: a real tag OBJECT whose oid is not a commit.
+    git(&dir, &["tag", "-a", "-m", "v1", "v1"], &day(1));
+    let tag_oid = git_sha(&dir, "v1");
+    git(&dir, &["tag", "-d", "v1"], &day(1)); // keep the object, drop the ref noise
+
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+
+    let err = reader.read_git_data_from_commit("deadbeef", 5).unwrap_err();
+    assert!(err.to_lowercase().contains("invalid") || err.to_lowercase().contains("not found"));
+
+    let err = reader.read_git_data_from_commit(&tag_oid, 5).unwrap_err();
+    assert!(err.to_lowercase().contains("not found"), "tag object is not a commit: {}", err);
+
+    std::fs::remove_dir_all(&dir).expect("clean up");
+}

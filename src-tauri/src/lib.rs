@@ -37,6 +37,7 @@ pub fn run() {
             commands::load_older_commits,
             commands::get_patch_links,
             commands::search_commits,
+            commands::jump_to_commit,
  commands::get_commit_stats,
             commands::get_recent_logs,
         ])

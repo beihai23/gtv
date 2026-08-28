@@ -139,6 +139,41 @@ pub fn is_valid_git_repo(path: String) -> bool {
     }
 }
 
+/// Jump the view to a single commit's ancestry (Cmd+F hit outside the
+/// loaded window). Same session semantics as switch_branch; the view is no
+/// longer "from a branch", so current_branch is cleared.
+#[tauri::command]
+pub async fn jump_to_commit(
+    commit_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<GitData, String> {
+    let path = {
+        let current_path = state.current_path.lock().unwrap();
+        current_path.clone().ok_or("No repository opened")?
+    };
+
+    let result = task::spawn_blocking(move || {
+        let mut reader = GitReader::new(&path)?;
+        reader.read_git_data_from_commit(&commit_id, 2000)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
+
+    store_session(&state, &result, true);
+    let data = result.data;
+
+    {
+        let mut current_branch = state.current_branch.lock().unwrap();
+        *current_branch = None;
+        let mut current_view = state.current_view.lock().unwrap();
+        *current_view = Some(data.clone());
+    }
+
+    log::info!("Jumped to commit with {} commits", data.commits.len());
+
+    Ok(data)
+}
+
 /// Recent formatted backend log lines (oldest first) for the issue-report
 /// dialog; see `log_buffer`.
 #[tauri::command]
