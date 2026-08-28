@@ -82,6 +82,7 @@ npm install                 # frontend deps (also pulls @tauri-apps/cli)
 npm run tauri dev           # run the full desktop app (vite dev server + Rust)
 npm run build               # typecheck (tsc) + vite production build → dist/
 npm run tauri build         # produce a bundled desktop app
+npm test                    # frontend pure-function tests (vitest, src/*.test.ts)
 
 cd src-tauri
 cargo test                  # ALL tests: pure layout tests + tour-repo benchmark
@@ -92,8 +93,9 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
-`noUnusedLocals`, `noUnusedParameters`). The frontend has no test setup — all
-automated testing lives in Rust.
+`noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
+(`npm test`, currently just `src/inactive.test.ts`); all other automated testing
+lives in Rust.
 
 ## Testing strategy
 
