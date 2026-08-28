@@ -25,6 +25,30 @@
           case 'filter_by_branches': return DATA;
           case 'is_valid_git_repo': return true;
           case 'get_recent_logs': return ['[mock] env_logger line'];
+          case 'search_commits': {
+            const q = String(args?.query ?? '').trim().toLowerCase();
+            const limit = args?.limit ?? 50;
+            if (q.length < 2) return [];
+            return DATA.commits
+              .filter(c =>
+                c.message.toLowerCase().includes(q) ||
+                c.author_name.toLowerCase().includes(q) ||
+                (/^[0-9a-f]{4,}$/.test(q) && c.id.startsWith(q)))
+              .sort((a, b) => b.timestamp - a.timestamp)
+              .slice(0, limit)
+              .map(c => ({
+                id: c.id, message: c.message, author_name: c.author_name,
+                timestamp: c.timestamp,
+                // Split at the median x: the LEFT (older) half reads as
+                // "outside the loaded window". Caveat: the frontend's local
+                // matcher still finds every DATA commit (the mock view is
+                // fully loaded) and mergeLocate keeps local hits, so merged
+                // hits stay in_view=true — the jump path only fires against
+                // the real backend, where deep history is genuinely unloaded.
+                in_view: c.x >= (DATA.commits[Math.floor(DATA.commits.length / 2)]?.x ?? 0),
+              }));
+          }
+          case 'jump_to_commit': return DATA;
           default: return null; // plugin:dialog|open -> null (no native dialog)
         }
       },

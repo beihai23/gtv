@@ -104,8 +104,9 @@ mergeLocate(local, remote, cap = 12) → LocateResult[]
   - `in_view = false` → `jumpToCommit(oid)` → `setGitData` +
     `viewResetKey++` + `setExpandedDead(new Set())` + 清空 `selectedCommit`
     + `focusCommit` 目标（与 handleViewFromBranch 同构）。
-- 下拉 commit 行呈现：hash + subject + 暗色 author（帮消歧）；全史命中
-  超过截断数时 footer 提示全史命中总数。
+- 下拉 commit 行呈现：hash + subject + 暗色 author（帮消歧）；footer 显示
+  搜索中提示；后端命中数达到 limit（50）时显示「全历史命中 50+ 条」——后端
+  截断在 limit，真实总数不可知。
 
 ## 5. 边界情况
 
