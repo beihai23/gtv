@@ -788,6 +788,14 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   gap: 6px;
 }
 
+/* Expand-all button inside an Archived/Dormant group title. */
+.branch-panel-group-title .dead-group-btn {
+  margin-left: 8px;
+  padding: 0 8px;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
 .minimap {
   width: 280px !important;
   height: 170px !important;

@@ -7,10 +7,16 @@ import { IssueReportDialog } from './components/IssueReportDialog';
 import { useSettings } from './settings';
 import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits } from './api';
 import { recordFrontendError } from './issueContext';
+import { computeInactive, collapseLanes } from './inactive';
+import type { DeadKind } from './inactive';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
 const SHOW_TAGS_KEY = 'gtv_show_tags';
+
+// Stable empty-set fallback so the Timeline props keep one identity when no
+// view is computed (avoids per-render Set churn re-triggering its effects).
+const NO_IDS: Set<string> = new Set();
 
 // Header search (jump to commit hash / branch name) result.
 type LocateResult =
@@ -35,7 +41,7 @@ function errText(err: unknown): string {
 }
 
 function App() {
-  const { t, showStaleBranches } = useSettings();
+  const { t, showStaleBranches, inactiveDays } = useSettings();
   const [gitData, setGitData] = useState<GitData | null>(null);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,7 +90,32 @@ function App() {
   const [patchLinks, setPatchLinks] = useState<PatchLink[]>([]);
   const [patchLinksLoading, setPatchLinksLoading] = useState(false);
 
+  // Inactive-lane collapse: which dead lanes the user has restored.
+  const [expandedDead, setExpandedDead] = useState<Set<string>>(new Set());
+
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
+
+  // Inactive-lane pipeline. Both memos MUST derive from the same gitData
+  // snapshot: collapseLanes rewrites lane/y coordinates, so mixing views
+  // from different snapshots would misplace rows. `view` is the display
+  // copy handed to Timeline; `inactive.groups` still lists user-expanded
+  // lanes (checked state) even though they left `dead`. Declared above the
+  // handlers because expandTraceGroup/handleLocate close over `inactive`.
+  const inactive = useMemo(
+    () => (gitData ? computeInactive(gitData, inactiveDays, expandedDead) : null),
+    [gitData, inactiveDays, expandedDead],
+  );
+  const view = useMemo(
+    () => (gitData && inactive ? collapseLanes(gitData, inactive.dead) : null),
+    [gitData, inactive],
+  );
+  const hiddenIds = view?.hiddenIds ?? NO_IDS;
+  const allDeadNames = useMemo(() => {
+    const s = new Set<string>();
+    for (const l of inactive?.groups.archived ?? []) s.add(l.name);
+    for (const l of inactive?.groups.dormant ?? []) s.add(l.name);
+    return s;
+  }, [inactive]);
 
   // Fetch patch links when the Copies toggle is on and a repo is loaded.
   useEffect(() => {
@@ -143,6 +174,7 @@ function App() {
         setGitData(data);
         loadDiffStats(data);
         setSelectedCommit(null);
+        setExpandedDead(new Set());
         setViewResetKey(k => k + 1);
         
         const path = await getCurrentPath();
@@ -176,6 +208,7 @@ function App() {
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
+      setExpandedDead(new Set());
       setViewResetKey(k => k + 1);
       
       const branches = await getBranchList();
@@ -265,6 +298,8 @@ function App() {
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
+      // The viewed branch is the user's focus: it starts expanded.
+      setExpandedDead(new Set([branchName]));
       setViewResetKey(k => k + 1);
     } catch (err) {
       recordFrontendError(errText(err));
@@ -285,6 +320,25 @@ function App() {
       handleFilterChange(newSelected);
     }
   }, [selectedBranches, handleFilterChange]);
+
+  // Dead-lane chips toggle VISIBILITY ONLY: they never go through
+  // toggleBranchFilter, so the lane stays inside selectedBranches and every
+  // filterByBranches rebuild keeps it loaded (collapse is pure display).
+  const toggleDeadLane = useCallback((name: string) => {
+    setExpandedDead(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const expandTraceGroup = useCallback((kind: DeadKind) => {
+    setExpandedDead(prev => {
+      const next = new Set(prev);
+      for (const l of inactive?.groups[kind] ?? []) next.add(l.name);
+      return next;
+    });
+  }, [inactive]);
 
   // Latest activity time per ref (branch lane or tag), derived from the
   // loaded commits. Used to order the branch chips newest-first.
@@ -318,21 +372,36 @@ function App() {
   const INLINE_CHIP_LIMIT = 8;
   const inlineBranches = useMemo(() => {
     // Selected branches stay visible; fill remaining slots by list order.
-    const selected = filteredBranches.filter(b => selectedBranches.includes(b.name));
-    const rest = filteredBranches.filter(b => !selectedBranches.includes(b.name));
+    // Dead lanes live in the panel's Archived/Dormant groups instead.
+    const selected = filteredBranches.filter(b => selectedBranches.includes(b.name) && !allDeadNames.has(b.name));
+    const rest = filteredBranches.filter(b => !selectedBranches.includes(b.name) && !allDeadNames.has(b.name));
     return [...selected, ...rest].slice(0, INLINE_CHIP_LIMIT);
-  }, [filteredBranches, selectedBranches]);
+  }, [filteredBranches, selectedBranches, allDeadNames]);
 
   const hasMoreTags = filteredBranches.length > inlineBranches.length;
 
-  // Panel groups: enabled (selected) chips first, then the rest.
+  // Panel groups: enabled (selected) chips first, then the rest. Dead lanes
+  // are excluded here — they have their own groups below and never leave
+  // selectedBranches.
   const panelEnabled = useMemo(
-    () => filteredBranches.filter(b => selectedBranches.includes(b.name)),
-    [filteredBranches, selectedBranches]
+    () => filteredBranches.filter(b => selectedBranches.includes(b.name) && !allDeadNames.has(b.name)),
+    [filteredBranches, selectedBranches, allDeadNames]
   );
   const panelDisabled = useMemo(
-    () => filteredBranches.filter(b => !selectedBranches.includes(b.name)),
-    [filteredBranches, selectedBranches]
+    () => filteredBranches.filter(b => !selectedBranches.includes(b.name) && !allDeadNames.has(b.name)),
+    [filteredBranches, selectedBranches, allDeadNames]
+  );
+
+  // Dead-lane panel groups (newest activity first, matching the chips above).
+  const byActivity = (a: BranchLane, b: BranchLane) =>
+    (refActivity.get(b.name) ?? 0) - (refActivity.get(a.name) ?? 0);
+  const panelArchived = useMemo(
+    () => [...(inactive?.groups.archived ?? [])].sort(byActivity),
+    [inactive, refActivity]
+  );
+  const panelDormant = useMemo(
+    () => [...(inactive?.groups.dormant ?? [])].sort(byActivity),
+    [inactive, refActivity]
   );
 
   // Header search results: branch/ref names (substring) + commit hash
@@ -397,7 +466,11 @@ function App() {
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
       const current = gitData.commits.find(c => c.id === selectedCommit.id);
       if (!current) return;
-      const lane = gitData.commits.filter(c => c.lane_owner === current.lane_owner);
+      // Walk visible commits only: collapsed-lane commits are hidden from
+      // the canvas, so stepping into them would focus empty space.
+      const lane = gitData.commits.filter(
+        c => c.lane_owner === current.lane_owner && !hiddenIds.has(c.id),
+      );
       const i = lane.findIndex(c => c.id === current.id);
       const next = e.key === 'ArrowRight' ? lane[i + 1] : lane[i - 1];
       if (!next) return;
@@ -408,16 +481,22 @@ function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedCommit, gitData, handleCommitClick]);
+  }, [selectedCommit, gitData, handleCommitClick, hiddenIds]);
 
   const handleLocate = useCallback((r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
+    // Locate may land on a collapsed inactive lane: expand it first so the
+    // focus centers on a real row (mirrors compressed-lane auto-expansion).
+    const c = gitData?.commits.find(x => x.id === id);
+    if (c && inactive?.dead.has(c.lane_owner)) {
+      setExpandedDead(prev => new Set(prev).add(c.lane_owner));
+    }
     focusSeqRef.current += 1;
     setFocusTarget({ id, seq: focusSeqRef.current });
     handleCommitClick(id);
     setLocateQuery('');
     setLocateOpen(false);
-  }, [handleCommitClick]);
+  }, [handleCommitClick, gitData, inactive]);
 
   const renderBranchChip = (branch: BranchLane) => (
     <button
@@ -430,6 +509,23 @@ function App() {
       onClick={() => toggleBranchFilter(branch.name)}
       onDoubleClick={() => handleFilterChange([branch.name])}
       title={`${branch.name}\n${t('chipTip')}`}
+    >
+      {truncateMiddle(branch.name)}
+    </button>
+  );
+
+  // Dead-lane chip: active = lane restored on the canvas. Clicking toggles
+  // visibility only (the lane stays selected on the backend side).
+  const renderDeadChip = (branch: BranchLane) => (
+    <button
+      key={branch.name}
+      className={`filter-tag ${expandedDead.has(branch.name) ? 'active' : ''}`}
+      style={{
+        borderColor: branch.color,
+        backgroundColor: expandedDead.has(branch.name) ? branch.color : 'transparent'
+      }}
+      onClick={() => toggleDeadLane(branch.name)}
+      title={branch.name}
     >
       {truncateMiddle(branch.name)}
     </button>
@@ -561,6 +657,32 @@ function App() {
                   </div>
                 </div>
               )}
+              {panelArchived.length > 0 && (
+                <div className="branch-panel-group">
+                  <div className="branch-panel-group-title">
+                    {t('archivedLanes', { n: panelArchived.length })}
+                    <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('archived')}>
+                      {t('expandGroup')}
+                    </button>
+                  </div>
+                  <div className="branch-panel-chips">
+                    {panelArchived.map(renderDeadChip)}
+                  </div>
+                </div>
+              )}
+              {panelDormant.length > 0 && (
+                <div className="branch-panel-group">
+                  <div className="branch-panel-group-title">
+                    {t('dormantLanes', { n: panelDormant.length })}
+                    <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('dormant')}>
+                      {t('expandGroup')}
+                    </button>
+                  </div>
+                  <div className="branch-panel-chips">
+                    {panelDormant.map(renderDeadChip)}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="branch-panel-footer">
               {t('panelFooter')}
@@ -600,7 +722,7 @@ function App() {
         ) : (
           <>
             <Timeline
-              data={gitData}
+              data={view?.data ?? gitData}
               onCommitClick={handleCommitClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
@@ -614,10 +736,10 @@ function App() {
               loadingOlder={loadingOlder}
               onLoadOlder={handleLoadOlder}
               focusCommit={focusTarget}
-              hiddenIds={new Set<string>()}
-              traceRows={[]}
-              traceBars={[]}
-              onExpandTraceGroup={() => {}}
+              hiddenIds={hiddenIds}
+              traceRows={view?.traceRows ?? []}
+              traceBars={view?.traceBars ?? []}
+              onExpandTraceGroup={expandTraceGroup}
             />
             {locateOpen && (
               <div className="locate-float">
