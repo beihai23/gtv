@@ -2,7 +2,7 @@
 arc: inactive-lane-collapse
 started: 4eca091
 status: resolved
-commits: [4a519f1, 6a7872d, 7154f11, 7196efa, f4ff288, 5f63c9a, 6c024f0, 7ffeacb, 6fe9ebe, b0f21c7, d4817b5]
+commits: [4a519f1, 6a7872d, 7154f11, 7196efa, f4ff288, 5f63c9a, 6c024f0, 7ffeacb, 6fe9ebe, b0f21c7, d4817b5, ccc8729, cdb6866]
 ---
 
 # M1.2 非活跃泳道收拢
@@ -114,6 +114,14 @@ Roadmap M1.2（最高优先级里程碑 M1 的最后一项）：已合并且 tip
   env 基座，活跃的 release/hotfix 由新鲜度规则天然保住。
 - 泳道 tip 判定 = max(本泳道已加载 commit ts, ref 目标 commit ts)——零自有
   commit 的泳道用 ref 时间戳兜底（防 release/v1.x 形态逃逸）。
+- 终审（0 Critical / 0 Important）后修复波次（cdb6866）：traceBars span
+  改单遍 O(N)（原 O(死泳道×commits) 在 950×100k 规模实测 102ms，是管线里
+  唯一的超线性点）；expandTraceGroup 补上收拢方向（spec 承诺的展开/收拢
+  双向，原实现只加不减，验收 fixture 上点一下痕迹行展开 500 条泳道后无路
+  可退）；header 的 "+N more"/refs 计数排除死泳道；LANE_HEIGHT 测试钉死
+  toBe(80)（与 layout.rs 孪生常量的契约告警）。
+- 终审的行为注记：整组全展开后痕迹行自然消失（count=0），画布上没有可点
+  的收拢入口——面板分组按钮的「收拢」是可达的反向档，语义自洽非缺陷。
 - 前端测试基建 = vitest 只测纯函数（src/inactive.ts）；渲染/交互层仍不设自动
   化测试，其余留在 Rust。
 - 验收 fixture 的每个 commit 与 merge 都显式钉死日期——merge 不钉会静默把
