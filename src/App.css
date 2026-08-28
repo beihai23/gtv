@@ -1110,6 +1110,14 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.locate-author {
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
 .locate-empty,
 .locate-footer {
   padding: 8px 12px;

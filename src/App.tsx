@@ -5,11 +5,14 @@ import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
 import { useSettings } from './settings';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits } from './api';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
+import { matchLoaded, mergeLocate } from './locate';
+import type { LocateResult } from './locate';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
+import type { SearchHit } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
 const SHOW_TAGS_KEY = 'gtv_show_tags';
@@ -17,11 +20,6 @@ const SHOW_TAGS_KEY = 'gtv_show_tags';
 // Stable empty-set fallback so the Timeline props keep one identity when no
 // view is computed (avoids per-render Set churn re-triggering its effects).
 const NO_IDS: Set<string> = new Set();
-
-// Header search (jump to commit hash / branch name) result.
-type LocateResult =
-  | { kind: 'branch'; name: string; color: string; commitId: string }
-  | { kind: 'commit'; id: string; message: string };
 
 // Branch/tag chip labels: show the full name up to this many chars; longer
 // names keep head and tail with an ellipsis in the middle (CSS can only
@@ -79,6 +77,9 @@ function App() {
   const [locateIndex, setLocateIndex] = useState(0);
   const [focusTarget, setFocusTarget] = useState<{ id: string; seq: number } | null>(null);
   const focusSeqRef = useRef(0);
+  // Debounced full-history search results merged into the dropdown.
+  const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
+  const [remotePending, setRemotePending] = useState(false);
   // View options live here so the header owns the whole toolbar row.
   const [compressed, setCompressed] = useState(true);
   const [showMergeLinks, setShowMergeLinks] = useState(true);
@@ -433,39 +434,36 @@ function App() {
     [inactive, refActivity]
   );
 
-  // Header search results: branch/ref names (substring) + commit hash
-  // (prefix, >=4 hex chars). Only the currently loaded view is searched —
-  // the dropdown footer says so when more history exists.
-  const locateResults = useMemo((): LocateResult[] => {
-    const q = locateQuery.trim().toLowerCase();
-    if (!q || !gitData) return [];
-    const colorOf = new Map(gitData.branches.map(b => [b.name, b.color]));
-    const refTarget = new Map<string, string>(); // ref name -> commit it points at
-    const laneTip = new Map<string, { id: string; x: number }>();
-    for (const c of gitData.commits) {
-      for (const r of c.branch_refs) {
-        if (!r.is_tag && !refTarget.has(r.name)) refTarget.set(r.name, c.id);
-      }
-      const lt = laneTip.get(c.lane_owner);
-      if (!lt || c.x > lt.x) laneTip.set(c.lane_owner, { id: c.id, x: c.x });
+  // Header search results: instant loaded-range matches merged with the
+  // debounced backend hits (mergeLocate dedupes, orders, and caps).
+  const locateResults = useMemo(
+    (): LocateResult[] =>
+      mergeLocate(
+        matchLoaded(gitData?.commits ?? [], gitData?.branches ?? [], locateQuery),
+        remoteHits,
+      ),
+    [gitData, locateQuery, remoteHits],
+  );
+
+  // Full-history search: debounce the query, ask the backend, drop stale
+  // responses (cancelled flag). <2 chars skips the call — the loaded-range
+  // matcher still runs instantly in the memo below.
+  useEffect(() => {
+    const q = locateQuery.trim();
+    if (!gitData || q.length < 2) {
+      setRemoteHits([]);
+      setRemotePending(false);
+      return;
     }
-    const out: LocateResult[] = [];
-    const names = new Set([...refTarget.keys(), ...laneTip.keys()]);
-    for (const name of names) {
-      if (!name.toLowerCase().includes(q)) continue;
-      const commitId = refTarget.get(name) ?? laneTip.get(name)!.id;
-      out.push({ kind: 'branch', name, color: colorOf.get(name) ?? '#888', commitId });
-    }
-    out.sort((a, b) => (a.kind === 'branch' && b.kind === 'branch' ? a.name.localeCompare(b.name) : 0));
-    if (/^[0-9a-f]{4,}$/.test(q)) {
-      for (const c of gitData.commits) {
-        if (c.id.startsWith(q)) {
-          out.push({ kind: 'commit', id: c.id, message: c.message.split('\n')[0] });
-        }
-      }
-    }
-    return out.slice(0, 12);
-  }, [gitData, locateQuery]);
+    let cancelled = false;
+    setRemotePending(true);
+    const timer = setTimeout(() => {
+      searchCommits(q, 50)
+        .then(hits => { if (!cancelled) { setRemoteHits(hits ?? []); setRemotePending(false); } })
+        .catch(() => { if (!cancelled) { setRemoteHits([]); setRemotePending(false); } });
+    }, 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [locateQuery, gitData]);
 
   // Cmd/Ctrl + F toggles the floating search over the graph.
   const locateInputRef = useRef<HTMLInputElement>(null);
@@ -512,10 +510,35 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedCommit, gitData, handleCommitClick, hiddenIds]);
 
-  const handleLocate = useCallback((r: LocateResult) => {
+  const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
-    // Locate may land on a collapsed inactive lane: expand it first so the
-    // focus centers on a real row (mirrors compressed-lane auto-expansion).
+    setLocateQuery('');
+    setLocateOpen(false);
+    if (r.kind === 'commit' && !r.in_view) {
+      // Hit outside the loaded window: swap the view to the target's
+      // ancestry (single-seed window), then focus it like any in-view hit.
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await jumpToCommit(id);
+        setGitData(data);
+        loadDiffStats(data);
+        setSelectedCommit(null);
+        setExpandedDead(new Set());
+        setViewResetKey(k => k + 1);
+        focusSeqRef.current += 1;
+        setFocusTarget({ id, seq: focusSeqRef.current });
+        handleCommitClick(id);
+      } catch (err) {
+        recordFrontendError(errText(err));
+        setError(errText(err));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    // In-view hit: expand its lane if collapsed (compressed or inactive),
+    // then center on it.
     const c = gitData?.commits.find(x => x.id === id);
     if (c && inactive?.dead.has(c.lane_owner)) {
       setExpandedDead(prev => new Set(prev).add(c.lane_owner));
@@ -523,9 +546,7 @@ function App() {
     focusSeqRef.current += 1;
     setFocusTarget({ id, seq: focusSeqRef.current });
     handleCommitClick(id);
-    setLocateQuery('');
-    setLocateOpen(false);
-  }, [handleCommitClick, gitData, inactive]);
+  }, [handleCommitClick, gitData, inactive, loadDiffStats]);
 
   const renderBranchChip = (branch: BranchLane) => (
     <button
@@ -816,12 +837,16 @@ function App() {
                           <>
                             <span className="locate-hash">{r.id.slice(0, 7)}</span>
                             <span className="locate-msg">{r.message}</span>
+                            <span className="locate-author">{r.author}</span>
                           </>
                         )}
                       </button>
                     ))}
-                    {gitData.has_more && (
-                      <div className="locate-footer">{t('locateScopeHint')}</div>
+                    {remotePending && (
+                      <div className="locate-footer">{t('locateSearching')}</div>
+                    )}
+                    {!remotePending && remoteHits.length >= 50 && (
+                      <div className="locate-footer">{t('locateHitsCapped')}</div>
                     )}
                   </div>
                 )}
