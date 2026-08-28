@@ -33,8 +33,8 @@ function gitData(commits: CommitNode[], branches: BranchLane[]): GitData {
 // --- tests ----------------------------------------------------------------
 
 describe('computeInactive', () => {
-  it('LANE_HEIGHT is a positive number', () => {
-    expect(LANE_HEIGHT).toBeGreaterThan(0);
+  it('LANE_HEIGHT is pinned to the backend layout constant (src-tauri layout.rs: 80.0)', () => {
+    expect(LANE_HEIGHT).toBe(80);
   });
 
   it('threshold 0 disables collapsing entirely', () => {

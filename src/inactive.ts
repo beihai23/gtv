@@ -192,20 +192,24 @@ export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): Colla
     .map(b => ({ ...b, lane_index: rowOf.get(b.lane_index)! }));
 
   // Sediment bars: one bar per dead lane, spanning its PRE-collapse commits.
+  // One pass over commits builds a per-lane-index span map (the same pattern
+  // Timeline uses for lane bars) — O(commits), not O(dead x commits); this
+  // memo re-runs on every chip toggle / threshold change.
+  const spanOf = new Map<number, { min: number; max: number }>();
+  for (const c of data.commits) {
+    const span = spanOf.get(c.lane) ?? { min: c.x, max: c.x };
+    span.min = Math.min(span.min, c.x);
+    span.max = Math.max(span.max, c.x);
+    spanOf.set(c.lane, span);
+  }
   const traceBars: TraceBar[] = [];
   for (const b of data.branches) {
     const kind = dead.get(b.name);
     if (!kind) continue;
     const tr = traceRowOfKind.get(kind);
     if (tr === undefined) continue;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const c of data.commits) {
-      if (c.lane !== b.lane_index) continue;
-      if (c.x < min) min = c.x;
-      if (c.x > max) max = c.x;
-    }
-    if (min <= max) traceBars.push({ laneIndex: tr, x1: min, x2: max, color: b.color });
+    const span = spanOf.get(b.lane_index);
+    if (span !== undefined) traceBars.push({ laneIndex: tr, x1: span.min, x2: span.max, color: b.color });
   }
 
   const traceRows: TraceRow[] = [];

@@ -35,8 +35,11 @@ interface TimelineProps {
   hiddenIds: Set<string>;
   traceRows: TraceRow[];
   traceBars: TraceBar[];
-  /** Trace-row / trace-chip click: expand the whole group. */
+  /** Trace-row / trace-chip click: toggle (expand/collapse) the whole group. */
   onExpandTraceGroup: (kind: DeadKind) => void;
+  /** Action label for a trace group's title ("Collapse" when the group is
+   *  fully expanded, "Expand" otherwise) — App owns the toggle state. */
+  traceGroupLabel: (kind: DeadKind) => string;
 }
 
 const MINIMAP_W = 280;
@@ -65,7 +68,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel }: TimelineProps) {
   const { t, theme, lang } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -429,7 +432,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         onExpandTraceGroup(d.kind);
       })
       .append('title')
-      .text((d: TraceRow) => `${traceLabel(d)} — ${t('expandGroup')}`);
+      .text((d: TraceRow) => `${traceLabel(d)} — ${traceGroupLabel(d.kind)}`);
 
     // --- lane chips: HTML overlay pinned to the left edge --------------------
     // Rendered OUTSIDE the svg as a frosted-glass rail on the highest z-layer,
@@ -1170,7 +1173,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel]);
 
   useEffect(() => {
     draw();

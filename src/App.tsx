@@ -332,13 +332,30 @@ function App() {
     });
   }, []);
 
+  // Group toggle (spec §4.3 expand/collapse): expanding is the common case,
+  // but one misclick on a 500-lane sediment row must be reversible without
+  // reopening the repo — when EVERY lane of the group is expanded, the same
+  // click collapses them all back into the trace row.
   const expandTraceGroup = useCallback((kind: DeadKind) => {
     setExpandedDead(prev => {
+      const group = inactive?.groups[kind] ?? [];
+      const collapse = group.length > 0 && group.every(l => prev.has(l.name));
       const next = new Set(prev);
-      for (const l of inactive?.groups[kind] ?? []) next.add(l.name);
+      for (const l of group) {
+        if (collapse) next.delete(l.name); else next.add(l.name);
+      }
       return next;
     });
   }, [inactive]);
+
+  // Action label follows the toggle state ("Collapse" once every lane of the
+  // group is expanded). One helper feeds both the panel group buttons and
+  // Timeline's trace-chip titles, so they can never disagree.
+  const traceGroupLabel = useCallback((kind: DeadKind) => {
+    const group = inactive?.groups[kind] ?? [];
+    const expanded = group.length > 0 && group.every(l => expandedDead.has(l.name));
+    return t(expanded ? 'collapseGroup' : 'expandGroup');
+  }, [inactive, expandedDead, t]);
 
   // Latest activity time per ref (branch lane or tag), derived from the
   // loaded commits. Used to order the branch chips newest-first.
@@ -369,27 +386,39 @@ function App() {
     return visible.filter(b => b.name.toLowerCase().includes(query));
   }, [sortedBranches, searchQuery, showTags]);
 
+  // Active-only ref view: dead lanes never appear as header chips or in the
+  // Enabled/Disabled panel groups (they live in the panel's Archived/Dormant
+  // groups, which keep their own counts), so every count the header shows —
+  // "+N more", "refs shown" — derives from this list, not filteredBranches.
+  const activeBranches = useMemo(
+    () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
+    [filteredBranches, allDeadNames]
+  );
+  const activeSelectedCount = useMemo(
+    () => selectedBranches.filter(name => !allDeadNames.has(name)).length,
+    [selectedBranches, allDeadNames]
+  );
+
   const INLINE_CHIP_LIMIT = 8;
   const inlineBranches = useMemo(() => {
     // Selected branches stay visible; fill remaining slots by list order.
-    // Dead lanes live in the panel's Archived/Dormant groups instead.
-    const selected = filteredBranches.filter(b => selectedBranches.includes(b.name) && !allDeadNames.has(b.name));
-    const rest = filteredBranches.filter(b => !selectedBranches.includes(b.name) && !allDeadNames.has(b.name));
+    const selected = activeBranches.filter(b => selectedBranches.includes(b.name));
+    const rest = activeBranches.filter(b => !selectedBranches.includes(b.name));
     return [...selected, ...rest].slice(0, INLINE_CHIP_LIMIT);
-  }, [filteredBranches, selectedBranches, allDeadNames]);
+  }, [activeBranches, selectedBranches]);
 
-  const hasMoreTags = filteredBranches.length > inlineBranches.length;
+  const hasMoreTags = activeBranches.length > inlineBranches.length;
 
   // Panel groups: enabled (selected) chips first, then the rest. Dead lanes
   // are excluded here — they have their own groups below and never leave
   // selectedBranches.
   const panelEnabled = useMemo(
-    () => filteredBranches.filter(b => selectedBranches.includes(b.name) && !allDeadNames.has(b.name)),
-    [filteredBranches, selectedBranches, allDeadNames]
+    () => activeBranches.filter(b => selectedBranches.includes(b.name)),
+    [activeBranches, selectedBranches]
   );
   const panelDisabled = useMemo(
-    () => filteredBranches.filter(b => !selectedBranches.includes(b.name) && !allDeadNames.has(b.name)),
-    [filteredBranches, selectedBranches, allDeadNames]
+    () => activeBranches.filter(b => !selectedBranches.includes(b.name)),
+    [activeBranches, selectedBranches]
   );
 
   // Dead-lane panel groups (newest activity first, matching the chips above).
@@ -562,7 +591,7 @@ function App() {
                 className="filter-tag show-more"
                 onClick={() => setShowAllTags(!showAllTags)}
               >
-                {showAllTags ? t('closeUp') : t('more', { n: filteredBranches.length - inlineBranches.length })}
+                {showAllTags ? t('closeUp') : t('more', { n: activeBranches.length - inlineBranches.length })}
               </button>
             )}
           </div>
@@ -628,7 +657,7 @@ function App() {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus
               />
-              <span className="branch-panel-count">{t('refsShown', { n: filteredBranches.length, m: selectedBranches.length })}</span>
+              <span className="branch-panel-count">{t('refsShown', { n: activeBranches.length, m: activeSelectedCount })}</span>
               <button
                 className={`view-btn ${showTags ? 'active' : ''}`}
                 onClick={toggleShowTags}
@@ -662,7 +691,7 @@ function App() {
                   <div className="branch-panel-group-title">
                     {t('archivedLanes', { n: panelArchived.length })}
                     <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('archived')}>
-                      {t('expandGroup')}
+                      {traceGroupLabel('archived')}
                     </button>
                   </div>
                   <div className="branch-panel-chips">
@@ -675,7 +704,7 @@ function App() {
                   <div className="branch-panel-group-title">
                     {t('dormantLanes', { n: panelDormant.length })}
                     <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('dormant')}>
-                      {t('expandGroup')}
+                      {traceGroupLabel('dormant')}
                     </button>
                   </div>
                   <div className="branch-panel-chips">
@@ -740,6 +769,7 @@ function App() {
               traceRows={view?.traceRows ?? []}
               traceBars={view?.traceBars ?? []}
               onExpandTraceGroup={expandTraceGroup}
+              traceGroupLabel={traceGroupLabel}
             />
             {locateOpen && (
               <div className="locate-float">

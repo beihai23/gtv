@@ -95,6 +95,7 @@ const en: Record<string, string> = {
   archivedLanes: 'Archived ({n})',
   dormantLanes: 'Dormant ({n})',
   expandGroup: 'Expand',
+  collapseGroup: 'Collapse',
   loadingOlder: 'Loading older history…',
 };
 
@@ -179,6 +180,7 @@ const zh: Record<string, string> = {
   archivedLanes: '已归档 ({n})',
   dormantLanes: '休眠 ({n})',
   expandGroup: '展开',
+  collapseGroup: '收拢',
   loadingOlder: '正在加载更早的历史…',
 };
 
