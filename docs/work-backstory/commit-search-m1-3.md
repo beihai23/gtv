@@ -2,7 +2,7 @@
 arc: commit-search-m1-3
 started: 05c4d37
 status: resolved
-commits: [a7c2a7f, 8da27a3, 73bfcca, be0b428, 955f587, 27de306, d57ed79]
+commits: [a7c2a7f, 8da27a3, 73bfcca, be0b428, 955f587, 27de306, d57ed79, 4175f52, d4669d0]
 ---
 
 # M1.3 提交搜索定位补全（message/author + 全历史）
@@ -64,6 +64,13 @@ hash 前缀，且仅限已加载范围（分页 2000 窗口）。要求补 messa
   堵死详情面板验收，也是临时 patch 拼 CommitDetail——M1.2 教训重演，mock
   的 get_commit_detail 该考虑常驻补齐了。双语空态/搜索中 footer、命中
   ≥limit 的「全历史命中 50+ 条」footer 均已覆盖，全程无 console 错误。
+- 终审（0 Critical）自建 10 万提交 fixture 做了 release 基准：全史搜索
+  最差 482ms（早停命中 482 / 全走未命中 159-438，方差来自冷缓存与机器
+  噪声），2s 预算 4 倍余量；且**早停 limit 不省时**——固定 walk 准备成本
+  主导，M1.4 规模治理时可参考。修复波次（d4669d0）：SEARCH_LIMIT=50
+  单一来源（原 4 处硬编码漂移风险，i18n 走 {n} 模板）、mock 头注释
+  去fixture 化、AGENTS.md 测试清单、后端空 query 早退守卫。真实仓库
+  2s 手动计时仍未执行（100k 基准是目前唯一的规模证据）。
 
 ## Decisions
 
