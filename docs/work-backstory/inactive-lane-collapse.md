@@ -2,7 +2,7 @@
 arc: inactive-lane-collapse
 started: 4eca091
 status: resolved
-commits: [4a519f1, 6a7872d, 7154f11, 7196efa, 5f63c9a, 6c024f0, 7ffeacb, 6fe9ebe, b0f21c7]
+commits: [4a519f1, 6a7872d, 7154f11, 7196efa, f4ff288, 5f63c9a, 6c024f0, 7ffeacb, 6fe9ebe, b0f21c7, d4817b5]
 ---
 
 # M1.2 非活跃泳道收拢
@@ -78,8 +78,13 @@ Roadmap M1.2（最高优先级里程碑 M1 的最后一项）：已合并且 tip
   main 泳道上 ←/→ 步进严格留在本泳道可见 commit 内，全程无 console 错误。
 - fixture 脚本隐蔽坑：c() 的日期环境变量只包住 commit，`git merge` 不吃——
   500 个 merge 不钉日期就全是"现在"，挂在最后一个 merge 上的 100 条 release/*
-  引用随之全变新鲜，≤30 验收当场破产。脚本里 merge 单独包一层 m() 钉
-  GIT_AUTHOR_DATE/GIT_COMMITTER_DATE。
+  引用随之全变新鲜。脚本里 merge 单独包一层 m() 钉 GIT_AUTHOR_DATE/
+  GIT_COMMITTER_DATE。【终审查勘误：当初"不钉日期 ≤30 当场破产"的因果论
+  断是错的——终审拿 dump 实测，release/*、dev、uat、staging 这类"ref 停在
+  别的泳道 commit 上"的分支在后端 layout 里根本不产生泳道（见下条），
+  merge 所在的 main 泳道本就新鲜，所以不钉日期首开其实也是 26 条泳道。
+  钉日期仍应保留（fixture 语义诚实 + 防后端将来给这类 ref 分配泳道），
+  但真正的教训是下一条："别按数据模型想象 fixture"。】
 - 实测推翻计划期预判："ref 停在别的泳道 commit 上"的分支（dev/uat/staging/
   release/*）在后端 layout 里**根本不产生泳道**，只作为该 commit 的
   branch_refs 徽标出现——本 fixture 里零自有 commit 泳道一条都不存在，
