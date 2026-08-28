@@ -8,7 +8,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const { lang, theme, setLang, setTheme, showStaleBranches, setShowStaleBranches, t } = useSettings();
+  const { lang, theme, setLang, setTheme, showStaleBranches, setShowStaleBranches, inactiveDays, setInactiveDays, t } = useSettings();
   const [showReport, setShowReport] = useState(false);
 
   return (
@@ -67,6 +67,23 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
               />
               <span>{t('showStale')}</span>
             </label>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title" title={t('collapseInactiveTip')}>
+              {t('collapseInactive')}
+            </div>
+            <div className="settings-segmented">
+              {[30, 90, 180, 365, 0].map(d => (
+                <button
+                  key={d}
+                  className={inactiveDays === d ? 'active' : ''}
+                  onClick={() => setInactiveDays(d)}
+                >
+                  {d === 0 ? t('inactiveOff') : t('daysUnit', { n: d })}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

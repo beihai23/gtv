@@ -12,6 +12,7 @@ export type Lang = 'zh' | 'en';
 const LANG_KEY = 'gtv_lang';
 const THEME_KEY = 'gtv_theme';
 const STALE_KEY = 'gtv_show_stale';
+const INACTIVE_DAYS_KEY = 'gtv_inactive_days';
 
 const en: Record<string, string> = {
   openRepo: 'Open Repository',
@@ -87,6 +88,13 @@ const en: Record<string, string> = {
   copyFailed: 'Copy failed — select the text and copy manually.',
   showStale: 'Show stale branches',
   showStaleTip: 'Process and show branches whose tip lies outside the loaded history window. Turn off to reduce work on huge repos.',
+  collapseInactive: 'Collapse inactive lanes',
+  collapseInactiveTip: 'Lanes with no activity for this long collapse out of the graph into sediment rows: merged ones under "Archived", never-merged ones under "Dormant". Base branches like main/dev/uat and ancestors of active lanes always stay.',
+  inactiveOff: 'Off',
+  daysUnit: '{n}d',
+  archivedLanes: 'Archived ({n})',
+  dormantLanes: 'Dormant ({n})',
+  expandGroup: 'Expand',
   loadingOlder: 'Loading older history…',
 };
 
@@ -162,8 +170,15 @@ const zh: Record<string, string> = {
   copyAndReport: '复制并打开 issue 页面',
   copiedTip: '上下文已复制到剪贴板，即将打开 issue 创建页面，可直接粘贴快速完成提交',
   copyFailed: '复制失败，请手动全选复制',
-  showStale: '显示不活跃分支',
+  showStale: '显示窗口外分支',
   showStaleTip: '处理并显示 tip 在已加载历史窗口之外的分支。超大仓库可关闭以减少加载量。',
+  collapseInactive: '收拢不活跃泳道',
+  collapseInactiveTip: '超过该时长无活动的泳道默认收拢出画布，沉入痕迹行：已合并的进「已归档」，未合并的进「休眠」。main/dev/uat 等基座分支和活跃分支的祖先泳道始终保留。',
+  inactiveOff: '不收拢',
+  daysUnit: '{n} 天',
+  archivedLanes: '已归档 ({n})',
+  dormantLanes: '休眠 ({n})',
+  expandGroup: '展开',
   loadingOlder: '正在加载更早的历史…',
 };
 
@@ -281,6 +296,10 @@ interface SettingsCtx {
   /** Whether stale branches (tips outside the loaded window) are processed
    *  and shown; persisted as gtv_show_stale. */
   showStaleBranches: boolean;
+  /** Lane-inactivity threshold in days; 0 disables collapsing.
+   *  Persisted as gtv_inactive_days. */
+  inactiveDays: number;
+  setInactiveDays: (d: number) => void;
   setLang: (l: Lang) => void;
   setTheme: (t: string) => void;
   setShowStaleBranches: (v: boolean) => void;
@@ -328,6 +347,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setShowStaleBranchesState(v);
   };
 
+  const [inactiveDays, setInactiveDaysState] = useState<number>(() => {
+    const v = parseInt(localStorage.getItem(INACTIVE_DAYS_KEY) ?? '90', 10);
+    return Number.isFinite(v) && v >= 0 ? v : 90;
+  });
+  const setInactiveDays = (d: number) => {
+    localStorage.setItem(INACTIVE_DAYS_KEY, String(d));
+    setInactiveDaysState(d);
+  };
+
   const t = (key: string, vars?: Record<string, string | number>): string => {
     let s = DICTS[lang][key] ?? DICTS.en[key] ?? key;
     if (vars) {
@@ -336,7 +364,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return s;
   };
 
-  return <Ctx.Provider value={{ lang, theme, showStaleBranches, setLang, setTheme, setShowStaleBranches, t }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ lang, theme, showStaleBranches, inactiveDays, setLang, setTheme, setShowStaleBranches, setInactiveDays, t }}>{children}</Ctx.Provider>;
 }
 
 export function useSettings(): SettingsCtx {
