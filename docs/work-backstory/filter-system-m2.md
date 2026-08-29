@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb, 732b351]
+commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -59,6 +59,16 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   `=== '1'`（默认 false = 现状显示），而 showStale 是 `!== '0'`（默认
   true）。filterRefs 在 false 时返回原数组引用保下游 memo 身份——与
   daterange 'all' 的 toBe 先例同一原则。
+- Task 4（接线 2.1+2.3）：lane-menu 第四项 relatedOnly → App
+  handleRelatedBranch（原始 gitData 算闭包——view 副本的 lane_index 已被
+  收拢重写，Set 展开成 string[] 走既有 handleFilterChange）。画布 badge 是
+  五处里的暗坑：`<title>` 全名 join 原先直读 `s.c.branch_refs`，只把
+  slice(0,2)/extra 挪到 filter 之后不够，BadgeSpec 得把过滤后列表带进渲染
+  闭包（s.refs）幽灵计数才断根；tooltip/CommitDetails 整行显隐改按过滤后
+  长度判。matchLoaded 第 4 参默认 false 保 8 个旧用例零改动，TDD 先红后绿
+  加 2 例（remote-only ref 隐藏后不命中；同名本地 lane 经未动的 laneTip
+  仍命中）。TDZ：handleRelatedBranch 落 handleFilterChange 之后（M1.3
+  地雷），依赖全前置，tsc strict 过。
 
 ## Decisions
 
