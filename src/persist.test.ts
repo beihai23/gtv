@@ -37,6 +37,13 @@ describe('saveSelection / loadSelection', () => {
     expect(loadSelection('/repo/b')).toBe(null);
   });
 
+  it('saveSelection never throws when the storage write fails (best-effort contract)', () => {
+    // Quota exceeded / storage disabled must not break the UI; the throwing
+    // stub pins the swallow path against a future "helpful" rethrow refactor.
+    vi.stubGlobal('localStorage', { setItem: () => { throw new Error('quota') } });
+    expect(() => saveSelection('/repo/a', ['main'])).not.toThrow();
+  });
+
   it('valid JSON but not an array -> null (dirty-data defense)', () => {
     map.set('gtv_branch_sel:/repo/a', '{"a":1}');
     expect(loadSelection('/repo/a')).toBe(null);

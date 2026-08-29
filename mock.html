@@ -23,6 +23,28 @@
         const tip = cs.length > 0 ? cs.reduce((a, b) => (b.x > a.x ? b : a)) : null;
         if (tip) tip.branch_refs.push({ name: `origin/${lane.name}`, is_remote: true, is_tag: false, color: '' });
       }
+      // C1 regression pin (final review): the dump has ZERO non-tag lanes
+      // without own commits, so the 'all'-view guard on emptyLaneDead was
+      // untestable. This synthetic lane is release/v1.x-shaped: non-tag, no
+      // commits of its own, its ref pushed onto ANOTHER lane's visible
+      // commit. Under 'all' it MUST render as its own visible (empty) row
+      // and never sink into a trace row.
+      d.branches.push({
+        name: 'synthetic/ref-only', lane_index: d.branches.length,
+        color: '#6633CC', is_tag: false, fork_point: null,
+        merged_into: null, is_active: true,
+      });
+      const host = d.commits.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+      host.branch_refs.push({ name: 'synthetic/ref-only', is_remote: false, is_tag: false, color: '' });
+      // The dump has no tag LANES either, so the lane-menu regression (tag
+      // lanes must NOT offer relatedOnly) had nothing to right-click. Same
+      // trick: a synthetic tag lane, ref on the same host commit.
+      d.branches.push({
+        name: 'synthetic/tag', lane_index: d.branches.length,
+        color: '#8B8B00', is_tag: true, fork_point: null,
+        merged_into: null, is_active: true,
+      });
+      host.branch_refs.push({ name: 'synthetic/tag', is_remote: false, is_tag: true, color: '' });
     });
     window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => {

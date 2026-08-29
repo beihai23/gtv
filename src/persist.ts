@@ -7,8 +7,9 @@ const key = (repoPath: string) => `gtv_branch_sel:${repoPath}`;
 
 const store = (): Storage | undefined => globalThis.localStorage;
 
-/** Persist the current selection as-is; an empty array is a real "none
- *  selected" choice and is written too (restore semantics below). */
+/** Persist the current selection as-is. Callers guard against writing an
+ *  empty array (that is transient session state); this function writes
+ *  whatever it is given. */
 export function saveSelection(repoPath: string, names: string[]): void {
   try {
     store()?.setItem(key(repoPath), JSON.stringify(names));

@@ -1,5 +1,5 @@
-import type { DeadKind } from './inactive';
-import type { CommitNode, GitData, TimeGap } from './types';
+import type { DeadKind, InactiveInfo } from './inactive';
+import type { BranchLane, CommitNode, GitData, TimeGap } from './types';
 
 // ---------------------------------------------------------------------------
 // Date-range display transform (roadmap M2.2). Pure frontend display state:
@@ -90,22 +90,31 @@ export function applyDateRange(data: GitData, range: DateRange): GitData {
   };
 }
 
-/** Non-tag lanes with ZERO commits in (already filtered) data -> dead map
- *  (merged_into set ? 'archived' : 'dormant'), for union with
- *  computeInactive's map (range-empty wins over the freshness rule: a lane
- *  active within 90 days but empty this week is still empty in the
- *  this-week view). Feed it the applyDateRange output; the union then goes
- *  through the existing collapseLanes so empty lanes sink to sediment rows
- *  and the panel grouping/expanding machinery is reused as-is. */
-export function emptyLaneDead(data: GitData): Map<string, DeadKind> {
+/** Non-tag lanes with ZERO commits in (already filtered) data, returned in
+ *  computeInactive's InactiveInfo shape so App unions the dead maps AND the
+ *  panel groups mirror these lanes. dead excludes expandedDead (chip expand
+ *  returns the lane to the canvas as an empty visible row); groups keep ALL
+ *  range-dead lanes INCLUDING expanded ones (panel shows them checked) --
+ *  mirrors computeInactive's expand semantics (inactive.ts:112-116).
+ *  Range-empty wins over the freshness rule: a lane active within 90 days
+ *  but empty this week is still empty in the this-week view. Feed it the
+ *  applyDateRange output; the union then goes through the existing
+ *  collapseLanes so empty lanes sink to sediment rows and the panel
+ *  grouping/expanding machinery is reused as-is. */
+export function emptyLaneDead(data: GitData, expandedDead?: Set<string>): InactiveInfo {
   const dead = new Map<string, DeadKind>();
+  const archived: BranchLane[] = [];
+  const dormant: BranchLane[] = [];
   const live = new Set<number>(); // lane indexes owning at least one commit
   for (const c of data.commits) live.add(c.lane);
   for (const b of data.branches) {
     if (b.is_tag || live.has(b.lane_index)) continue;
-    dead.set(b.name, b.merged_into ? 'archived' : 'dormant');
+    const kind = b.merged_into ? 'archived' : 'dormant';
+    (kind === 'archived' ? archived : dormant).push(b);
+    if (expandedDead?.has(b.name)) continue; // user restored it
+    dead.set(b.name, kind);
   }
-  return dead;
+  return { dead, groups: { archived, dormant } };
 }
 
 /** Commit ids outside the window (from the ORIGINAL unfiltered data).

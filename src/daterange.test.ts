@@ -146,10 +146,25 @@ describe('emptyLaneDead', () => {
     );
     // unfiltered: every non-tag lane owns commits; only the tag lane is
     // empty and it must not count -> empty map
-    expect(emptyLaneDead(data).size).toBe(0);
+    expect(emptyLaneDead(data).dead.size).toBe(0);
     // after the 1-day window the two quiet lanes lost their only commits
-    const dead = emptyLaneDead(applyDateRange(data, lastDay));
-    expect(dead).toEqual(new Map([['quietmerged', 'archived'], ['quietsolo', 'dormant']]));
+    const out = emptyLaneDead(applyDateRange(data, lastDay));
+    expect(out.dead).toEqual(new Map([['quietmerged', 'archived'], ['quietsolo', 'dormant']]));
+    expect(out.groups.archived.map(l => l.name)).toEqual(['quietmerged']);
+    expect(out.groups.dormant.map(l => l.name)).toEqual(['quietsolo']);
+  });
+
+  it('expandedDead lanes leave dead but stay in groups (panel shows them checked)', () => {
+    const data = gitData(
+      [
+        commit('m1', { lane: 0, lane_owner: 'main', timestamp: BASE + DAY }),
+        commit('qs1', { lane: 2, lane_owner: 'quietsolo', timestamp: 5 }),
+      ],
+      [lane('main', 0), lane('quietsolo', 2)],
+    );
+    const out = emptyLaneDead(applyDateRange(data, lastDay), new Set(['quietsolo']));
+    expect(out.dead.size).toBe(0); // back on the canvas as an empty row
+    expect(out.groups.dormant.map(l => l.name)).toEqual(['quietsolo']);
   });
 });
 

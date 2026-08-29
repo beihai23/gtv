@@ -114,6 +114,27 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   不认 expandedDead——对窗口清空的泳道，"展开"痕迹 chip 本就是空操作，
   疑为 Task 5 有意留出的接缝（其评审放行该 memo 结构）；是否将窗口清空
   泳道挪进面板 Archived/Dormant 组属 Task 4/5 语义裁决，本任务不越权。
+- 终审（CHANGES_REQUESTED，`.superpowers/sdd/final-review-m2.md`）+ 修复
+  波（单 commit）：C1——'all' 下 emptyLaneDead 仍运行并进 dead 并集，
+  真实仓库的 ref-only/stale 空泳道被无条件击沉且不可恢复（mock 实测 0 条
+  此类泳道，E2E 全盲）；修法为 rangeEmpty memo 加 `kind !== 'all'` 守卫，
+  'all' 下 dead = inactive.dead 与 arc 前逐字节一致。I1——上条遗留的正式
+  裁决落地：emptyLaneDead 改返回 InactiveInfo 形状并感知 expandedDead，
+  App 新增 mergedGroups 喂全部五个消费点。I2——handleOpenRepo 换仓瞬间
+  保存 effect 以（新路径, 旧仓选择集）触发一次写（setLatestRepo 与
+  全集/恢复 set 之间隔 await getBranchList()，即批处理边界），同批
+  setSelectedBranches([]) 让空守卫跳过瞬态写。顺手修 Minor 1（tag 泳道
+  菜单隐藏 relatedOnly）、2b（开仓清空 custom 日期串）、3（saveSelection
+  吞错路径 throwing-stub 测试）、N1（persist 注释纠偏，防据旧注释"修复"
+  App 空守卫）。mock 注入 synthetic/ref-only 钉子泳道（ref 挂他人泳道
+  可见提交、自身零自有提交）+ synthetic/tag（fixture 无 tag 泳道，菜单
+  回归无物可右键，同法合成）。E2E：'all' 下钉子以常规 lane-chip 呈现
+  （非痕迹行，Archived 500/Dormant 450 均不含它）；本月视图面板
+  Archived(500)/Dormant(451)、Enabled 976→27、header chips 无窗外泳道、
+  点钉子 chip 即回画布空行（痕迹 Dormant 451→450、面板仍列且打勾）、
+  组展开 500 全覆盖（rail 28→528）再收起复原；回 'all' Dormant 回 450、
+  钉子回 Enabled(28)；tag 菜单 3 项（relatedOnly 消失）、普通菜单仍
+  4 项、Remotes 往返 badge 1↔0；全程 console 零错误。
 
 ## Decisions
 
@@ -123,3 +144,20 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   （review Minor #3 的爆炸半径论证）；与兄弟 fork 排除同一原则——共享基座的
   其他故事不属于受检分支。正向 mergeTarget 仍是 core 内每条泳道单跳（收
   闭包成员的去向），merge 边永不链式传递。
+- 面板镜像走 emptyLaneDead 返回 InactiveInfo 形状：dead 排除
+  expandedDead（chip 展开即让泳道以空行回画布），groups 保留全部
+  range-dead 泳道**含展开成员**（面板打勾）——与 computeInactive 的展开
+  语义（inactive.ts:112-116）对齐。App 侧 mergedGroups 按名去重是必须的：
+  同一泳道可同时在两个 map（自有提交全落窗外 AND 时效判死），两者分类是
+  同一三元式（merged_into ? archived : dormant），先见者胜。排序只在显示
+  层做（byActivity 依赖 refActivity，声明在后，TDZ 铁律）。
+- 'all' 守卫（C1）：emptyLaneDead 只在日期窗口激活时运行。真实仓库存在
+  无自有提交的非 tag 泳道（release/v1.x 式 ref-only 泳道、全史在加载窗外
+  的 stale 泳道），'all' 下击沉即不可恢复——沉入痕迹行却无 bar（无跨度）、
+  面板无 chip，重走 filterByBranches 重建后同样被再击沉；违反 arc 不变量
+  2（'all' 必须与 arc 前逐字节一致）。
+- 换仓 setSelectedBranches([])（I2）：setLatestRepo(新路径) 先于
+  await getBranchList() 落帧，保存 effect 会以（新路径, 旧仓策展集）写
+  一次——跨仓覆灭新仓的持久化集，随后的恢复读到的是被覆写后的 key。换
+  key 同批清空选择让空守卫跳过瞬态写；handleOpenLatestRepo 无此窗口
+  （latestRepo 不变），不改。

@@ -1316,9 +1316,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           <button onClick={() => { onViewFromBranch(laneMenu.lane.name); setLaneMenu(null); }}>
             {t('viewFromBranch')}
           </button>
-          <button onClick={() => { onRelatedBranch(laneMenu.lane.name); setLaneMenu(null); }}>
-            {t('relatedOnly')}
-          </button>
+          {/* Tag lanes have no blood-line of their own: the closure degrades
+              to main-only, and relatedOnly destructively REPLACES the whole
+              selection -- not worth an entry point for a meaningless target. */}
+          {!laneMenu.lane.is_tag && (
+            <button onClick={() => { onRelatedBranch(laneMenu.lane.name); setLaneMenu(null); }}>
+              {t('relatedOnly')}
+            </button>
+          )}
         </div>
       )}
 

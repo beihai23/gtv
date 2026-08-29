@@ -114,18 +114,26 @@ function App() {
   // so mixing views from different snapshots would misplace rows. `view` is
   // the display copy handed to Timeline; `inactive.groups` still lists
   // user-expanded lanes (checked state) even though they left `dead`.
-  // Declared above the handlers because expandTraceGroup/handleLocate close
-  // over `inactive`.
+  // Declared above the handlers because expandTraceGroup (via mergedGroups)
+  // and handleLocate close over `inactive`.
   const rangedData = useMemo(
     () => (gitData ? applyDateRange(gitData, dateRange) : null),
     [gitData, dateRange],
   );
-  // Non-tag lanes the window emptied out. Unioned ON TOP of the freshness
-  // rule below: range-empty wins -- a lane active by wall-clock but empty
-  // inside the window is still noise in this view.
-  const rangeDead = useMemo(
-    () => (rangedData ? emptyLaneDead(rangedData) : new Map<string, DeadKind>()),
-    [rangedData],
+  // Non-tag lanes the window emptied out, in computeInactive's InactiveInfo
+  // shape so the panel groups can mirror them (dead for the canvas union,
+  // groups for the panel chips). Computed only while a window is ACTIVE:
+  // under 'all' it must never run -- real repos carry non-tag lanes with no
+  // own loaded commits (release/v1.x-style ref-only lanes, stale lanes whose
+  // whole history sits outside the load window), and sinking those would
+  // make them unrecoverable and diverge the default view from its pre-arc
+  // behavior (arc invariant 2: 'all' is byte-identical to before).
+  // Unioned ON TOP of the freshness rule below: range-empty wins -- a lane
+  // active by wall-clock but empty inside the window is still noise in this
+  // view.
+  const rangeEmpty = useMemo(
+    () => (dateRange.kind !== 'all' && rangedData ? emptyLaneDead(rangedData, expandedDead) : null),
+    [dateRange.kind, rangedData, expandedDead],
   );
   const inactive = useMemo(
     () => (rangedData ? computeInactive(rangedData, inactiveDays, expandedDead) : null),
@@ -133,9 +141,9 @@ function App() {
   );
   const dead = useMemo(() => {
     const m = new Map(inactive?.dead ?? []);
-    for (const [k, v] of rangeDead) m.set(k, v);
+    for (const [k, v] of rangeEmpty?.dead ?? []) m.set(k, v);
     return m;
-  }, [inactive, rangeDead]);
+  }, [inactive, rangeEmpty]);
   const view = useMemo(
     () => (rangedData ? collapseLanes(rangedData, dead) : null),
     [rangedData, dead],
@@ -167,12 +175,28 @@ function App() {
     // Whole chosen day: without +86399 the "To" day's own mid-day commits drop out, contradicting presets (anchored at the newest mid-day ts, which keeps that day).
     end: to ? Math.floor(new Date(to).getTime() / 1000) + 86399 : maxLoadedTs,
   });
+  // Merged dead groups: freshness rule + range-empty lanes, name-deduped.
+  // Same lane can sit in both maps (own commits all outside the window AND
+  // stale by wall clock) -- classification is identical (merged_into ?
+  // archived : dormant), so first occurrence wins.
+  const mergedGroups = useMemo(() => {
+    const merge = (kind: 'archived' | 'dormant'): BranchLane[] => {
+      const seen = new Set<string>();
+      const out: BranchLane[] = [];
+      for (const l of [...(inactive?.groups[kind] ?? []), ...(rangeEmpty?.groups[kind] ?? [])]) {
+        if (seen.has(l.name)) continue;
+        seen.add(l.name); out.push(l);
+      }
+      return out;
+    };
+    return { archived: merge('archived'), dormant: merge('dormant') };
+  }, [inactive, rangeEmpty]);
   const allDeadNames = useMemo(() => {
     const s = new Set<string>();
-    for (const l of inactive?.groups.archived ?? []) s.add(l.name);
-    for (const l of inactive?.groups.dormant ?? []) s.add(l.name);
+    for (const l of mergedGroups.archived) s.add(l.name);
+    for (const l of mergedGroups.dormant) s.add(l.name);
     return s;
-  }, [inactive]);
+  }, [mergedGroups]);
 
   // Fetch patch links when the Copies toggle is on and a repo is loaded.
   useEffect(() => {
@@ -252,13 +276,21 @@ function App() {
         setSelectedCommit(null);
         setExpandedDead(new Set());
         setViewResetKey(k => k + 1);
-        // A freshly opened repo never inherits the previous one's window.
+        // A freshly opened repo never inherits the previous one's window
+        // (nor its typed Custom date strings).
         setDateRange({ kind: 'all' });
+        setCustomFrom('');
+        setCustomTo('');
 
         const path = await getCurrentPath();
         if (path) {
           localStorage.setItem(LATEST_REPO_KEY, path);
           setLatestRepo(path);
+          // The OLD repo's selection must never be written under the NEW
+          // repo's key: setLatestRepo lands before the await below, and the
+          // save effect would fire with (newPath, oldSelection) across the
+          // batching boundary.
+          setSelectedBranches([]);
         }
 
         const branches = await getBranchList();
@@ -297,6 +329,8 @@ function App() {
       setViewResetKey(k => k + 1);
       // Same session-window reset as the picker path above.
       setDateRange({ kind: 'all' });
+      setCustomFrom('');
+      setCustomTo('');
 
       const branches = await getBranchList();
       setBranchList(branches);
@@ -435,7 +469,7 @@ function App() {
   // click collapses them all back into the trace row.
   const expandTraceGroup = useCallback((kind: DeadKind) => {
     setExpandedDead(prev => {
-      const group = inactive?.groups[kind] ?? [];
+      const group = mergedGroups[kind];
       const collapse = group.length > 0 && group.every(l => prev.has(l.name));
       const next = new Set(prev);
       for (const l of group) {
@@ -443,16 +477,16 @@ function App() {
       }
       return next;
     });
-  }, [inactive]);
+  }, [mergedGroups]);
 
   // Action label follows the toggle state ("Collapse" once every lane of the
   // group is expanded). One helper feeds both the panel group buttons and
   // Timeline's trace-chip titles, so they can never disagree.
   const traceGroupLabel = useCallback((kind: DeadKind) => {
-    const group = inactive?.groups[kind] ?? [];
+    const group = mergedGroups[kind];
     const expanded = group.length > 0 && group.every(l => expandedDead.has(l.name));
     return t(expanded ? 'collapseGroup' : 'expandGroup');
-  }, [inactive, expandedDead, t]);
+  }, [mergedGroups, expandedDead, t]);
 
   // Latest activity time per ref (branch lane or tag), derived from the
   // loaded commits. Used to order the branch chips newest-first.
@@ -522,12 +556,12 @@ function App() {
   const byActivity = (a: BranchLane, b: BranchLane) =>
     (refActivity.get(b.name) ?? 0) - (refActivity.get(a.name) ?? 0);
   const panelArchived = useMemo(
-    () => [...(inactive?.groups.archived ?? [])].sort(byActivity),
-    [inactive, refActivity]
+    () => [...mergedGroups.archived].sort(byActivity),
+    [mergedGroups, refActivity]
   );
   const panelDormant = useMemo(
-    () => [...(inactive?.groups.dormant ?? [])].sort(byActivity),
-    [inactive, refActivity]
+    () => [...mergedGroups.dormant].sort(byActivity),
+    [mergedGroups, refActivity]
   );
 
   // Header search results: instant loaded-range matches merged with the
