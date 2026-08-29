@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455, 3ef3797]
+commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455, 3ef3797, 8c92136]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -90,6 +90,30 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
 - 复审改判（review Important，Task 5 deviation 4）：自定义 end 只取所选日
   UTC 零点是真缺陷——「止」当天的日内时间戳提交全被排除，而 preset 锚定
   最新日内 ts、含当天，两类范围自相矛盾；修为 +86399 闭到当日末秒。
+- Task 6（mock 增强 + E2E 全量验收）：mock filter_by_branches 从「原样
+  返回」改为按 lane_owner/名称/双端可见边裁剪——契约近似（真实后端重走
+  血缘并重排 lane_index，mock 保 dump index 留空洞，注释写明）；空
+  names → 空视图（零种子零提交）。另在前 3 泳道（main/feat1/feat2）tip
+  注入 origin/<name> is_remote 合成 ref（fixture 无远端 ref）。E2E 四特性
+  全过、console 全程零错误：2.1 右键 now/25 闭包收缩 1477 提交/26 泳道 →
+  503/2（选择集恰为 target∪main）、面板 Disabled(974) 出现、All 复原；
+  2.2 本月 1477 → 26（fixture 时间分布所致：1451 条挤在 2025-07-24 的
+  500 秒内、400 天空洞、26 条同刻锚点——不是"数百级"但语义正确）、
+  自定义 2025-07-24 当日 1451 条、锚点日 From=To 当日 26 条（+86399 全天
+  含端在 E2E 实证，旧 UTC 零点 end 会得 0）；2.3 origin badge/tooltip/
+  详情三层随 Remotes 开关 0↔1 同步、gtv_hide_remotes 持久化往返；2.4
+  小选择集（None+3 chips）刷新重开恰好一次 filter_by_branches(3 names)
+  重建（invoke 日志实证）、全选保存 976 重开零重建无闪动。附带收获：
+  None 空视图态首次在浏览器可达（旧 mock 恒返全量把该路径掩埋）——
+  0 提交渲染无错。
+- Task 6 遗留（上报 orchestrator，未擅改 Task 4/5 接线）：日期窗口激活时
+  面板分组不随 rangeDead 重分类——画布沉痕行（Archived 500/Dormant
+  450）而面板仍 Enabled (976)/"976 refs (976 shown)"。根因：dead 并集
+  （inactive.dead ∪ rangeDead）只喂 collapseLanes，面板分组的
+  allDeadNames 读 inactive.groups，看不到 rangeDead。且 emptyLaneDead
+  不认 expandedDead——对窗口清空的泳道，"展开"痕迹 chip 本就是空操作，
+  疑为 Task 5 有意留出的接缝（其评审放行该 memo 结构）；是否将窗口清空
+  泳道挪进面板 Archived/Dormant 组属 Task 4/5 语义裁决，本任务不越权。
 
 ## Decisions
 
