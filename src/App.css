@@ -681,6 +681,21 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: rgba(233, 30, 99, 0.25);
 }
 
+/* --- date-range select + custom inputs (M2.2) --- */
+/* Form controls carry platform chrome that clashes with the pill row:
+   inherit the app font and keep the pill colors. Row height comes from
+   the flex container's default stretch, same as the sibling buttons. */
+.date-select,
+.date-input {
+  font-family: inherit;
+  padding: 0 10px;
+  background-color: rgba(var(--bg-canvas-rgb), 0.85);
+}
+/* Compact the date pickers (default width would dominate the toolbar) and
+   follow the app theme for the native calendar-picker icon. */
+.date-input { width: 122px; color-scheme: dark; }
+:root[data-theme='github-light'] .date-input { color-scheme: light; }
+
 /* --- minimap (bottom-right overlay) --- */
 .minimap {
   position: absolute;

@@ -9,6 +9,9 @@ import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
+import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
+import type { DateRange } from './daterange';
+import { saveSelection, loadSelection, restoreSelection } from './persist';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
@@ -86,6 +89,14 @@ function App() {
   const [showMergeLinks, setShowMergeLinks] = useState(true);
   const [showRefLabels, setShowRefLabels] = useState(true);
   const [fitSignal, setFitSignal] = useState(0);
+  // Date-range window (M2.2): pure display state, session-only -- never
+  // persisted, and both repo-open handlers reset it to 'all' so a fresh
+  // repo never inherits the previous one's window. The Custom inputs keep
+  // their own 'YYYY-MM-DD' strings so switching presets and back never
+  // loses what the user typed.
+  const [dateRange, setDateRange] = useState<DateRange>({ kind: 'all' });
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   // Cherry-pick / rebase copy detection (expensive: one diff per commit),
   // computed on demand when the toggle is switched on.
   const [showPatchLinks, setShowPatchLinks] = useState(false);
@@ -97,21 +108,64 @@ function App() {
 
   const [latestRepo, setLatestRepo] = useState<string | null>(null);
 
-  // Inactive-lane pipeline. Both memos MUST derive from the same gitData
-  // snapshot: collapseLanes rewrites lane/y coordinates, so mixing views
-  // from different snapshots would misplace rows. `view` is the display
-  // copy handed to Timeline; `inactive.groups` still lists user-expanded
-  // lanes (checked state) even though they left `dead`. Declared above the
-  // handlers because expandTraceGroup/handleLocate close over `inactive`.
-  const inactive = useMemo(
-    () => (gitData ? computeInactive(gitData, inactiveDays, expandedDead) : null),
-    [gitData, inactiveDays, expandedDead],
+  // Display pipeline (M2.2 order iron rule): gitData -> applyDateRange ->
+  // computeInactive(filtered) -> dead union -> collapseLanes. collapseLanes
+  // MUST receive the applyDateRange output: it rewrites lane/y coordinates,
+  // so mixing views from different snapshots would misplace rows. `view` is
+  // the display copy handed to Timeline; `inactive.groups` still lists
+  // user-expanded lanes (checked state) even though they left `dead`.
+  // Declared above the handlers because expandTraceGroup/handleLocate close
+  // over `inactive`.
+  const rangedData = useMemo(
+    () => (gitData ? applyDateRange(gitData, dateRange) : null),
+    [gitData, dateRange],
   );
+  // Non-tag lanes the window emptied out. Unioned ON TOP of the freshness
+  // rule below: range-empty wins -- a lane active by wall-clock but empty
+  // inside the window is still noise in this view.
+  const rangeDead = useMemo(
+    () => (rangedData ? emptyLaneDead(rangedData) : new Map<string, DeadKind>()),
+    [rangedData],
+  );
+  const inactive = useMemo(
+    () => (rangedData ? computeInactive(rangedData, inactiveDays, expandedDead) : null),
+    [rangedData, inactiveDays, expandedDead],
+  );
+  const dead = useMemo(() => {
+    const m = new Map(inactive?.dead ?? []);
+    for (const [k, v] of rangeDead) m.set(k, v);
+    return m;
+  }, [inactive, rangeDead]);
   const view = useMemo(
-    () => (gitData && inactive ? collapseLanes(gitData, inactive.dead) : null),
-    [gitData, inactive],
+    () => (rangedData ? collapseLanes(rangedData, dead) : null),
+    [rangedData, dead],
+  );
+  // Ids the window dropped, from the ORIGINAL unfiltered data: arrow-key
+  // stepping skips them (focusing one would focus empty canvas) and locate
+  // demotes out-of-window remote hits onto the jump path.
+  const outOfRange = useMemo(
+    () => (gitData ? outOfRangeIds(gitData, dateRange) : NO_IDS),
+    [gitData, dateRange],
   );
   const hiddenIds = view?.hiddenIds ?? NO_IDS;
+
+  // Dropdown plumbing: the <select>'s value (presets map to their day
+  // count, 'all'/'custom' to their own option) and the Custom window
+  // builder. Empty inputs fall back (from: 0 = the beginning, to: newest
+  // loaded ts, i.e. the preset anchor) so a half-filled range never feeds
+  // NaN seconds into the pipeline.
+  const dateRangeValue =
+    dateRange.kind === 'preset' ? String(dateRange.days) : dateRange.kind;
+  const maxLoadedTs = useMemo(() => {
+    let max = 0;
+    if (gitData) for (const c of gitData.commits) if (c.timestamp > max) max = c.timestamp;
+    return max;
+  }, [gitData]);
+  const customRange = (from: string, to: string): DateRange => ({
+    kind: 'custom',
+    start: from ? Math.floor(new Date(from).getTime() / 1000) : 0,
+    end: to ? Math.floor(new Date(to).getTime() / 1000) : maxLoadedTs,
+  });
   const allDeadNames = useMemo(() => {
     const s = new Set<string>();
     for (const l of inactive?.groups.archived ?? []) s.add(l.name);
@@ -167,6 +221,25 @@ function App() {
       .catch(() => {});
   }, []);
 
+  // Rebuild the backend view for a branch subset. Declared ABOVE the
+  // repo-open handlers: they call it for the M2.4 selection restore, and a
+  // useCallback dep array is read during render, so a later declaration
+  // would be a TDZ error (the M1.3 landmine).
+  const handleFilterChange = useCallback(async (branchNames: string[]) => {
+    setSelectedBranches(branchNames);
+    setLoading(true);
+    try {
+      const data = await filterByBranches(branchNames);
+      setGitData(data);
+      loadDiffStats(data);
+    } catch (err) {
+      recordFrontendError(errText(err));
+      setError(errText(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const handleOpenRepo = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -178,16 +251,25 @@ function App() {
         setSelectedCommit(null);
         setExpandedDead(new Set());
         setViewResetKey(k => k + 1);
-        
+        // A freshly opened repo never inherits the previous one's window.
+        setDateRange({ kind: 'all' });
+
         const path = await getCurrentPath();
         if (path) {
           localStorage.setItem(LATEST_REPO_KEY, path);
           setLatestRepo(path);
         }
-        
+
         const branches = await getBranchList();
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
+        // M2.4: restore this repo's persisted focus set. handleFilterChange
+        // itself sets selectedBranches, so no duplicate set here; null ->
+        // keep the default full selection (no rebuild, no second flash).
+        if (path) {
+          const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
+          if (restored) handleFilterChange(restored);
+        }
         setSearchQuery('');
         setLocateQuery('');
         setLocateOpen(false);
@@ -199,7 +281,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [showStaleBranches]);
+  }, [showStaleBranches, handleFilterChange]);
 
   const handleOpenLatestRepo = useCallback(async () => {
     if (!latestRepo) return;
@@ -212,10 +294,17 @@ function App() {
       setSelectedCommit(null);
       setExpandedDead(new Set());
       setViewResetKey(k => k + 1);
-      
+      // Same session-window reset as the picker path above.
+      setDateRange({ kind: 'all' });
+
       const branches = await getBranchList();
       setBranchList(branches);
       setSelectedBranches(branches.map(b => b.name));
+      // M2.4: restore the persisted focus set for this repo path. null ->
+      // keep the default full selection; handleFilterChange sets
+      // selectedBranches itself.
+      const restored = restoreSelection(loadSelection(latestRepo), branches.map(b => b.name));
+      if (restored) handleFilterChange(restored);
       setSearchQuery('');
       setLocateQuery('');
       setLocateOpen(false);
@@ -228,7 +317,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [latestRepo, showStaleBranches]);
+  }, [latestRepo, showStaleBranches, handleFilterChange]);
 
   // Changing the stale-branches setting re-opens the current repo so the
   // backend session is rebuilt with the new policy.
@@ -277,21 +366,6 @@ function App() {
     setSelectedCommit(null);
   }, []);
 
-  const handleFilterChange = useCallback(async (branchNames: string[]) => {
-    setSelectedBranches(branchNames);
-    setLoading(true);
-    try {
-      const data = await filterByBranches(branchNames);
-      setGitData(data);
-      loadDiffStats(data);
-    } catch (err) {
-      recordFrontendError(errText(err));
-      setError(errText(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   // M2.1 lane-menu action: rebuild the view with only the target lane's
   // blood-line closure. The closure is computed from the RAW gitData -- the
   // display copy (view) collapses lanes and rewrites lane_index, while the
@@ -331,6 +405,17 @@ function App() {
       handleFilterChange(newSelected);
     }
   }, [selectedBranches, handleFilterChange]);
+
+  // M2.4 focus-set persistence: mirror every selection change into
+  // localStorage under the repo path (click cadence, no debounce needed).
+  // An EMPTY selection is transient session state ("None" scratch state
+  // mid-curation) and is deliberately never written -- without the guard,
+  // that scratch state would overwrite the curated set, and an empty save
+  // restores as null (full default), losing it.
+  useEffect(() => {
+    if (!latestRepo || selectedBranches.length === 0) return;
+    saveSelection(latestRepo, selectedBranches);
+  }, [latestRepo, selectedBranches]);
 
   // Dead-lane chips toggle VISIBILITY ONLY: they never go through
   // toggleBranchFilter, so the lane stays inside selectedBranches and every
@@ -448,15 +533,20 @@ function App() {
   // debounced backend hits (mergeLocate dedupes, orders, and caps). The
   // dropdown renders everything up to SEARCH_LIMIT in a scrollable list —
   // the cap is the backend's, not a "top few only" wall.
-  const locateResults = useMemo(
-    (): LocateResult[] =>
-      mergeLocate(
-        matchLoaded(gitData?.commits ?? [], gitData?.branches ?? [], locateQuery, hideRemotes),
-        remoteHits,
-        SEARCH_LIMIT,
-      ),
-    [gitData, locateQuery, remoteHits, hideRemotes],
-  );
+  const locateResults = useMemo((): LocateResult[] => {
+    // Search what you see: matchLoaded runs over the date-windowed data,
+    // so cropped commits stop matching. Remote full-history hits keep
+    // coming, but one outside the current window is demoted to in_view
+    // false and takes the existing "view from this commit" jump path.
+    const remote = dateRange.kind === 'all'
+      ? remoteHits
+      : remoteHits.map(h => ({ ...h, in_view: h.in_view && !outOfRange.has(h.id) }));
+    return mergeLocate(
+      matchLoaded(rangedData?.commits ?? [], rangedData?.branches ?? [], locateQuery, hideRemotes),
+      remote,
+      SEARCH_LIMIT,
+    );
+  }, [rangedData, dateRange, outOfRange, locateQuery, remoteHits, hideRemotes]);
 
   // With up to SEARCH_LIMIT rows, keyboard navigation must keep the
   // highlighted row inside the dropdown's scrollable area.
@@ -532,9 +622,11 @@ function App() {
       const current = gitData.commits.find(c => c.id === selectedCommit.id);
       if (!current) return;
       // Walk visible commits only: collapsed-lane commits are hidden from
-      // the canvas, so stepping into them would focus empty space.
+      // the canvas and the date window cropped the rest -- stepping into
+      // either would focus empty space.
       const lane = gitData.commits.filter(
-        c => c.lane_owner === current.lane_owner && !hiddenIds.has(c.id),
+        c => c.lane_owner === current.lane_owner
+          && !hiddenIds.has(c.id) && !outOfRange.has(c.id),
       );
       const i = lane.findIndex(c => c.id === current.id);
       const next = e.key === 'ArrowRight' ? lane[i + 1] : lane[i - 1];
@@ -546,7 +638,7 @@ function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedCommit, gitData, handleCommitClick, hiddenIds]);
+  }, [selectedCommit, gitData, handleCommitClick, hiddenIds, outOfRange]);
 
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
@@ -626,9 +718,9 @@ function App() {
           {gitData && latestRepo && (
             <h1 className="repo-name" title={latestRepo}>{latestRepo.split('/').pop()}</h1>
           )}
-          {gitData && (
+          {gitData && rangedData && (
             <span className="repo-info">
-              {gitData.main_branch} • {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: gitData.commits.length })}
+              {gitData.main_branch} • {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
             </span>
           )}
           <button
@@ -699,6 +791,59 @@ function App() {
               >
                 {t('remotes')}
               </button>
+              <select
+                className="view-btn date-select"
+                value={dateRangeValue}
+                onChange={e => {
+                  const v = e.target.value;
+                  // Switching to Custom keeps whatever dates the inputs
+                  // hold (empty strings take the fallbacks in customRange).
+                  if (v === 'custom') setDateRange(customRange(customFrom, customTo));
+                  else if (v === 'all') setDateRange({ kind: 'all' });
+                  else setDateRange({ kind: 'preset', days: Number(v) });
+                  // Re-cropping re-anchors the canvas: reset the viewport.
+                  setViewResetKey(k => k + 1);
+                }}
+              >
+                <option value="all">{t('dateAll')}</option>
+                <option value="7">{t('dateWeek')}</option>
+                <option value="30">{t('dateMonth')}</option>
+                <option value="90">{t('date3m')}</option>
+                <option value="365">{t('dateYear')}</option>
+                <option value="custom">{t('dateCustom')}</option>
+              </select>
+              {dateRange.kind === 'custom' && (
+                <>
+                  <input
+                    type="date"
+                    className="view-btn date-input"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    title={t('dateFrom')}
+                    aria-label={t('dateFrom')}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setCustomFrom(v);
+                      setDateRange(customRange(v, customTo));
+                      setViewResetKey(k => k + 1);
+                    }}
+                  />
+                  <input
+                    type="date"
+                    className="view-btn date-input"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    title={t('dateTo')}
+                    aria-label={t('dateTo')}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setCustomTo(v);
+                      setDateRange(customRange(customFrom, v));
+                      setViewResetKey(k => k + 1);
+                    }}
+                  />
+                </>
+              )}
             </div>
           )}
           <button
