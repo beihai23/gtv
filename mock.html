@@ -11,7 +11,19 @@
     // Mock Tauri v2 internals BEFORE app code runs; data from a GitData
     // dump (see docs/tools/gen_inactive_repo.sh; regenerate any repo via dump_json).
     let DATA = null;
-    const ready = fetch('/mock-data.json').then(r => r.json()).then(d => { DATA = d; });
+    const ready = fetch('/mock-data.json').then(r => r.json()).then(d => {
+      DATA = d;
+      // Synthetic remote counterparts (M2.3 acceptance): the dump has no
+      // origin/* refs at all, so the first three lanes' tip commits (by
+      // lane_index, tip = largest x) get an origin/<name> copy of their
+      // local ref with is_remote: true. Purely synthetic — a fresh dump
+      // from a real repo would carry real remote refs instead.
+      for (const lane of [...d.branches].sort((a, b) => a.lane_index - b.lane_index).slice(0, 3)) {
+        const cs = d.commits.filter(c => c.lane_owner === lane.name);
+        const tip = cs.length > 0 ? cs.reduce((a, b) => (b.x > a.x ? b : a)) : null;
+        if (tip) tip.branch_refs.push({ name: `origin/${lane.name}`, is_remote: true, is_tag: false, color: '' });
+      }
+    });
     window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => {
         await ready;
@@ -29,7 +41,25 @@
               files: [], total_additions: c.additions ?? 0, total_deletions: c.deletions ?? 0 };
           }
           case 'get_patch_links': return DATA._patch_links ?? [];
-          case 'filter_by_branches': return DATA;
+          case 'filter_by_branches': {
+            // CONTRACT APPROXIMATION of the Rust reader (git_reader.rs
+            // filter_by_branches): the real backend re-walks the selected
+            // tips' lineage and re-runs layout (dense lane_index
+            // renumbering, x rescale). The mock cannot re-run layout, so
+            // it drops rows from the precomputed dump instead: commits by
+            // lane_owner membership, branches by name, edges only when
+            // both endpoints survive. Lane indices keep their dump values
+            // (deleted rows leave holes) — enough to verify the frontend
+            // reacts to a shrunken/rehydrated view, not a pixel-faithful
+            // backend. Empty names -> empty view, matching the real
+            // zero-seeds-zero-commits semantics.
+            const names = new Set(args?.branchNames ?? []);
+            const commits = DATA.commits.filter(c => names.has(c.lane_owner));
+            const ids = new Set(commits.map(c => c.id));
+            const edges = DATA.edges.filter(e => ids.has(e.from) && ids.has(e.to));
+            const branches = DATA.branches.filter(b => names.has(b.name));
+            return { ...DATA, commits, edges, branches };
+          }
           case 'is_valid_git_repo': return true;
           case 'get_recent_logs': return ['[mock] env_logger line'];
           case 'search_commits': {
