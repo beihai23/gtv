@@ -30,7 +30,8 @@ function gitData(commits: CommitNode[], branches: BranchLane[]): GitData {
 // Master fixture: main <- A <- B on a single fork line; C forks from A too
 // (B's sibling); D forks from B and E from D (descendant chain); D merged
 // into release, and release itself merged into other (transitivity trap);
-// X merged into B (reverse direction).
+// X merged into B (reverse direction, joins); Y merged into A, Z into main
+// and W into D (reverse direction into ancestor/base/descendant: stay out).
 const master = () => gitData(
   [
     commit('m1', 0, 'main'), commit('m2', 0, 'main'), commit('m3', 0, 'main'),
@@ -42,6 +43,7 @@ const master = () => gitData(
     commit('r1', 6, 'release'), commit('r2', 6, 'release'),
     commit('x1', 7, 'X'), commit('x2', 7, 'X'),
     commit('o1', 8, 'other'),
+    commit('y1', 9, 'Y'), commit('z1', 10, 'Z'), commit('w1', 11, 'W'),
   ],
   [
     lane('main', 0),
@@ -53,6 +55,9 @@ const master = () => gitData(
     lane('release', 6, { fork_point: 'm1', merged_into: 'o1' }),
     lane('X', 7, { fork_point: 'm3', merged_into: 'b5' }),
     lane('other', 8, { fork_point: 'm1' }),
+    lane('Y', 9, { fork_point: 'm1', merged_into: 'a1' }), // merged into ancestor A
+    lane('Z', 10, { fork_point: 'm1', merged_into: 'm1' }), // merged into main itself
+    lane('W', 11, { fork_point: 'm1', merged_into: 'd1' }), // merged into descendant D
   ],
 );
 
@@ -93,12 +98,21 @@ describe('relatedLanes', () => {
     expect(out.has('other')).toBe(false); // release merged into other: no transitivity
   });
 
-  it('lanes merged INTO the closure are blood too (reverse direction)', () => {
+  it('lanes merged INTO the target are blood too (reverse direction)', () => {
     expect(relatedLanes(master(), 'B').has('X')).toBe(true); // X merged into b5 on B
   });
 
+  it('reverse-merge inclusion is target-only: ancestor, main and descendant merges stay out', () => {
+    const out = relatedLanes(master(), 'B');
+    expect(out.has('X')).toBe(true); // merged into B itself: blood
+    expect(out.has('Y')).toBe(false); // merged into A, an ancestor of B
+    expect(out.has('Z')).toBe(false); // merged into main -- on real repos everything merges into main
+    expect(out.has('W')).toBe(false); // merged into D, a descendant of B
+  });
+
   it('full closure of the master fixture is exactly the 7 blood lanes', () => {
-    // core {B, A, main, D, E} + release (D's merge target) + X (merged into B)
+    // core {B, A, main, D, E} + release (D's merge target) + X (merged into
+    // B itself); sibling C and reverse traps Y/Z/W stay out
     expect(relatedLanes(master(), 'B'))
       .toEqual(new Set(['B', 'A', 'main', 'D', 'E', 'release', 'X']));
   });

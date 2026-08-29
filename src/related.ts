@@ -10,7 +10,8 @@ import type { BranchLane, GitData } from './types';
 
 /** Lane blood-line closure (spec 4.1): target + fork up-chain (single
  *  line, no siblings) + fork descendants (branching down) + one-hop
- *  mergeTarget of every lane in that set + main_branch always. */
+ *  merge edges (mergeTarget of every lane in the set; lanes merged into
+ *  the TARGET join, target only) + main_branch always. */
 export function relatedLanes(data: GitData, target: string): Set<string> {
   const realLanes = data.branches.filter(b => !b.is_tag);
   const laneByName = new Map(realLanes.map(l => [l.name, l]));
@@ -59,12 +60,17 @@ export function relatedLanes(data: GitData, target: string): Set<string> {
     }
   }
 
-  // Merge relations, ONE hop in both directions and never transitive:
-  // forward adds where a core lane merged into (its tip lives in that
-  // lane's history); reverse adds lanes merged INTO a core lane (their
-  // tips live in the core lane's history, hence blood). Lanes joined only
-  // via a merge edge contribute no further closure -- a merge target's own
-  // merge target stays out.
+  // Merge relations, ONE hop and never transitive, in both directions:
+  // forward adds where any core lane merged into (its tip lives in that
+  // lane's history); reverse adds lanes merged into the TARGET lane only
+  // -- sub-features folded into the inspected branch are its story, while
+  // lanes merged into an ancestor or a descendant are other stories
+  // sharing the base (same principle as sibling-fork exclusion; solo
+  // display already absorbs their commits via layout fallback). Target-
+  // only is also what keeps the closure bounded: on real repos nearly
+  // every merged lane points at main, so an ancestor-wide reverse scan
+  // would include the whole repo. Merge edges never chain: a merge
+  // target's own merge target stays out too.
   const out = new Set<string>(core);
   out.add(data.main_branch); // fork chains truncated by the window end here
   for (const name of core) {
@@ -72,8 +78,7 @@ export function relatedLanes(data: GitData, target: string): Set<string> {
     if (t) out.add(t.name);
   }
   for (const l of realLanes) {
-    const t = laneOwning(l.merged_into);
-    if (t && core.has(t.name)) out.add(l.name);
+    if (laneOwning(l.merged_into)?.name === target) out.add(l.name);
   }
   return out;
 }
