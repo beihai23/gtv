@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb]
+commits: [190df0a, 88393c2, e2cd6cb, 732b351]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -28,6 +28,14 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   子孙）判定，而非仅 target——并入 target 祖先的分支其 tip 同样落在血史里；
   计划只钉了 target 这一情形，此为语义外推，Task 4 接线时留意是否过宽。
   断言计数无翻车（M1.3 教训生效：全集 7、最小 3、截断 3、防御 1、tag 2）。
+- 复审改判（review Minor #3，fix 提交）：上条"整条 core 判定"的初判被推翻——
+  main 几乎总在闭包里（兜底 + 上链终点），真实仓库几乎所有已合并分支的
+  merged_into 都指向 main，core 级反扫会把大半个仓库拉进闭包，M2.1 的目的
+  落空。终版：反向并入只对 target 泳道判定（并入受检分支的子特性是它的
+  故事；并入祖先/main/子孙的是共享基座的其他故事，与兄弟 fork 排除同理；
+  误归属无虞——solo 展示（双击 chip）的 layout 回退本就把这类提交算进
+  所在泳道）。master fixture 加 Y/Z/W 三条反向陷阱（并入 A / 并入 main /
+  并入 D 均不进），全集断言仍恰为 7 条；TDD 先红（旧实现收 10 条）后绿。
 - Task 2（daterange.ts）：TDD 先红（模块未建，39 旧用例不受影响）后绿，9
   用例按清单全数落地。简报用例 2 的示意数字内部矛盾：ts {100..900} 配
   days=1 时窗口 [900−86400, 900] 起点为负，任何正 ts 都在窗内，"ts=5 被滤
@@ -37,14 +45,20 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   同数据重排行的约束，日期窗口是数据级裁剪，纯平移保 px/day 密度，刻度尺
   分段插值自洽。gap 只裁 x 不动 t_start/t_end——刻度尺 inGap 判定读时间
   字段，保留原始时间跨度才不误导。
-- 复审改判（review Minor #3，fix 提交）：上条"整条 core 判定"的初判被推翻——
-  main 几乎总在闭包里（兜底 + 上链终点），真实仓库几乎所有已合并分支的
-  merged_into 都指向 main，core 级反扫会把大半个仓库拉进闭包，M2.1 的目的
-  落空。终版：反向并入只对 target 泳道判定（并入受检分支的子特性是它的
-  故事；并入祖先/main/子孙的是共享基座的其他故事，与兄弟 fork 排除同理；
-  误归属无虞——solo 展示（双击 chip）的 layout 回退本就把这类提交算进
-  所在泳道）。master fixture 加 Y/Z/W 三条反向陷阱（并入 A / 并入 main /
-  并入 D 均不进），全集断言仍恰为 7 条；TDD 先红（旧实现收 10 条）后绿。
+- Task 3（refs.ts + persist.ts + hideRemotes）：TDD 先红（两模块未建，48 旧
+  用例不受影响）后绿，13 用例 = refs 2 + persist 11。清单只要求 ≥7，补的
+  四例：空数组显式保存的往返（"全不选"是真选择）、key 格式 `gtv_branch_sel:
+  <repoPath>` 钉死（Task 4/5 依赖该持久化契约）、非 JSON 垃圾、saved 顺序
+  打乱验证输出按 available 排序。
+- persist 的 localStorage 在 vitest（node 环境）不存在：persist.ts 惰性经
+  globalThis 取 storage、读写全程 try/catch（save 失败静默 best-effort，
+  load 任何脏数据——缺失/非 JSON/非字符串数组——一律 null）；测试用
+  vi.stubGlobal 注入 Map 桩（beforeEach 装、afterEach 卸，unstubAllGlobals
+  还原原始描述符，不惧未来 node 自带 storage）。
+- hideRemotes 照抄 showStaleBranches 模式，仅默认值方向相反：初始化
+  `=== '1'`（默认 false = 现状显示），而 showStale 是 `!== '0'`（默认
+  true）。filterRefs 在 false 时返回原数组引用保下游 memo 身份——与
+  daterange 'all' 的 toBe 先例同一原则。
 
 ## Decisions
 
