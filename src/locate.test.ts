@@ -63,6 +63,42 @@ describe('matchLoaded', () => {
     expect(matchLoaded(commits(), [lane('main')], '')).toHaveLength(0);
     expect(matchLoaded(commits(), [lane('main')], '   ')).toHaveLength(0);
   });
+
+  it('remote-only ref name matches by default, drops out with hideRemotes', () => {
+    // 'origin/ghost' exists ONLY as an is_remote ref -- no lane of that name.
+    const remoteOnly = () => [
+      commit({
+        id: 'c0ffee0000000000000000000000000000000000',
+        lane_owner: 'main', x: 5,
+        branch_refs: [{ name: 'origin/ghost', is_remote: true, is_tag: false, color: '#f00' }],
+      }),
+    ];
+    const shown = matchLoaded(remoteOnly(), [lane('main')], 'ghost');
+    const branchHits = shown.filter(r => r.kind === 'branch');
+    expect(branchHits).toHaveLength(1);
+    expect(branchHits[0]).toMatchObject({ kind: 'branch', name: 'origin/ghost' });
+
+    const hidden = matchLoaded(remoteOnly(), [lane('main')], 'ghost', true);
+    expect(hidden.filter(r => r.kind === 'branch')).toHaveLength(0);
+  });
+
+  it('same-named local lane still matches with hideRemotes (laneTip path untouched)', () => {
+    // Lane 'ghost' carries only the remote ref 'origin/ghost': hiding remotes
+    // must remove the ref hit but keep the lane-name hit.
+    const data = () => [
+      commit({
+        id: 'abad1dea00000000000000000000000000000000',
+        lane_owner: 'ghost', x: 5,
+        branch_refs: [{ name: 'origin/ghost', is_remote: true, is_tag: false, color: '#f00' }],
+      }),
+    ];
+    const shown = matchLoaded(data(), [lane('ghost')], 'ghost');
+    expect(shown.filter(r => r.kind === 'branch').map(r => r.kind === 'branch' ? r.name : '')).toEqual(['ghost', 'origin/ghost']);
+
+    const hidden = matchLoaded(data(), [lane('ghost')], 'ghost', true);
+    const names = hidden.filter(r => r.kind === 'branch').map(r => r.kind === 'branch' ? r.name : '');
+    expect(names).toEqual(['ghost']);
+  });
 });
 
 describe('mergeLocate', () => {

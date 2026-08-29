@@ -9,6 +9,7 @@ import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
+import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
 import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
@@ -39,7 +40,7 @@ function errText(err: unknown): string {
 }
 
 function App() {
-  const { t, showStaleBranches, inactiveDays } = useSettings();
+  const { t, showStaleBranches, inactiveDays, hideRemotes, setHideRemotes } = useSettings();
   const [gitData, setGitData] = useState<GitData | null>(null);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -291,6 +292,15 @@ function App() {
     }
   }, []);
 
+  // M2.1 lane-menu action: rebuild the view with only the target lane's
+  // blood-line closure. The closure is computed from the RAW gitData -- the
+  // display copy (view) collapses lanes and rewrites lane_index, while the
+  // walk needs the full window structure; names are stable either way.
+  const handleRelatedBranch = useCallback((name: string) => {
+    if (!gitData) return;
+    handleFilterChange([...relatedLanes(gitData, name)]);
+  }, [gitData, handleFilterChange]);
+
   const handleViewFromBranch = useCallback(async (branchName: string) => {
     setLoading(true);
     setError(null);
@@ -441,11 +451,11 @@ function App() {
   const locateResults = useMemo(
     (): LocateResult[] =>
       mergeLocate(
-        matchLoaded(gitData?.commits ?? [], gitData?.branches ?? [], locateQuery),
+        matchLoaded(gitData?.commits ?? [], gitData?.branches ?? [], locateQuery, hideRemotes),
         remoteHits,
         SEARCH_LIMIT,
       ),
-    [gitData, locateQuery, remoteHits],
+    [gitData, locateQuery, remoteHits, hideRemotes],
   );
 
   // With up to SEARCH_LIMIT rows, keyboard navigation must keep the
@@ -682,6 +692,13 @@ function App() {
               >
                 {t('fit')}
               </button>
+              <button
+                className={`view-btn ${hideRemotes ? 'active' : ''}`}
+                onClick={() => setHideRemotes(!hideRemotes)}
+                title={t('remotesTip')}
+              >
+                {t('remotes')}
+              </button>
             </div>
           )}
           <button
@@ -805,6 +822,7 @@ function App() {
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
               onViewFromBranch={handleViewFromBranch}
+              onRelatedBranch={handleRelatedBranch}
               compressed={compressed}
               showMergeLinks={showMergeLinks}
               showRefLabels={showRefLabels}

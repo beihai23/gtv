@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
-import type { GitData, BranchLane, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
+import type { GitData, BranchLane, BranchRef, CommitNode, CommitEdge, TimeGap, PatchLink } from '../types';
 import { useSettings, cssVar } from '../settings';
+import { filterRefs } from '../refs';
 import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 import { LANE_HEIGHT } from '../inactive';
 import type { TraceRow, TraceBar, DeadKind } from '../inactive';
@@ -14,6 +15,9 @@ interface TimelineProps {
   resetKey: number;
   /** "View from this branch" (lane context menu). */
   onViewFromBranch: (branchName: string) => void;
+  /** "Only related branches" (lane context menu): rebuild the view with
+   *  just this lane's blood-line closure (spec 4.1). */
+  onRelatedBranch: (branchName: string) => void;
   /** View options lifted to the app header. */
   compressed: boolean;
   showMergeLinks: boolean;
@@ -58,6 +62,9 @@ interface BadgePill {
 
 interface BadgeSpec {
   c: CommitNode;
+  /** Refs AFTER the remote filter -- the pill list AND the full-name
+   *  <title> both derive from this filtered list (no ghost counts). */
+  refs: BranchRef[];
   names: BadgePill[];
   level: number;
 }
@@ -68,8 +75,8 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel }: TimelineProps) {
-  const { t, theme, lang } = useSettings();
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel }: TimelineProps) {
+  const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
@@ -770,12 +777,16 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       const LEVEL_H = 40;
       const MAX_LEVEL = 3;
       const specs: BadgeSpec[] = [];
+      // Remote-ref filter runs FIRST (spec 4.3): slice(0, 2), the "+N" count
+      // and the full-name <title> all derive from the FILTERED list -- a
+      // hidden remote must never leave a "+1" pill with nothing behind it.
       const withRefs = visibleCommits
-        .filter(c => c.branch_refs.length > 0)
-        .sort((a, b) => a.x - b.x);
-      for (const c of withRefs) {
-        const shown = c.branch_refs.slice(0, 2);
-        const extra = c.branch_refs.length - shown.length;
+        .map(c => ({ c, refs: filterRefs(c.branch_refs, hideRemotes) }))
+        .filter(e => e.refs.length > 0)
+        .sort((a, b) => a.c.x - b.c.x);
+      for (const { c, refs } of withRefs) {
+        const shown = refs.slice(0, 2);
+        const extra = refs.length - shown.length;
         const names: BadgePill[] = shown.map(r => ({ name: r.name, is_tag: r.is_tag }));
         if (extra > 0) names.push({ name: `+${extra}`, is_tag: false });
         const width = Math.max(...names.map(n => pillW(n.name)));
@@ -796,7 +807,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           }
         }
         if (level < 0) continue;
-        specs.push({ c, names, level });
+        specs.push({ c, refs, names, level });
       }
       const badgeGroups = g.selectAll('.ref-badges')
         .data(specs)
@@ -807,7 +818,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
         .attr('opacity', s => laneOpacity(s.c.lane_owner));
       badgeGroups.each(function (s) {
         const grp = d3.select(this);
-        grp.append('title').text(s.c.branch_refs.map(r => r.name).join('\n'));
+        grp.append('title').text(s.refs.map(r => r.name).join('\n'));
         // Connector pin from the pill stack down to its commit node — without
         // it, badges lifted to higher levels look detached from their commit.
         const dropY = 8 + s.level * LEVEL_H;
@@ -1173,7 +1184,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes]);
 
   useEffect(() => {
     draw();
@@ -1262,6 +1273,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     return () => node.removeEventListener('wheel', onWheel);
   }, []);
 
+  // Tooltip chips share the badge filter (spec 4.3): the chip list derives
+  // from the FILTERED refs and the whole row hides when nothing survives.
+  const hoveredRefs = hoveredCommit ? filterRefs(hoveredCommit.branch_refs, hideRemotes) : [];
+
   return (
     <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
       <svg ref={svgRef}></svg>
@@ -1301,6 +1316,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           <button onClick={() => { onViewFromBranch(laneMenu.lane.name); setLaneMenu(null); }}>
             {t('viewFromBranch')}
           </button>
+          <button onClick={() => { onRelatedBranch(laneMenu.lane.name); setLaneMenu(null); }}>
+            {t('relatedOnly')}
+          </button>
         </div>
       )}
 
@@ -1319,9 +1337,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
               <span className="diff-del">−{hoveredCommit.deletions}</span>
             </div>
           )}
-          {hoveredCommit.branch_refs.length > 0 && (
+          {hoveredRefs.length > 0 && (
             <div className="tooltip-branches">
-              {hoveredCommit.branch_refs.map((ref, i) => (
+              {hoveredRefs.map((ref, i) => (
                 <span key={i} className={`tooltip-tag ${ref.is_tag ? 'tag-tag' : 'tag-branch'}`}>
                   {ref.name}
                 </span>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { CommitDetail } from '../types';
 import { getFileDiff } from '../api';
 import { useSettings } from '../settings';
+import { filterRefs } from '../refs';
 
 interface CommitDetailsProps {
   commit: CommitDetail | null;
@@ -14,7 +15,7 @@ interface FileDiffState {
 }
 
 export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
-  const { t } = useSettings();
+  const { t, hideRemotes } = useSettings();
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
@@ -27,6 +28,10 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
   }, [commitId]);
 
   if (!commit) return null;
+
+  // Chips share the badge/tooltip filter (spec 4.3): the panel derives from
+  // the FILTERED refs; the whole row hides when nothing survives.
+  const shownRefs = filterRefs(commit.branch_refs, hideRemotes);
 
   const date = new Date(commit.timestamp * 1000);
   const timeAgo = getTimeAgo(commit.timestamp, t);
@@ -78,11 +83,11 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
           <span className="value">{date.toLocaleString()} ({timeAgo})</span>
         </div>
 
-        {commit.branch_refs.length > 0 && (
+        {shownRefs.length > 0 && (
           <div className="detail-row">
             <span className="label">{t('branches')}</span>
             <div className="tags">
-              {commit.branch_refs.map((ref, i) => (
+              {shownRefs.map((ref, i) => (
                 <span key={i} className={`tag ${ref.is_tag ? 'tag-tag' : 'tag-branch'}`}>
                   {ref.name}
                 </span>

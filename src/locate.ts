@@ -17,11 +17,14 @@ export type LocateResult =
 /** Matches over the loaded view. Branch-name substring (any length, the
  *  long-standing behavior), hash prefix (>= 4 hex), and — new — subject or
  *  author substring (>= 2 chars, matching the backend's noise threshold).
- *  Commit hits are newest-first. */
+ *  Commit hits are newest-first. hideRemotes (spec 4.3) skips is_remote refs
+ *  when building the ref-name targets -- remote-only names stop matching,
+ *  while same-named LOCAL lanes still hit through the untouched laneTip map. */
 export function matchLoaded(
   commits: CommitNode[],
   branches: BranchLane[],
   query: string,
+  hideRemotes = false,
 ): LocateResult[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -31,6 +34,7 @@ export function matchLoaded(
   const laneTip = new Map<string, { id: string; x: number }>();
   for (const c of commits) {
     for (const r of c.branch_refs) {
+      if (hideRemotes && r.is_remote) continue;
       if (!r.is_tag && !refTarget.has(r.name)) refTarget.set(r.name, c.id);
     }
     const lt = laneTip.get(c.lane_owner);
