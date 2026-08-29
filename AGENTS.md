@@ -94,8 +94,9 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, e.g. `src/inactive.test.ts`, `src/locate.test.ts`); all other
-automated testing lives in Rust.
+(`npm test`, 65 cases: `src/inactive.test.ts`, `src/locate.test.ts`,
+`src/related.test.ts`, `src/daterange.test.ts`, `src/refs.test.ts`,
+`src/persist.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy
 

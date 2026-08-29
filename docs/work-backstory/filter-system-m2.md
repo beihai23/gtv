@@ -1,8 +1,8 @@
 ---
 arc: filter-system-m2
 started: 4dcc5fe
-status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455, 3ef3797, 8c92136]
+status: resolved
+commits: [190df0a, 88393c2, 7f73b37, e2cd6cb, 4986429, 732b351, b5b438a, 8da6c0d, c54208f, 4688455, 0bc938f, 3ef3797, d0edd70, 8c92136, ae63b11, 6d6cacf]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -161,3 +161,33 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   一次——跨仓覆灭新仓的持久化集，随后的恢复读到的是被覆写后的 key。换
   key 同批清空选择让空守卫跳过瞬态写；handleOpenLatestRepo 无此窗口
   （latestRepo 不变），不改。
+
+## Lessons
+
+- 预裁定修法草图要经得起消费点全量扫描：I1 草图漏了 expandTraceGroup/
+  traceGroupLabel（grep 旧数据源的全部消费者，不止显眼的那几处），"两个
+  dead map 天然近乎不相交"的括注凭直觉下断言——自有提交全落窗外的泳道
+  同时在两 map，分类还是同一三元式，去重是必须的。终审两处纠偏都对。
+- C1 的 mock 盲区：fixture 恰好 0 条"无自有提交泳道"，默认路径的行为偏
+  离全程 E2E 不可见。"基线态与 arc 前逐字节一致"这类不变量不能靠 fixture
+  运气，要在接线点用守卫显式保证，并在 fixture 里合成对抗形态（ref-only
+  钉子泳道）让它可被测到。
+- React 批处理边界即持久化脏写窗口：persisted key 的 setState 与新值的
+  setState 之间隔着 await，effect 就可能以（新 key, 旧 value）触发一次写。
+  换 key 的同一批里清空值，让守卫跳过瞬态写。
+- 简报里的 E2E 期望值要回查 fixture 真态再落笔：本 arc 两次翻车——"数百级"
+  （实际 26，时间分布所致）与"'all' 下面板回 Enabled(976)"（'all' 下时效
+  组本就存在，Enabled 实为 28）。期望值写错会把正确的实现误判为失败。
+
+## Related
+
+- 核心改动：`src/related.ts`（血缘闭包）、`src/daterange.ts`
+  （applyDateRange/emptyLaneDead/outOfRangeIds）、`src/refs.ts`
+  （filterRefs）、`src/persist.ts`（选择集持久化）、`src/App.tsx`（管道
+  重排 + 面板镜像 + 右键/恢复接线）、`src/components/Timeline.tsx`
+  （lane-menu 第四项 + badge 过滤）、`src/components/CommitDetails.tsx`、
+  `src/locate.ts`（matchLoaded 第 4 参）、`src/settings.tsx`
+  （hideRemotes + 11 个 i18n 键）、`src/App.css`、`mock.html`
+- 测试：`src/related.test.ts`（11）、`src/daterange.test.ts`（10）、
+  `src/refs.test.ts`（2）、`src/persist.test.ts`（12），前端合计 65；
+  设计文档 `docs/superpowers/specs/2026-08-29-m2-filter-system-design.md`
