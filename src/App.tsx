@@ -853,7 +853,11 @@ function App() {
                       <button
                         key={r.kind === 'branch' ? `b:${r.name}` : `c:${r.id}`}
                         className={`locate-item ${i === locateIndex ? 'active' : ''}`}
-                        onMouseDown={(e) => { e.preventDefault(); handleLocate(r); }}
+                        // Single click / hover = preview only (the highlighted
+                        // row drives the detail panel; dropdown stays open).
+                        // Double click (or Enter) = locate in the graph.
+                        onMouseDown={(e) => { e.preventDefault(); setLocateIndex(i); }}
+                        onDoubleClick={() => handleLocate(r)}
                         onMouseEnter={() => setLocateIndex(i)}
                       >
                         {r.kind === 'branch' ? (
@@ -870,11 +874,12 @@ function App() {
                         )}
                       </button>
                     ))}
-                    {remotePending && (
+                    {remotePending ? (
                       <div className="locate-footer">{t('locateSearching')}</div>
-                    )}
-                    {!remotePending && remoteHits.length >= SEARCH_LIMIT && (
+                    ) : remoteHits.length >= SEARCH_LIMIT ? (
                       <div className="locate-footer">{t('locateHitsCapped', { n: SEARCH_LIMIT })}</div>
+                    ) : (
+                      <div className="locate-footer">{t('locateHint')}</div>
                     )}
                   </div>
                 )}
