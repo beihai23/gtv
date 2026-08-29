@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { matchLoaded, mergeLocate } from './locate';
+import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
+import type { LocateResult } from './locate';
 import type { BranchLane, CommitNode, SearchHit } from './types';
 
 function commit(over: Partial<CommitNode>): CommitNode {
@@ -27,7 +28,7 @@ function hit(over: Partial<SearchHit>): SearchHit {
 }
 
 const commits = (): CommitNode[] => [
-  commit({ id: 'a1c0f00000000000000000000000000000000000', lane_owner: 'main', x: 10, message: 'Fix Login Bug', author_name: 'Alice', timestamp: 300 }),
+  commit({ id: 'a1c0f00000000000000000000000000000000000000', lane_owner: 'main', x: 10, message: 'Fix Login Bug', author_name: 'Alice', timestamp: 300 }),
   commit({ id: 'd4e5f6000000000000000000000000000000000', lane_owner: 'feat/x', x: 20, message: 'add settings', author_name: 'bob', timestamp: 200, branch_refs: [{ name: 'feat/x', is_remote: false, is_tag: false, color: '#0f0' }] }),
   commit({ id: '99990f0000000000000000000000000000000000', lane_owner: 'main', x: 30, message: 'old thing', author_name: 'Carol', timestamp: 100 }),
 ];
@@ -66,24 +67,28 @@ describe('matchLoaded', () => {
 
 describe('mergeLocate', () => {
   it('branch hits first, commit hits newest-first, deduped by id (local wins)', () => {
-    const local = matchLoaded(commits(), [lane('feat/x')], 'login');
+    const DUP_ID = 'a1c0f00000000000000000000000000000000000000'; // one oid, in local AND remote
+    const local: LocateResult[] = [
+      { kind: 'branch', name: 'feat/x', color: '#0f0', commitId: 'd4e5f6000000000000000000000000000000000' },
+      { kind: 'commit', id: DUP_ID, message: 'Fix Login Bug', author: 'Alice', timestamp: 300, in_view: true },
+    ];
     const remote: SearchHit[] = [
-      hit({ id: 'a1c0f00000000000000000000000000000000000', message: 'Fix Login Bug', timestamp: 300 }), // dup of local
+      hit({ id: DUP_ID, message: 'Fix Login Bug', timestamp: 300 }), // dup of local
       hit({ id: 'cc00000000000000000000000000000000000000', message: 'older login fix', timestamp: 50, in_view: false }),
     ];
     const out = mergeLocate(local, remote);
-    const kinds = out.map(r => r.kind);
-    expect(kinds.indexOf('branch')).toBeLessThanOrEqual(0);
+    expect(out[0].kind).toBe('branch'); // non-vacuous: a branch hit IS present
     const cs = out.filter(r => r.kind === 'commit') as Array<{ id: string; in_view: boolean }>;
-    expect(cs.map(c => c.id)).toEqual(['a1c0f00000000000000000000000000000000000', 'cc00000000000000000000000000000000000000']);
+    expect(cs.map(c => c.id)).toEqual([DUP_ID, 'cc00000000000000000000000000000000000000']);
     expect(cs[0].in_view).toBe(true);
     expect(cs[1].in_view).toBe(false);
   });
 
-  it('caps the merged list', () => {
-    const many = Array.from({ length: 20 }, (_, i) =>
+  it(`caps the merged list at SEARCH_LIMIT (${SEARCH_LIMIT}) and honors an explicit cap`, () => {
+    const many = Array.from({ length: SEARCH_LIMIT + 30 }, (_, i) =>
       hit({ id: `f${i.toString().padStart(2, '0')}000000000000000000000000000000000000000`, timestamp: i }));
-    expect(mergeLocate([], many).length).toBeLessThanOrEqual(12);
+    expect(mergeLocate([], many).length).toBe(SEARCH_LIMIT);
+    expect(mergeLocate([], many, 5).length).toBe(5);
   });
 
   it('empty inputs', () => {

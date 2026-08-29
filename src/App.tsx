@@ -435,15 +435,43 @@ function App() {
   );
 
   // Header search results: instant loaded-range matches merged with the
-  // debounced backend hits (mergeLocate dedupes, orders, and caps).
+  // debounced backend hits (mergeLocate dedupes, orders, and caps). The
+  // dropdown renders everything up to SEARCH_LIMIT in a scrollable list —
+  // the cap is the backend's, not a "top few only" wall.
   const locateResults = useMemo(
     (): LocateResult[] =>
       mergeLocate(
         matchLoaded(gitData?.commits ?? [], gitData?.branches ?? [], locateQuery),
         remoteHits,
+        SEARCH_LIMIT,
       ),
     [gitData, locateQuery, remoteHits],
   );
+
+  // With up to SEARCH_LIMIT rows, keyboard navigation must keep the
+  // highlighted row inside the dropdown's scrollable area.
+  useEffect(() => {
+    if (!locateOpen) return;
+    document.querySelector('.locate-item.active')?.scrollIntoView({ block: 'nearest' });
+  }, [locateIndex, locateOpen, locateResults]);
+
+  // Preview-on-highlight: the commit detail panel follows the highlighted
+  // dropdown row (arrow keys or hover) WITHOUT committing — no jump, no view
+  // switch, the dropdown stays open for scanning. Enter still commits.
+  // Debounced so arrowing through the list doesn't burst IPC calls; the
+  // cancelled flag drops responses that are no longer the highlighted row.
+  useEffect(() => {
+    if (!locateOpen) return;
+    const r = locateResults[locateIndex];
+    if (!r) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      getCommitDetail(r.kind === 'branch' ? r.commitId : r.id)
+        .then(d => { if (!cancelled) setSelectedCommit(d); })
+        .catch(() => {});
+    }, 120);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [locateOpen, locateIndex, locateResults]);
 
   // Full-history search: debounce the query, ask the backend, drop stale
   // responses (cancelled flag). <2 chars skips the call — the loaded-range

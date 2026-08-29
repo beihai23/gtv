@@ -66,7 +66,7 @@ export function matchLoaded(
  *  Dedup is commit-kind only, local wins (local hits carry lane_owner
  *  context for dead-lane auto-expansion); branch and commit hits coexist
  *  (long-standing dropdown shape); commit hits newest-first; capped. */
-export function mergeLocate(local: LocateResult[], remote: SearchHit[], cap = 12): LocateResult[] {
+export function mergeLocate(local: LocateResult[], remote: SearchHit[], cap = SEARCH_LIMIT): LocateResult[] {
   const branchHits = local.filter((r): r is Extract<LocateResult, { kind: 'branch' }> => r.kind === 'branch');
   const localCommits = local.filter(r => r.kind === 'commit');
   const seen = new Set(localCommits.map(r => (r.kind === 'commit' ? r.id : '')));

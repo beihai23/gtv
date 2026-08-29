@@ -20,7 +20,14 @@
           case 'get_current_path': return '/mock/taskon-server';
           case 'get_current_branch': return 'marschain';
           case 'get_branch_list': return DATA.branches;
-          case 'get_commit_detail': return null;
+          case 'get_commit_detail': { // build from DATA — the panel needs it
+            const c = DATA.commits.find(x => x.id === args?.commitId);
+            if (!c) return null;
+            return { id: c.id, short_id: c.short_id, message: c.message.split('\n')[0],
+              full_message: c.message, author_name: c.author_name, author_email: c.author_email,
+              timestamp: c.timestamp, parents: c.parents, branch_refs: c.branch_refs,
+              files: [], total_additions: c.additions ?? 0, total_deletions: c.deletions ?? 0 };
+          }
           case 'get_patch_links': return DATA._patch_links ?? [];
           case 'filter_by_branches': return DATA;
           case 'is_valid_git_repo': return true;
