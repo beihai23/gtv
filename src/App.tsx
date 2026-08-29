@@ -4,8 +4,10 @@ import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
+import { TerminalPanel } from './components/TerminalPanel';
 import { useSettings } from './settings';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit } from './api';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, onRepoChanged } from './api';
+import { shouldToggleTerminal } from './terminalCore';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -50,6 +52,13 @@ function App() {
   const [showAllTags, setShowAllTags] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showIssueReport, setShowIssueReport] = useState(false);
+  // Bottom-embedded terminal (Ctrl+`). The panel component stays mounted
+  // while collapsed so the PTY session and scrollback survive folding.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  // Timestamp of the last completed open/refresh — repo-changed events
+  // arriving within 1s of it are watcher-rebuild noise, not user commits
+  // (cuts the watch → refresh → re-watch feedback loop).
+  const refreshTsRef = useRef(0);
 
   // Cmd/Ctrl + , toggles the settings dialog (macOS convention).
   useEffect(() => {
@@ -62,6 +71,21 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Ctrl+` (Cmd+` accepted, same convention as above) toggles the terminal
+  // panel — works with focus on the graph or inside the terminal: xterm's
+  // custom key handler lets the combo bubble instead of typing it. Without
+  // a repo there is nothing to cwd into, so the key stays untouched.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!gitData) return;
+      if (!shouldToggleTerminal(e)) return;
+      e.preventDefault();
+      setTerminalOpen(v => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gitData]);
   // Version-tag flood control: hides tag chips from the toolbar and panel.
   const [showTags, setShowTags] = useState(() => localStorage.getItem(SHOW_TAGS_KEY) !== '0');
   const toggleShowTags = useCallback(() => {
@@ -172,6 +196,7 @@ function App() {
     try {
       const data = await selectAndOpenRepository(showStaleBranches);
       if (data) {
+        refreshTsRef.current = Date.now();
         setGitData(data);
         loadDiffStats(data);
         setSelectedCommit(null);
@@ -206,6 +231,7 @@ function App() {
     setError(null);
     try {
       const data = await openRepository(latestRepo, showStaleBranches);
+      refreshTsRef.current = Date.now();
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
@@ -237,6 +263,87 @@ function App() {
     staleSettingRef.current = showStaleBranches;
     if (latestRepo) handleOpenLatestRepo();
   }, [showStaleBranches, latestRepo, handleOpenLatestRepo]);
+
+  // In-place refresh after repo changes made in (or outside) the embedded
+  // terminal. Re-reads the view like loadOlder's pattern — in-flight ref +
+  // pending flag against re-entry, a trailing drain so the last burst still
+  // lands — while preserving the user's place: NO viewResetKey bump (the
+  // Timeline's resetKey comparison + anchoring keeps the viewport), the
+  // selected commit and expanded dead lanes survive by intersection, and a
+  // branch filter that is still a proper subset is replayed. Errors stay
+  // silent: a transient failure mid `git gc` must not disturb the session.
+  const refreshInFlightRef = useRef(false);
+  const refreshPendingRef = useRef(false);
+  const handleRefreshRepo = useCallback(async function refresh() {
+    if (!latestRepo) return;
+    if (refreshInFlightRef.current) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    refreshInFlightRef.current = true;
+    try {
+      const data = await openRepository(latestRepo, showStaleBranches);
+      const branches = await getBranchList();
+      const names = new Set(branches.map(b => b.name));
+
+      // Replay the branch filter while the previous selection survives as
+      // a proper subset; equal-to-all is the default view and needs no
+      // second pass.
+      const stillSelected = selectedBranches.filter(n => names.has(n));
+      let view = data;
+      if (stillSelected.length > 0 && stillSelected.length < branches.length) {
+        view = await filterByBranches(stillSelected);
+      }
+      setGitData(view);
+      loadDiffStats(view);
+      setBranchList(branches);
+      setSelectedBranches(
+        stillSelected.length === branches.length || stillSelected.length === 0
+          ? branches.map(b => b.name)
+          : stillSelected,
+      );
+
+      // Keep the detail panel only while its commit still exists.
+      setSelectedCommit(prev =>
+        prev && view.commits.some(c => c.id === prev.id) ? prev : null,
+      );
+      // Expanded dead lanes survive by name intersection with the new view.
+      const owners = new Set<string>();
+      for (const c of view.commits) owners.add(c.lane_owner);
+      for (const b of view.branches) owners.add(b.name);
+      setExpandedDead(prev => {
+        const next = new Set([...prev].filter(n => owners.has(n)));
+        return next;
+      });
+    } catch {
+      // Silent by design (see comment above).
+    } finally {
+      refreshInFlightRef.current = false;
+      refreshTsRef.current = Date.now();
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        void refresh();
+      }
+    }
+  }, [latestRepo, showStaleBranches, selectedBranches, loadDiffStats]);
+
+  // Watcher events land here. Events within 1s of the last completed
+  // open/refresh are stream-rebuild noise from re-arming the watcher and
+  // are dropped — without this the refresh → re-watch → event → refresh
+  // loop can self-oscillate.
+  useEffect(() => {
+    let alive = true;
+    let un: (() => void) | null = null;
+    onRepoChanged(() => {
+      if (!alive) return;
+      if (Date.now() - refreshTsRef.current < 1000) return;
+      void handleRefreshRepo();
+    }).then(u => { if (alive) un = u; else u(); });
+    return () => {
+      alive = false;
+      un?.();
+    };
+  }, [handleRefreshRepo]);
 
   // Page in the next chunk of older history. The backend re-lays out the
   // whole loaded set; Timeline keeps the viewport anchored (no resetKey bump).
@@ -892,6 +999,14 @@ function App() {
           </>
         )}
       </main>
+
+      {gitData && latestRepo && (
+        <TerminalPanel
+          repoPath={latestRepo}
+          open={terminalOpen}
+          onToggle={() => setTerminalOpen(v => !v)}
+        />
+      )}
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
 

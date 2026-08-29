@@ -38,6 +38,11 @@ src-tauri/src/
                   feeds layout::compute_layout and returns GitData
   commands.rs     #[tauri::command] handlers + AppState (Mutex-guarded current
                   repo/path/branch/view + pagination ViewSession)
+  terminal.rs     embedded terminal backend: portable-pty sessions, UTF-8-safe
+                  output streaming, pty_spawn/pty_write/pty_resize/pty_close
+  repo_watch.rs   watches the open repo's git dirs (notify, gitdir+commondir)
+                  and fires a debounced "repo-changed" event so terminal-side
+                  git commands refresh the timeline
 src-tauri/tests/
   layout_pure.rs  9 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
@@ -47,6 +52,10 @@ src-tauri/tests/
                   small chunks: paged result must equal the full walk, the
                   loaded set must stay downward-closed, and excluded stale
                   seeds must never be loaded
+  terminal_pty.rs PTY lifecycle vs /bin/cat (echo round-trip, kill→exit) and
+                  drain_utf8 reassembly across read boundaries
+  repo_watch_ext.rs  commit→callback latency, burst debouncing, and main-repo
+                  commits seen from a linked-worktree watch (commondir)
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
@@ -55,6 +64,8 @@ src-tauri/examples/
 src/
   api.ts          thin wrappers around tauri invoke(), one per backend command
   types.ts        TypeScript mirror of models.rs — keep in sync by hand
+  terminalCore.ts pure terminal logic: Ctrl+` toggle rule + session-id
+                  normalization (mock.html degradation contract)
   settings.tsx    Settings context: zh/en i18n dictionaries + preset theme
                   palettes (CSS custom properties applied to :root; App.css
                   consumes them via var(--x)), persisted in localStorage
@@ -63,6 +74,9 @@ src/
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
+  components/TerminalPanel.tsx  embedded terminal (Ctrl+`): xterm.js over the
+                                PTY commands; stays mounted while collapsed so
+                                the shell session and scrollback survive
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
 mock.html         browser-only preview harness: mocks window.__TAURI_INTERNALS__
@@ -149,6 +163,11 @@ automated testing lives in Rust.
 - The app is **read-only by design**: `GitReader` only opens repos and walks
   history/diffs; there is intentionally no write path. Do not add commands that
   mutate the user's repository.
+- The embedded terminal (Ctrl+`) is the one deliberate exception: a
+  user-driven shell escape hatch (issue decision) whose PTY runs the user's
+  login shell at the repo root. gtv itself still performs zero mutating git
+  operations — all git access stays read-only through git2, and no gtv code
+  path writes to the repository.
 - Tauri capabilities (`src-tauri/capabilities/default.json`) are minimal:
   `core:default`, `opener:default`, `dialog:default` only.
 - `tauri.conf.json` sets `"csp": null` — acceptable for a local-only app that

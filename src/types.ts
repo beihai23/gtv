@@ -103,3 +103,16 @@ export interface SearchHit {
   timestamp: number;
   in_view: boolean;
 }
+
+/** PTY stdout chunk for the embedded terminal (event "pty-output");
+ *  `id` is the session id returned by ptySpawn. */
+export interface PtyOutputEvent {
+  id: number;
+  data: string;
+}
+
+/** A PTY child has exited (event "pty-exit"); the frontend shows the
+ *  exited state and offers a restart. */
+export interface PtyExitEvent {
+  id: number;
+}

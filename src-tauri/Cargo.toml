@@ -27,6 +27,11 @@ serde_json = "1"
 # libssh2). gtv only reads local repos, and the extra native deps break
 # cross-compiling the universal macOS bundle (no x86_64 OpenSSL sysroot).
 git2 = { version = "0.20", default-features = false }
+# Embedded terminal + repo watching. Like git2 above, portable-pty and notify
+# are pure-Rust sys binding layers (no openssl-style sysroot dependencies),
+# so cross-compiling the universal macOS bundle keeps working.
+portable-pty = "0.9"
+notify = "8"
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
 env_logger = "0.11"

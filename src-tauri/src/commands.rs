@@ -1,6 +1,7 @@
 use crate::git_reader::{GitReader, ViewResult};
 use crate::layout::LaneSeed;
 use crate::models::*;
+use crate::repo_watch;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use tokio::task;
@@ -27,6 +28,10 @@ pub struct AppState {
     pub session: Mutex<Option<ViewSession>>,
     /// Settings toggle: whether stale branches are processed and shown.
     pub include_stale: Mutex<bool>,
+    /// Watches the open repo's git dirs so terminal-driven git commands
+    /// (commit/checkout/...) trigger a timeline refresh. Re-armed on every
+    /// open_repository.
+    pub watcher: Mutex<Option<repo_watch::WatcherGuard>>,
 }
 
 impl Default for AppState {
@@ -38,6 +43,7 @@ impl Default for AppState {
             current_view: Mutex::new(None),
             session: Mutex::new(None),
             include_stale: Mutex::new(true),
+            watcher: Mutex::new(None),
         }
     }
 }
@@ -64,6 +70,7 @@ fn store_session(state: &AppState, result: &ViewResult, include_stale: bool) {
 
 #[tauri::command]
 pub async fn open_repository(
+    app: tauri::AppHandle,
     path: String,
     include_stale: bool,
     state: tauri::State<'_, AppState>,
@@ -81,17 +88,37 @@ pub async fn open_repository(
     store_session(&state, &result, include_stale);
 
     let data = result.data;
-    let mut current_repo = state.current_repo.lock().unwrap();
-    *current_repo = Some(GitReader::new(&path).map_err(|e| e.to_string())?);
+    let watch_path = path.clone();
+    {
+        let mut current_repo = state.current_repo.lock().unwrap();
+        *current_repo = Some(GitReader::new(&path).map_err(|e| e.to_string())?);
 
-    let mut current_path = state.current_path.lock().unwrap();
-    *current_path = Some(path);
+        let mut current_path = state.current_path.lock().unwrap();
+        *current_path = Some(path);
 
-    let mut current_branch = state.current_branch.lock().unwrap();
-    *current_branch = Some(data.main_branch.clone());
+        let mut current_branch = state.current_branch.lock().unwrap();
+        *current_branch = Some(data.main_branch.clone());
 
-    let mut current_view = state.current_view.lock().unwrap();
-    *current_view = Some(data.clone());
+        let mut current_view = state.current_view.lock().unwrap();
+        *current_view = Some(data.clone());
+    }
+
+    // Arm the repo watcher with every other lock released: WatcherGuard's
+    // Drop joins the debounce thread (~300ms) and must never run while
+    // holding state locks. The old guard is taken out first and dropped
+    // outside the lock so switching repos tears down the previous watch.
+    let old_guard = state.watcher.lock().unwrap().take();
+    drop(old_guard);
+    match repo_watch::watch(
+        &watch_path,
+        Box::new(move || {
+            use tauri::Emitter;
+            let _ = app.emit("repo-changed", ());
+        }),
+    ) {
+        Ok(guard) => *state.watcher.lock().unwrap() = Some(guard),
+        Err(e) => log::warn!("repo watcher not armed: {}", e), // non-fatal
+    }
 
     log::info!("Opened repository with {} commits", data.commits.len());
 

@@ -3,9 +3,12 @@ pub mod git_reader;
 pub mod layout;
 pub mod log_buffer;
 pub mod models;
+pub mod repo_watch;
+pub mod terminal;
 
 use commands::AppState;
 use log::LevelFilter;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,10 +23,11 @@ pub fn run() {
 
     log::info!("Starting Git Timeline Viewer");
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(terminal::PtyRegistry::default())
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::get_commit_detail,
@@ -40,7 +44,21 @@ pub fn run() {
             commands::jump_to_commit,
  commands::get_commit_stats,
             commands::get_recent_logs,
+            terminal::pty_spawn,
+            terminal::pty_write,
+            terminal::pty_resize,
+            terminal::pty_close,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        // Kill every PTY child on app exit so no shell processes outlive
+        // the window (the webview dying alone would leave them orphaned).
+        if let tauri::RunEvent::Exit = event {
+            if let Some(registry) = app_handle.try_state::<terminal::PtyRegistry>() {
+                registry.kill_all();
+            }
+        }
+    });
 }

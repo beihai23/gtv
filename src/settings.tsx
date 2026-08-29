@@ -99,6 +99,10 @@ const en: Record<string, string> = {
   expandGroup: 'Expand',
   collapseGroup: 'Collapse',
   loadingOlder: 'Loading older history…',
+  terminal: 'Terminal',
+  terminalExited: 'Shell exited',
+  terminalRestart: 'Restart',
+  terminalUnavailable: 'Terminal unavailable in the browser preview — run the desktop app (npm run tauri dev) for a real shell.',
 };
 
 const zh: Record<string, string> = {
@@ -186,6 +190,10 @@ const zh: Record<string, string> = {
   expandGroup: '展开',
   collapseGroup: '收拢',
   loadingOlder: '正在加载更早的历史…',
+  terminal: '终端',
+  terminalExited: 'Shell 已退出',
+  terminalRestart: '重启',
+  terminalUnavailable: '浏览器预览下终端不可用——请运行桌面应用（npm run tauri dev）获取真实 shell。',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

@@ -66,7 +66,17 @@ from the commit graph itself.
   Dracula, Solarized Dark, GitHub Light)
 - Remembers your last repository
 
-**Read-only.** gtv never modifies your repository.
+**Embedded terminal**
+- `Ctrl+\`` (`⌘+\``) toggles a terminal panel at the bottom — a real PTY running
+  your login shell with its cwd at the open repository root, so you can run git
+  commands without leaving the app
+- The session survives folding the panel; restart it after the shell exits
+- gtv watches the repository's git dirs and refreshes the timeline within
+  seconds of commits you make inside (or outside) the terminal — viewport and
+  selection stay put
+
+**Read-only.** gtv never modifies your repository — the terminal is your shell,
+driven by your hands; gtv itself keeps to read-only git2 access.
 
 ## Download
 

@@ -183,3 +183,18 @@ pub struct SearchHit {
     pub timestamp: i64,
     pub in_view: bool,
 }
+
+/// PTY stdout chunk for the embedded terminal (event "pty-output").
+/// `id` is the session id returned by `pty_spawn`.
+#[derive(Serialize, Clone)]
+pub struct PtyOutputEvent {
+    pub id: u32,
+    pub data: String,
+}
+
+/// A PTY child has exited (event "pty-exit"); the frontend shows the
+/// exited state and offers a restart.
+#[derive(Serialize, Clone)]
+pub struct PtyExitEvent {
+    pub id: u32,
+}
