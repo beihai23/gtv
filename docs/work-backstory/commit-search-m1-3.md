@@ -71,6 +71,19 @@ hash 前缀，且仅限已加载范围（分页 2000 窗口）。要求补 messa
   单一来源（原 4 处硬编码漂移风险，i18n 走 {n} 模板）、mock 头注释
   去fixture 化、AGENTS.md 测试清单、后端空 query 早退守卫。真实仓库
   2s 手动计时仍未执行（100k 基准是目前唯一的规模证据）。
+- **用户复验反馈两连**（b197f15）：
+  1. "搜索结果很多时要能滚动浏览"——下拉本就有 max-height+overflow，
+     真正的墙是 mergeLocate 的 cap=12 截断；放开到 SEARCH_LIMIT（50 行
+     734px 内容滚在 318px 可视区）+ 键盘导航 scrollIntoView(nearest)
+     跟随（实测高亮 offsetTop 546 时 scrollTop 自动 242）。
+  2. "高亮选中要能快速预览，不能一条条点"——新增 preview-on-highlight
+     effect：详情面板跟随高亮行（↑↓/悬停）实时刷新（120ms 防抖 +
+     cancelled 丢过期响应），**不跳转不关下拉**，Enter 才提交。窗外命中
+     也能预览——get_commit_detail 按 oid 直读，与视图无关。
+  3. 顺手把 mock 的 get_commit_detail 补成常驻 DATA 构造（第三次需要它
+     了——两个 arc 各临时 patch 一次，本次直接转正，终审 mock 欠账清偿）。
+  手滑教训：测试里手敲两遍同 oid 字面量差一位长度，去重断言莫名翻车，
+     排查半天——同 oid 多处出现必须提 const。
 
 ## Decisions
 
