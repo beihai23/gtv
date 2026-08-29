@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455]
+commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455, 3ef3797]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -87,6 +87,9 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   守卫（空=瞬态会话态；无守卫会把策展集覆盖成空、下次恢复回落全选）。
   简报 select onChange 草图的 else 分支漏了 'all'（Number('all')=NaN 会
   清空视图），补成三路分支。
+- 复审改判（review Important，Task 5 deviation 4）：自定义 end 只取所选日
+  UTC 零点是真缺陷——「止」当天的日内时间戳提交全被排除，而 preset 锚定
+  最新日内 ts、含当天，两类范围自相矛盾；修为 +86399 闭到当日末秒。
 
 ## Decisions
 
