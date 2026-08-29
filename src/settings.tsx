@@ -12,6 +12,7 @@ export type Lang = 'zh' | 'en';
 const LANG_KEY = 'gtv_lang';
 const THEME_KEY = 'gtv_theme';
 const STALE_KEY = 'gtv_show_stale';
+const HIDE_REMOTES_KEY = 'gtv_hide_remotes';
 const INACTIVE_DAYS_KEY = 'gtv_inactive_days';
 
 const en: Record<string, string> = {
@@ -302,6 +303,9 @@ interface SettingsCtx {
   /** Whether stale branches (tips outside the loaded window) are processed
    *  and shown; persisted as gtv_show_stale. */
   showStaleBranches: boolean;
+  /** Hide remote-tracking refs (origin/*) from badge/tooltip/detail layers;
+   *  persisted as gtv_hide_remotes. */
+  hideRemotes: boolean;
   /** Lane-inactivity threshold in days; 0 disables collapsing.
    *  Persisted as gtv_inactive_days. */
   inactiveDays: number;
@@ -309,6 +313,7 @@ interface SettingsCtx {
   setLang: (l: Lang) => void;
   setTheme: (t: string) => void;
   setShowStaleBranches: (v: boolean) => void;
+  setHideRemotes: (v: boolean) => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
@@ -353,6 +358,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setShowStaleBranchesState(v);
   };
 
+  // Default off: preserve the long-standing "remote refs shown" behavior.
+  const [hideRemotes, setHideRemotesState] = useState(
+    () => localStorage.getItem(HIDE_REMOTES_KEY) === '1',
+  );
+  const setHideRemotes = (v: boolean) => {
+    localStorage.setItem(HIDE_REMOTES_KEY, v ? '1' : '0');
+    setHideRemotesState(v);
+  };
+
   const [inactiveDays, setInactiveDaysState] = useState<number>(() => {
     const v = parseInt(localStorage.getItem(INACTIVE_DAYS_KEY) ?? '90', 10);
     return Number.isFinite(v) && v >= 0 ? v : 90;
@@ -370,7 +384,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return s;
   };
 
-  return <Ctx.Provider value={{ lang, theme, showStaleBranches, inactiveDays, setLang, setTheme, setShowStaleBranches, setInactiveDays, t }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ lang, theme, showStaleBranches, hideRemotes, inactiveDays, setLang, setTheme, setShowStaleBranches, setHideRemotes, setInactiveDays, t }}>{children}</Ctx.Provider>;
 }
 
 export function useSettings(): SettingsCtx {
