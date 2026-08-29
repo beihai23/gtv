@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d]
+commits: [190df0a, 88393c2, e2cd6cb, 732b351, 8da6c0d, 4688455]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
@@ -69,6 +69,24 @@ Roadmap M2 四件套：右键泳道只看血缘闭包（2.1）、顶栏日期范
   加 2 例（remote-only ref 隐藏后不命中；同名本地 lane 经未动的 laneTip
   仍命中）。TDZ：handleRelatedBranch 落 handleFilterChange 之后（M1.3
   地雷），依赖全前置，tsc strict 过。
+- Task 5（接线 2.2+2.4）：管道按铁律重排——gitData → applyDateRange →
+  computeInactive(过滤后) → dead 并集（范围空覆盖时效规则）→ collapseLanes，
+  collapseLanes 只吃 applyDateRange 产物。下游四处同步：箭头步进过滤
+  hiddenIds ∪ outOfRange（依赖补全）；locate matchLoaded 改吃 rangedData
+  （搜你所见）+ 范围激活时远端命中 in_view 按 outOfRange 降级、沿用既有
+  「从该提交查看」跳转路径；header commitCount 改读 rangedData.commits
+  （has_more 仍读原始）；refActivity/sortedBranches 刻意不动（面板全量
+  活跃度排序更诚实）。TDZ 新雷：M2.4 恢复让两个 open handler 的
+  useCallback 依赖数组在渲染期读 handleFilterChange，原声明在其后 →
+  handleFilterChange 整体上移到 loadDiffStats 之后（M1.3 地雷同款）。
+  自定义窗口：两个 'YYYY-MM-DD' string state，换算 Math.floor(new
+  Date(v).getTime()/1000)，空串兜底 from=0 / to=最新已加载 ts（即 preset
+  锚点），min/max 交叉约束防 start>end；end 取所选日 UTC 零点（简报公式
+  原样，不加当日末端秒）。date input 的 placeholder 是死属性（type=date
+  不渲染），dateFrom/dateTo 落在 title/aria-label。保存 effect 保留空选择
+  守卫（空=瞬态会话态；无守卫会把策展集覆盖成空、下次恢复回落全选）。
+  简报 select onChange 草图的 else 分支漏了 'all'（Number('all')=NaN 会
+  清空视图），补成三路分支。
 
 ## Decisions
 
