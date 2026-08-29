@@ -164,7 +164,8 @@ function App() {
   const customRange = (from: string, to: string): DateRange => ({
     kind: 'custom',
     start: from ? Math.floor(new Date(from).getTime() / 1000) : 0,
-    end: to ? Math.floor(new Date(to).getTime() / 1000) : maxLoadedTs,
+    // Whole chosen day: without +86399 the "To" day's own mid-day commits drop out, contradicting presets (anchored at the newest mid-day ts, which keeps that day).
+    end: to ? Math.floor(new Date(to).getTime() / 1000) + 86399 : maxLoadedTs,
   });
   const allDeadNames = useMemo(() => {
     const s = new Set<string>();
