@@ -2,7 +2,7 @@
 arc: filter-system-m2
 started: 4dcc5fe
 status: in-progress
-commits: [190df0a]
+commits: [190df0a, 88393c2]
 ---
 
 # M2 过滤系统补完（关联分支 / 日期范围 / remotes / 关注集持久化）
