@@ -183,3 +183,31 @@ pub struct SearchHit {
     pub timestamp: i64,
     pub in_view: bool,
 }
+
+// --- Integrated terminal (bottom panel) ---
+// Event names used with `emit`/`listen`: "terminal-output" (TerminalOutput),
+// "terminal-exit" (TerminalExit), "repo-changed" (plain String path, emitted
+// by the watcher poller in watcher.rs).
+
+/// Live terminal session handle returned by terminal_spawn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalInfo {
+    pub id: u64,
+    pub cwd: String,
+    pub shell: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// PTY output chunk; `data` is base64 (raw bytes, may split UTF-8 sequences).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalOutput {
+    pub id: u64,
+    pub data: String,
+}
+
+/// Emitted when the shell child process exits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalExit {
+    pub id: u64,
+}

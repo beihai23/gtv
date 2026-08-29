@@ -1,6 +1,7 @@
 use crate::git_reader::{GitReader, ViewResult};
 use crate::layout::LaneSeed;
 use crate::models::*;
+use crate::terminal::PtySession;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use tokio::task;
@@ -27,6 +28,12 @@ pub struct AppState {
     pub session: Mutex<Option<ViewSession>>,
     /// Settings toggle: whether stale branches are processed and shown.
     pub include_stale: Mutex<bool>,
+    /// Live integrated-terminal session (None when never spawned / killed).
+    pub terminal: Mutex<Option<PtySession>>,
+    /// Repo-watcher baseline: (path, last change_fingerprint). Reset by
+    /// open_repository so the poller never reports the freshly-opened state
+    /// as a change, and cleared when no repo is open.
+    pub watch_baseline: Mutex<Option<(String, String)>>,
 }
 
 impl Default for AppState {
@@ -38,6 +45,8 @@ impl Default for AppState {
             current_view: Mutex::new(None),
             session: Mutex::new(None),
             include_stale: Mutex::new(true),
+            terminal: Mutex::new(None),
+            watch_baseline: Mutex::new(None),
         }
     }
 }
@@ -70,15 +79,20 @@ pub async fn open_repository(
 ) -> Result<GitData, String> {
     let path_clone = path.clone();
 
-    let result = task::spawn_blocking(move || {
+    // Build the view and the watcher baseline from the same snapshot, so a
+    // poll racing the open never sees a "change" for the state it produced.
+    let (result, fingerprint) = task::spawn_blocking(move || -> Result<(ViewResult, String), String> {
         let mut reader = GitReader::new(&path_clone)?;
-        reader.read_git_data(2000)
+        let result = reader.read_git_data(2000)?;
+        let fingerprint = reader.change_fingerprint()?;
+        Ok((result, fingerprint))
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
     *state.include_stale.lock().unwrap() = include_stale;
     store_session(&state, &result, include_stale);
+    *state.watch_baseline.lock().unwrap() = Some((path.clone(), fingerprint));
 
     let data = result.data;
     let mut current_repo = state.current_repo.lock().unwrap();
@@ -402,6 +416,81 @@ pub async fn get_patch_links(state: tauri::State<'_, AppState>) -> Result<Vec<Pa
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+// --- Integrated terminal (bottom panel) ---
+
+/// Spawn (or return the existing) shell session in the currently open
+/// repository. Idempotent: a live session is returned as-is, so the
+/// frontend can call this on every panel mount/remount (React StrictMode
+/// double-mounts, HMR) without leaking shells.
+#[tauri::command]
+pub async fn terminal_spawn(
+    cols: u16,
+    rows: u16,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<TerminalInfo, String> {
+    // Fast path under a short lock; the guard must be dropped before the
+    // await below, or the future stops being Send.
+    {
+        let terminal = state.terminal.lock().unwrap();
+        if let Some(session) = terminal.as_ref() {
+            return Ok(session.info());
+        }
+    }
+    let path = {
+        let current_path = state.current_path.lock().unwrap();
+        current_path.clone().ok_or("No repository opened")?
+    };
+    // openpty + fork is millisecond-scale, but it still has no business on
+    // the main thread — same reasoning as the git commands above.
+    let session =
+        task::spawn_blocking(move || crate::terminal::spawn_for_app(&app, std::path::Path::new(&path), cols, rows))
+            .await
+            .map_err(|e| format!("Task join error: {}", e))??;
+    let mut terminal = state.terminal.lock().unwrap();
+    // A racing second spawn can't come from the single frontend caller, but
+    // if it ever does: first session wins, the loser is dropped (killed).
+    if let Some(existing) = terminal.as_ref() {
+        return Ok(existing.info());
+    }
+    let info = session.info();
+    *terminal = Some(session);
+    Ok(info)
+}
+
+/// Forward keystrokes/paste from xterm.js to the PTY.
+#[tauri::command]
+pub fn terminal_write(data: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let terminal = state.terminal.lock().unwrap();
+    terminal
+        .as_ref()
+        .ok_or("No terminal session")?
+        .write_all(&data)
+}
+
+/// Sync the PTY size after a frontend fit().
+#[tauri::command]
+pub fn terminal_resize(
+    cols: u16,
+    rows: u16,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let terminal = state.terminal.lock().unwrap();
+    terminal
+        .as_ref()
+        .ok_or("No terminal session")?
+        .resize(cols, rows)
+}
+
+/// Kill the session (restart button). Dropping the PtySession closes the
+/// master fd → SIGHUP → the reader thread EOFs, reaps and emits
+/// "terminal-exit".
+#[tauri::command]
+pub fn terminal_kill(state: tauri::State<AppState>) -> Result<(), String> {
+    *state.terminal.lock().unwrap() = None;
+    Ok(())
 }
 
 use git2::Repository;

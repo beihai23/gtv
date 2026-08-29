@@ -4,6 +4,8 @@ import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
+import TerminalPanel from './components/TerminalPanel';
+import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
 import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit } from './api';
 import { recordFrontendError } from './issueContext';
@@ -54,6 +56,11 @@ function App() {
   const [showAllTags, setShowAllTags] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showIssueReport, setShowIssueReport] = useState(false);
+  // Integrated terminal (bottom panel). `termOpen` is deliberately not
+  // persisted: auto-restoring it would silently spawn a login shell on
+  // every launch — a terminal should be an explicit user action.
+  const [termOpen, setTermOpen] = useState(false);
+  const [termAvailable, setTermAvailable] = useState(true);
 
   // Cmd/Ctrl + , toggles the settings dialog (macOS convention).
   useEffect(() => {
@@ -66,6 +73,22 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Ctrl+` toggles the bottom terminal — works with focus anywhere,
+  // including inside the xterm textarea (whose keydown we do NOT bail on
+  // like the arrow-keys handler below; xterm's custom handler steps aside
+  // for this combo and the event still bubbles here). Ctrl only: Cmd+` is
+  // the macOS cycle-windows shortcut and must stay free.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Backquote' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && gitData) {
+        e.preventDefault();
+        setTermOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gitData]);
   // Version-tag flood control: hides tag chips from the toolbar and panel.
   const [showTags, setShowTags] = useState(() => localStorage.getItem(SHOW_TAGS_KEY) !== '0');
   const toggleShowTags = useCallback(() => {
@@ -362,6 +385,82 @@ function App() {
     staleSettingRef.current = showStaleBranches;
     if (latestRepo) handleOpenLatestRepo();
   }, [showStaleBranches, latestRepo, handleOpenLatestRepo]);
+
+  // Background refresh when the repo changed outside gtv (terminal git
+  // commands, editor, another tool — the watcher.rs poller emits
+  // "repo-changed"). Unlike handleOpenLatestRepo this must not yank the
+  // user's context: keep the selection when its commit survived, keep the
+  // viewport (no viewResetKey bump), keep expanded lanes and filters.
+  // Loaded-older pagination state is rebuilt from scratch — accepted v1
+  // limitation. Rebased/amended commits get new oids, so stale selections
+  // drop naturally.
+  const refreshingRef = useRef(false);
+  const handleRepoRefresh = useCallback(async () => {
+    if (!latestRepo || refreshingRef.current) return;
+    refreshingRef.current = true;
+    try {
+      const keepId = selectedCommit?.id ?? null;
+      const data = await openRepository(latestRepo, showStaleBranches);
+      setGitData(data);
+      loadDiffStats(data);
+      if (keepId && data.commits.some(c => c.id === keepId)) {
+        try {
+          setSelectedCommit(await getCommitDetail(keepId));
+        } catch {
+          setSelectedCommit(null);
+        }
+      } else {
+        setSelectedCommit(null);
+      }
+      const branches = await getBranchList();
+      setBranchList(branches);
+      setSelectedBranches(prev => {
+        const names = new Set(branches.map(b => b.name));
+        const kept = prev.filter(n => names.has(n));
+        return kept.length ? kept : branches.map(b => b.name);
+      });
+    } catch (err) {
+      // A transient failure (e.g. racing a repo being replaced) must not
+      // nuke the view; the next change event retries.
+      recordFrontendError(errText(err));
+    } finally {
+      refreshingRef.current = false;
+    }
+  }, [latestRepo, showStaleBranches, selectedCommit, loadDiffStats]);
+
+  // Debounce "repo-changed" bursts (rebase/fetch fire several) into one
+  // refresh. The handler lives in a ref so resubscription only happens
+  // when the repo itself changes, not on every selection.
+  const refreshHandlerRef = useRef(handleRepoRefresh);
+  useEffect(() => {
+    refreshHandlerRef.current = handleRepoRefresh;
+  }, [handleRepoRefresh]);
+  const repoRefreshTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!latestRepo) return;
+    let dead = false;
+    let un: (() => void) | null = null;
+    try {
+      listen('repo-changed', () => {
+        window.clearTimeout(repoRefreshTimer.current);
+        repoRefreshTimer.current = window.setTimeout(() => {
+          if (!dead) void refreshHandlerRef.current();
+        }, 500);
+      })
+        .then(fn => {
+          if (dead) fn();
+          else un = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // browser mock preview: no event API
+    }
+    return () => {
+      dead = true;
+      un?.();
+      window.clearTimeout(repoRefreshTimer.current);
+    };
+  }, [latestRepo]);
 
   // Page in the next chunk of older history. The backend re-lays out the
   // whole loaded set; Timeline keeps the viewport anchored (no resetKey bump).
@@ -881,6 +980,20 @@ function App() {
               )}
             </div>
           )}
+          {gitData && termAvailable && (
+            <button
+              className={`view-btn terminal-toggle-btn${termOpen ? ' active' : ''}`}
+              onClick={() => setTermOpen(v => !v)}
+              title={t('terminalTip')}
+              aria-label={t('terminal')}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                <polyline points="4.5,6 7,8.5 4.5,11" />
+                <line x1="9" y1="11" x2="11.5" y2="11" />
+              </svg>
+            </button>
+          )}
           <button
             className="view-btn settings-btn"
             onClick={() => setShowSettings(true)}
@@ -1090,6 +1203,14 @@ function App() {
           </>
         )}
       </main>
+
+      {/* Always mounted: hiding the panel keeps the PTY session (and its
+          scrollback) alive, VSCode-style. */}
+      <TerminalPanel
+        open={termOpen}
+        onClose={() => setTermOpen(false)}
+        onUnavailable={() => setTermAvailable(false)}
+      />
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
 

@@ -817,6 +817,17 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 
 /* --- settings dialog --- */
+/* Terminal toggle: icon-only, so center the SVG glyph; stroke follows
+ * currentColor and thus the view-btn hover/active/theming for free. */
+.terminal-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 9px;
+}
+.terminal-toggle-btn svg {
+  display: block;
+}
 .settings-btn {
   font-size: 13px;
   padding: 3px 10px;
@@ -1141,4 +1152,87 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 .locate-footer {
   border-top: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Bottom-docked integrated terminal (VSCode-style). Fixed-height flex
+   child after .main, so .main (flex:1) shrinks. Mirrors the
+   .commit-details docked-panel conventions. */
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: relative;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+.terminal-panel-hidden {
+  display: none;
+}
+.terminal-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: row-resize;
+  z-index: 15;
+  touch-action: none;
+}
+.terminal-resize-handle:hover {
+  background: var(--bg-input);
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.terminal-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-dim);
+}
+.terminal-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.terminal-btn:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px;
+  overflow: hidden;
+}
+.terminal-body .xterm {
+  height: 100%;
+}
+.terminal-exited {
+  position: absolute;
+  inset: 0;
+  top: 28px; /* below the drag handle + header row */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 13px;
+  z-index: 20;
 }

@@ -103,3 +103,27 @@ export interface SearchHit {
   timestamp: number;
   in_view: boolean;
 }
+
+// --- Integrated terminal (bottom panel); mirrors models.rs ---
+// Event names: "terminal-output" (TerminalOutput), "terminal-exit"
+// (TerminalExit), "repo-changed" (plain string path).
+
+/** Live terminal session handle returned by terminalSpawn. */
+export interface TerminalInfo {
+  id: number;
+  cwd: string;
+  shell: string;
+  cols: number;
+  rows: number;
+}
+
+/** PTY output chunk; `data` is base64 (raw bytes, may split UTF-8). */
+export interface TerminalOutput {
+  id: number;
+  data: string;
+}
+
+/** Emitted when the shell child process exits. */
+export interface TerminalExit {
+  id: number;
+}

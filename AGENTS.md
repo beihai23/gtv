@@ -14,20 +14,23 @@ gtv **never modifies the repository** it opens. Keep it that way.
 
 - **Desktop shell**: Tauri 2 (`src-tauri/`), app identifier `com.gtv.app`.
 - **Backend**: Rust (edition 2021). Key crates: `git2` (0.20) for all git access,
-  `tokio` (only used for `task::spawn_blocking` around git work), `serde`/`serde_json`,
+  `tokio` (only used for `task::spawn_blocking` around git work), `portable-pty`
+  (integrated terminal) + `base64` (PTY output chunks), `serde`/`serde_json`,
   `chrono`, `thiserror`, `anyhow`, `log` + `env_logger`. The libgit2 bundled via
   `git2`/`libgit2-sys` must stay >= 1.9.4: older versions refuse to open repos whose
   config carries `extensions.relativeWorktrees` (written by git >= 2.48
   `worktree add --relative-paths`). Guarded by `tests/relative_worktrees_ext.rs`.
 - **Frontend**: React 19 + TypeScript (strict) + Vite 7, D3 v7 for the timeline
   rendering (used directly, not via React wrappers — D3 owns the SVG DOM inside
-  `Timeline.tsx`). Tauri plugins: `dialog`, `opener`.
+  `Timeline.tsx`), `@xterm/xterm` 5.x for the integrated terminal. Tauri plugins:
+  `dialog`, `opener`.
 
 ## Repository layout
 
 ```
 src-tauri/src/
-  lib.rs          Tauri builder: plugins, AppState, invoke_handler (command registry)
+  lib.rs          Tauri builder: plugins, AppState, setup hook (watcher thread),
+                  invoke_handler (command registry)
   main.rs         thin entry point calling gtv_lib::run()
   models.rs       all shared data types (CommitNode, BranchLane, GitData, ...) —
                   the single source of truth for the IPC contract
@@ -35,9 +38,17 @@ src-tauri/src/
                   on models so it is unit-testable with hand-built graphs
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
                   (walk_commits + load_more pagination), lazy diff stats;
-                  feeds layout::compute_layout and returns GitData
+                  feeds layout::compute_layout and returns GitData;
+                  change_fingerprint powers the repo-change poller
   commands.rs     #[tauri::command] handlers + AppState (Mutex-guarded current
-                  repo/path/branch/view + pagination ViewSession)
+                  repo/path/branch/view + pagination ViewSession + the live
+                  PtySession)
+  terminal.rs     integrated-terminal engine: portable-pty spawn/write/resize,
+                  reader + flusher threads (8ms output coalescing), login-shell
+                  resolution; spawn_pty takes plain callbacks so tests run
+                  without a Tauri app
+  watcher.rs      repo-change poller thread: fingerprints the open repo every
+                  1.5s and emits "repo-changed" so the frontend reloads
 src-tauri/tests/
   layout_pure.rs  9 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
@@ -47,6 +58,10 @@ src-tauri/tests/
                   small chunks: paged result must equal the full walk, the
                   loaded set must stay downward-closed, and excluded stale
                   seeds must never be loaded
+  terminal_pty.rs spawn_pty smoke tests: output streaming, cwd, id monotonicity,
+                  drop-kill teardown
+  repo_fingerprint.rs  change_fingerprint behavior: stable across reads, moves
+                  on commit/branch/tag/checkout, ignores worktree noise
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
@@ -59,12 +74,17 @@ src/
                   palettes (CSS custom properties applied to :root; App.css
                   consumes them via var(--x)), persisted in localStorage
                   (gtv_lang / gtv_theme / gtv_show_stale)
-  App.tsx         top-level state: repo opening, branch panel, view options
+  terminalSize.ts bottom-terminal height clamp + persistence (gtv_term_height)
+  App.tsx         top-level state: repo opening, branch panel, view options,
+                  terminal toggle (Ctrl+`) + repo-changed refresh
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
+  components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
+                                session alive while hidden (VSCode-style),
+                                drag-resize handle, restart/exited states
 mock.html         browser-only preview harness: mocks window.__TAURI_INTERNALS__
                   and feeds public/mock-data.json, so the frontend can be debugged
                   in a plain browser without the Rust backend
@@ -137,6 +157,11 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
   blocking, so heavy commands (`open_repository`, `switch_branch`,
   `filter_by_branches`) run inside `task::spawn_blocking`. Follow that pattern.
 - Backend errors cross IPC as `Result<T, String>` — error messages are user-facing.
+- Tauri events (`"terminal-output"`, `"terminal-exit"`, `"repo-changed"`) follow
+  the same mirroring rule: payload structs live in `models.rs` and `src/types.ts`,
+  and the event-name strings are declared in the doc comments there. PTY output
+  crosses IPC as base64 — chunk boundaries split UTF-8 sequences, so it must be
+  decoded to bytes on the frontend, never treated as a lossy string.
 - Lane colors come from one place: `layout::lane_color` (lane 0 = main blue,
   others rotate through `LANE_PALETTE`). Don't invent colors elsewhere.
 - The frontend persists the last opened repo path in `localStorage`
@@ -149,10 +174,18 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
 
 - The app is **read-only by design**: `GitReader` only opens repos and walks
   history/diffs; there is intentionally no write path. Do not add commands that
-  mutate the user's repository.
+  mutate the user's repository. All of gtv's own git access stays inside git2
+  (no shelling out to `git`).
+- The integrated terminal (`terminal.rs` + `TerminalPanel.tsx`) is the one
+  deliberate exception: a **user-driven login shell** in a PTY. The user typing
+  write commands there is the feature itself — gtv never feeds commands into it
+  programmatically, it only relays keystrokes and output, and it watches for
+  repo changes by re-reading refs (`change_fingerprint`), never by writing.
 - Tauri capabilities (`src-tauri/capabilities/default.json`) are minimal:
-  `core:default`, `opener:default`, `dialog:default` only.
+  `core:default`, `opener:default`, `dialog:default` only. The terminal and
+  repo-watcher events need no extra grants — `core:default` already covers
+  event listen/emit.
 - `tauri.conf.json` sets `"csp": null` — acceptable for a local-only app that
   renders no remote content; do not load remote URLs/scripts into the webview.
-- The app opens arbitrary local paths chosen by the user via the dialog; keep all
-  git access inside git2 (no shelling out to `git`).
+- The app opens arbitrary local paths chosen by the user via the dialog; parse
+  nothing from untrusted input and keep treating repo data as display-only.

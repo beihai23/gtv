@@ -3,6 +3,8 @@ pub mod git_reader;
 pub mod layout;
 pub mod log_buffer;
 pub mod models;
+pub mod terminal;
+mod watcher;
 
 use commands::AppState;
 use log::LevelFilter;
@@ -24,6 +26,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .setup(|app| {
+            // Repo-change poller (watcher.rs): plain std thread, no
+            // filesystem watcher, so no extra deps and no events on
+            // transient index files.
+            watcher::spawn_poller(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::get_commit_detail,
@@ -38,8 +47,12 @@ pub fn run() {
             commands::get_patch_links,
             commands::search_commits,
             commands::jump_to_commit,
- commands::get_commit_stats,
+            commands::get_commit_stats,
             commands::get_recent_logs,
+            commands::terminal_spawn,
+            commands::terminal_write,
+            commands::terminal_resize,
+            commands::terminal_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

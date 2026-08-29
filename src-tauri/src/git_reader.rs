@@ -139,6 +139,44 @@ impl GitReader {
         self.repo.head().ok()?.target().map(|t| t.to_string())
     }
 
+    /// Cheap change detector for the repo-watcher poller (watcher.rs):
+    /// HEAD (symbolic name + oid) plus the sorted list of every ref
+    /// (`name=oid`). Covers commit, amend, checkout (branch and detached),
+    /// branch/tag create+delete, fetch, push, stash, reset. Working-tree-only
+    /// changes deliberately do NOT alter it — the timeline renders committed
+    /// history only, so `git add` correctly triggers nothing. libgit2 merges
+    /// loose + packed refs during enumeration, so no mtime sniffing is
+    /// needed.
+    pub fn change_fingerprint(&self) -> Result<String, String> {
+        let head = match self.repo.head() {
+            Ok(reference) => format!(
+                "{}={}",
+                reference.name().unwrap_or("HEAD"),
+                reference
+                    .target()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default()
+            ),
+            // Fresh `git init` before the first commit: still watchable.
+            Err(_) => "unborn".to_string(),
+        };
+        let mut refs: Vec<String> = self
+            .repo
+            .references()
+            .map_err(|e| format!("Failed to get references: {}", e))?
+            .filter_map(|reference| reference.ok())
+            .filter_map(|reference| {
+                Some(format!(
+                    "{}={}",
+                    reference.name()?,
+                    reference.target()?
+                ))
+            })
+            .collect();
+        refs.sort();
+        Ok(format!("{}|{}", head, refs.join(";")))
+    }
+
     /// Walk commits from the given seed tips (TIME|TOPO, newest first),
     /// skipping oids in `hide` (pagination continuation), capped at `limit`
     /// NEW commits.

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo } from './types';
 
 export async function selectAndOpenRepository(includeStale: boolean): Promise<GitData | null> {
   const selected = await open({
@@ -81,4 +81,25 @@ export async function jumpToCommit(commitId: string): Promise<GitData> {
 
 export async function searchCommits(query: string, limit: number): Promise<SearchHit[]> {
   return invoke<SearchHit[]>('search_commits', { query, limit });
+}
+
+// --- Integrated terminal (bottom panel) ---
+
+/// Spawn (or re-attach to) the shell session in the current repo. Null in
+/// the browser mock (invoke default) — callers treat that as "terminal
+/// unavailable" and hide the panel affordances.
+export async function terminalSpawn(cols: number, rows: number): Promise<TerminalInfo | null> {
+  return invoke<TerminalInfo | null>('terminal_spawn', { cols, rows });
+}
+
+export async function terminalWrite(data: string): Promise<void> {
+  return invoke<void>('terminal_write', { data });
+}
+
+export async function terminalResize(cols: number, rows: number): Promise<void> {
+  return invoke<void>('terminal_resize', { cols, rows });
+}
+
+export async function terminalKill(): Promise<void> {
+  return invoke<void>('terminal_kill');
 }
