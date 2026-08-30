@@ -2,7 +2,7 @@
 arc: checkout-compare-m3
 started: 294b613
 status: in-progress
-commits: [461978f, f14a604]
+commits: [461978f, f14a604, 6371ec4]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -133,3 +133,32 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
 - 门禁实况：cargo test 53 过（新增 compare 6 例）/ 2 败（tour_repo
   contentless gitlink 既有，与基线一致）；checkout 套件 12/12 无回归；
   npm test 73/73；npm run build 过（chunk >500kB 警告为既有）。
+- Task 3（前端纯函数 `src/compare.ts` + M3 i18n 键，TDD）：先写
+  `compare.test.ts` 八例看红（模块不存在，编译错），再落实现。nextPair
+  三分支照 spec §4.4 契约逐字落：null 或满选（target 非空）→ 点击者
+  成为新 base（target 清空）；半选（target 空串）→ 点击者补为 target；
+  base===target 不去重不特判（空 diff 诚实呈现，spec §5，测试钉死
+  {A,A}）。
+- laneTip「导出」实况与简报设想的偏差：locate.ts 里的 laneTip 不是
+  模块级函数，是 matchLoaded 体内的局部 Map——「加个 export 就行」
+  无从谈起。按两条红线的最小交集落地：在 locate.ts 新增导出纯函数
+  `laneTip(commits)`（lane_owner → x 最大提交，与 matchLoaded 内联构造
+  逐语义相同）；matchLoaded 体内那四行内联构造原样保留（改它去调用
+  新函数就是函数体改动，被「只允许 export 修饰」红线禁止）。代价是
+  locate.ts 内四行镜像重复；tip 规则对外单一来源在 locate.ts，Task 5
+  接线或 Task 7 终审若认为值得，可申请豁免把 matchLoaded 收敛到该
+  函数（语义零变化，locate 现有 10 例护栏已就位）。
+- headToLaneTip 三重 null：HEAD 不在已加载 commits（`find(c => c.is_head)`
+  落空——日期窗口/分页裁掉，菜单置灰）；泳道名不在 branches 注册表
+  （防御——测试用「游离 lane_owner 同名提交但无 branch 泳道」钉死该
+  防御先于 tip 解析生效）；泳道无已加载提交（tip 缺席）。方向钉死
+  base=HEAD id、target=tip id（fixture 里 tip 按 x 最大取胜而非列表
+  顺序，顺带钉住复用的 tip 规则）。
+- fixture 照 related.test.ts 手搓 GitData（`head_branch: null` 已是
+  Task 2 后的必填镜像字段）。i18n 12 键（checkoutThisBranch …
+  nodeCompareTip）en/zh 双侧同序追加在两字典尾部（en :119-130、zh
+  :234-245），插值 {modified}/{untracked}/{branch} 走既有 t(key, vars)
+  通道；本任务纯加键零消费，Task 4/5 接线时启用。
+- 门禁实况：npm test 81/81（73 + compare 8 例；locate.test.ts 现有
+  10 例不动全绿——新增导出不触 matchLoaded 语义）；npm run build 过
+  （chunk >500kB 警告为既有）。Rust 侧零改动、mock.html 未碰。

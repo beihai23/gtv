@@ -116,6 +116,18 @@ const en: Record<string, string> = {
   expandGroup: 'Expand',
   collapseGroup: 'Collapse',
   loadingOlder: 'Loading older history…',
+  checkoutThisBranch: 'Check out this branch',
+  confirmCheckoutTitle: 'Switch branch?',
+  confirmCheckoutBody: '{modified} modified, {untracked} untracked files',
+  carryNote: 'Compatible uncommitted changes will be carried over; the switch fails cleanly if they conflict with the target.',
+  terminalNote: 'This rewrites worktree files, including under your open terminal.',
+  switchedTo: 'Switched to {branch}',
+  mergeInProgress: 'A merge, cherry-pick, or revert is in progress',
+  compareWithHead: 'Compare with HEAD',
+  compareBase: 'Base',
+  compareTarget: 'Target',
+  currentBranchTip: 'Current branch',
+  nodeCompareTip: 'Ctrl+click another commit to compare',
 };
 
 const zh: Record<string, string> = {
@@ -219,6 +231,18 @@ const zh: Record<string, string> = {
   expandGroup: '展开',
   collapseGroup: '收拢',
   loadingOlder: '正在加载更早的历史…',
+  checkoutThisBranch: '切换到此分支',
+  confirmCheckoutTitle: '切换分支？',
+  confirmCheckoutBody: '{modified} 处已修改、{untracked} 个未跟踪文件',
+  carryNote: '兼容的未提交变更将随行携带；与目标冲突时切换会干净失败。',
+  terminalNote: '切换会重写工作区文件（含你开着的终端下的文件）。',
+  switchedTo: '已切换到 {branch}',
+  mergeInProgress: '合并/拣选/还原进行中',
+  compareWithHead: '与 HEAD 对比',
+  compareBase: '基准',
+  compareTarget: '目标',
+  currentBranchTip: '当前分支',
+  nodeCompareTip: 'Ctrl+点击另一提交进行对比',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

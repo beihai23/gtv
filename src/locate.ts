@@ -14,6 +14,20 @@ export type LocateResult =
   | { kind: 'branch'; name: string; color: string; commitId: string }
   | { kind: 'commit'; id: string; message: string; author: string; timestamp: number; in_view: boolean };
 
+/** Lane-owner -> tip commit (the lane's commit with the highest x). The
+ *  exact rule matchLoaded applies inline to resolve lane-name hits; exported
+ *  so compare.ts resolves lane tips with identical semantics. matchLoaded
+ *  keeps its own inline map -- refactoring its body to call this is off
+ *  limits by design. */
+export function laneTip(commits: CommitNode[]): Map<string, { id: string; x: number }> {
+  const tips = new Map<string, { id: string; x: number }>();
+  for (const c of commits) {
+    const lt = tips.get(c.lane_owner);
+    if (!lt || c.x > lt.x) tips.set(c.lane_owner, { id: c.id, x: c.x });
+  }
+  return tips;
+}
+
 /** Matches over the loaded view. Branch-name substring (any length, the
  *  long-standing behavior), hash prefix (>= 4 hex), and — new — subject or
  *  author substring (>= 2 chars, matching the backend's noise threshold).
