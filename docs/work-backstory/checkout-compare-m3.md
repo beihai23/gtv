@@ -274,3 +274,11 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
 - E2E 其余：tag 泳道菜单实测 3 项（简报写 4 项是漏算——relatedOnly 从
   M2 起就 tag-gated，mock.html 注释本有记载）；核心断言（无第五/六项）
   通过。console 全程零错误；门禁 npm test 81/81 + build 过。
+- 修复波（Task 6 E2E BUG-1 单点修）：CompareDetails 文件行补上每文件
+  +/−——`.file-row` 的 path 与展开箭头之间加两个 span，直接复用既有
+  diff-add/diff-del 类（与合计行、时间轴悬浮同款绿/红），零新增 CSS；
+  CommitDetails 的逐字 0 行不碰（后端钉死行为）。mock E2E 复验（1421）：
+  右键 now/1 → 与 HEAD 对比，三行 +10/−0、+0/−4、+6/−2 全数落 DOM
+  （行文本 "Amock/added.txt+10−0▸" 等，computed color 实证绿
+  #4CAF50/红 #F44336），点行展开懒加载照常，console 零错误；门禁
+  npm test 81/81、npm run build 过。

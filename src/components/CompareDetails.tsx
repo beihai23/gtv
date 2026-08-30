@@ -116,6 +116,11 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
                       >
                         <span className={`status ${file.status.toLowerCase()}`}>{file.status}</span>
                         <span className="path">{file.path}</span>
+                        {/* Per-file +/− (spec 4.5) -- real backend numbers,
+                            unlike the parent-vs-commit channel's zeros; same
+                            diff-add/diff-del convention as the totals row. */}
+                        <span className="diff-add">+{file.additions}</span>
+                        <span className="diff-del">−{file.deletions}</span>
                         <span className="expand-hint">{expandedPath === file.path ? '▾' : '▸'}</span>
                       </div>
                       {expandedPath === file.path && (
