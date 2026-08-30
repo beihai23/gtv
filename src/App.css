@@ -290,6 +290,16 @@
   border-radius: 3px;
 }
 
+/* Compare panel (M3.2): the base/target summary stacks short hash,
+   subject, author under one detail-row label. */
+.compare-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .tags {
   display: flex;
   flex-wrap: wrap;
@@ -750,6 +760,10 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   cursor: pointer;
 }
 .lane-menu button:hover { background: rgba(var(--link-rgb), 0.35); color: var(--text); }
+/* Grayed item (M3.2): "compare with HEAD" while HEAD is outside the
+   loaded window -- faint text, no hover affordance. */
+.lane-menu button:disabled { color: var(--text-faint); cursor: default; }
+.lane-menu button:disabled:hover { background: none; color: var(--text-faint); }
 
 /* --- collapse chips --- */
 .collapse-chip rect { transition: fill 0.15s; }

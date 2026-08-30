@@ -3,15 +3,11 @@ import type { CommitDetail } from '../types';
 import { getFileDiff } from '../api';
 import { useSettings } from '../settings';
 import { filterRefs } from '../refs';
+import { DiffView, type FileDiffState } from './DiffView';
 
 interface CommitDetailsProps {
   commit: CommitDetail | null;
   onClose: () => void;
-}
-
-interface FileDiffState {
-  text: string;
-  isError?: boolean;
 }
 
 export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
@@ -138,22 +134,6 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function DiffView({ text }: { text: string }) {
-  return (
-    <div className="file-diff">
-      {text.split('\n').map((line, i) => {
-        let cls = 'diff-line';
-        if (line.startsWith('@@')) cls += ' diff-line-hunk';
-        else if (line.startsWith('+') && !line.startsWith('+++')) cls += ' diff-line-add';
-        else if (line.startsWith('-') && !line.startsWith('---')) cls += ' diff-line-del';
-        return (
-          <div key={i} className={cls}>{line || ' '}</div>
-        );
-      })}
     </div>
   );
 }

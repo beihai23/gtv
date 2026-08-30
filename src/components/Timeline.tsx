@@ -6,6 +6,7 @@ import { filterRefs } from '../refs';
 import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 import { LANE_HEIGHT } from '../inactive';
 import type { TraceRow, TraceBar, DeadKind } from '../inactive';
+import { headToLaneTip, type ComparePair } from '../compare';
 
 interface TimelineProps {
   data: GitData;
@@ -50,6 +51,15 @@ interface TimelineProps {
   /** "Check out this branch" (lane context menu, M3.1): switch the actual
    *  worktree HEAD (App owns the dirty-confirm state machine). */
   onCheckoutBranch: (branchName: string) => void;
+  /** Ctrl/Cmd+click on a node (M3.2): feed the compare pairing state
+   *  machine in App (spec 4.4). */
+  onCompareClick: (commitId: string) => void;
+  /** Base id of an INCOMPLETE pair: while non-null the pending node gets
+   *  a ring. A complete pair opens the compare panel instead -- no ring. */
+  compareBaseId: string | null;
+  /** "Compare with HEAD" (lane context menu, M3.2): App stores the
+   *  ready-made complete pair produced by headToLaneTip. */
+  onComparePair: (pair: ComparePair) => void;
 }
 
 const MINIMAP_W = 280;
@@ -81,7 +91,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -701,7 +711,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .style('cursor', 'pointer')
       .on('click', (event: MouseEvent, d: CommitNode) => {
         event.stopPropagation();
-        onCommitClick(d.id);
+        // Modifier split mirrors the edge-click precedent above: ctrl/cmd
+        // feeds the compare pairer, a plain click stays a selection.
+        if (event.ctrlKey || event.metaKey) onCompareClick(d.id);
+        else onCommitClick(d.id);
       })
       .on('mouseenter', (event: MouseEvent, d: CommitNode) => {
         setHoveredCommit(d);
@@ -734,6 +747,32 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
       .attr('stroke', accent)
       .attr('stroke-width', 2.5)
       .attr('pointer-events', 'none');
+
+    // Pending-compare ring (spec 4.4): ONLY while pairing is incomplete
+    // (compareBaseId is non-null exactly then) the waiting base gets a
+    // double ring, so the node the next ctrl+click will pair against is
+    // obvious. Three ring semantics share the canvas and must stay
+    // distinguishable at a glance: single-select = accent (soft glow +
+    // crisp ring, r+8/r+4), HEAD = green (r+5), compare-pending =
+    // --compare-ring, dashed, thinner, and one step wider (r+11/r+7).
+    if (compareBaseId) {
+      const pending = cssVar('--compare-ring', '#b388ff');
+      const baseNodes = nodes.filter((d: CommitNode) => d.id === compareBaseId);
+      baseNodes.append('circle')
+        .attr('r', (d: CommitNode) => nodeRadius(d) + 11)
+        .attr('fill', 'none')
+        .attr('stroke', pending)
+        .attr('stroke-opacity', 0.25)
+        .attr('stroke-width', 5)
+        .attr('pointer-events', 'none');
+      baseNodes.append('circle')
+        .attr('r', (d: CommitNode) => nodeRadius(d) + 7)
+        .attr('fill', 'none')
+        .attr('stroke', pending)
+        .attr('stroke-width', 1.5)
+        .attr('stroke-dasharray', '4,3')
+        .attr('pointer-events', 'none');
+    }
 
     const headNodes = nodes.filter((d: CommitNode) => d.is_head);
     headNodes.append('circle')
@@ -1193,7 +1232,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, onCompareClick, compareBaseId]);
 
   useEffect(() => {
     draw();
@@ -1285,6 +1324,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   // Tooltip chips share the badge filter (spec 4.3): the chip list derives
   // from the FILTERED refs and the whole row hides when nothing survives.
   const hoveredRefs = hoveredCommit ? filterRefs(hoveredCommit.branch_refs, hideRemotes) : [];
+  // Lane-menu "compare with HEAD" (M3.2): precomputed for the open menu so
+  // the item can render grayed out when HEAD is outside the loaded set
+  // (date window / pagination cropped it) or the lane has no loaded tip.
+  const headPair = laneMenu ? headToLaneTip(data, laneMenu.lane.name) : null;
 
   return (
     <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
@@ -1342,6 +1385,19 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
               {t('checkoutThisBranch')}
             </button>
           )}
+          {/* M3.2: compare this lane's tip against the HEAD commit (tags
+              excluded -- a tag tip is rarely what "compare with HEAD"
+              promises). Grayed out when headToLaneTip cannot resolve the
+              pair from what is loaded; the complete pair then flows through
+              the exact same channel as two hand-picked nodes (spec 4.5). */}
+          {!laneMenu.lane.is_tag && (
+            <button
+              disabled={!headPair}
+              onClick={() => { if (headPair) { onComparePair(headPair); setLaneMenu(null); } }}
+            >
+              {t('compareWithHead')}
+            </button>
+          )}
         </div>
       )}
 
@@ -1360,6 +1416,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
               <span className="diff-del">−{hoveredCommit.deletions}</span>
             </div>
           )}
+          <div className="tooltip-time">{t('nodeCompareTip')}</div>
           {hoveredRefs.length > 0 && (
             <div className="tooltip-branches">
               {hoveredRefs.map((ref, i) => (

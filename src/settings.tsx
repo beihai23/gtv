@@ -271,6 +271,7 @@ export const THEMES: ThemeDef[] = [
       '--text-faint': '#666666', '--accent': '#e94560', '--accent-hover': '#d13650',
       '--link': '#4A90D9', '--link-rgb': '74, 144, 217',
       '--ruler-line': '#2c2c3e', '--tick-line': '#555555',
+      '--compare-ring': '#b388ff',
     },
   },
   {
@@ -284,6 +285,7 @@ export const THEMES: ThemeDef[] = [
       '--text-faint': '#66707f', '--accent': '#bf616a', '--accent-hover': '#a94e57',
       '--link': '#88c0d0', '--link-rgb': '136, 192, 208',
       '--ruler-line': '#434c5e', '--tick-line': '#4c566a',
+      '--compare-ring': '#b48ead',
     },
   },
   {
@@ -297,6 +299,7 @@ export const THEMES: ThemeDef[] = [
       '--text-faint': '#6272a4', '--accent': '#ff5555', '--accent-hover': '#e04848',
       '--link': '#8be9fd', '--link-rgb': '139, 233, 253',
       '--ruler-line': '#44475a', '--tick-line': '#44475a',
+      '--compare-ring': '#bd93f9',
     },
   },
   {
@@ -310,6 +313,7 @@ export const THEMES: ThemeDef[] = [
       '--text-faint': '#586e75', '--accent': '#dc322f', '--accent-hover': '#c22b28',
       '--link': '#268bd2', '--link-rgb': '38, 139, 210',
       '--ruler-line': '#0a3d4b', '--tick-line': '#0f4b5c',
+      '--compare-ring': '#6c71c4',
     },
   },
   {
@@ -323,6 +327,7 @@ export const THEMES: ThemeDef[] = [
       '--text-faint': '#8c959f', '--accent': '#cf222e', '--accent-hover': '#a40e26',
       '--link': '#0969da', '--link-rgb': '9, 105, 218',
       '--ruler-line': '#d0d7de', '--tick-line': '#8c959f',
+      '--compare-ring': '#8250df',
     },
   },
 ];

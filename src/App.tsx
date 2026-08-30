@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import './App.css';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
+import { CompareDetails } from './components/CompareDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
 import { CheckoutDialog } from './components/CheckoutDialog';
@@ -18,6 +19,8 @@ import { saveSelection, loadSelection, restoreSelection } from './persist';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
+import { nextPair } from './compare';
+import type { ComparePair } from './compare';
 import type { GitData, CommitDetail, BranchLane, PatchLink, WorktreeStatus } from './types';
 import type { SearchHit } from './types';
 
@@ -62,6 +65,11 @@ function App() {
   // (drives the transient success banner; null = no banner).
   const [checkoutDialog, setCheckoutDialog] = useState<{ branch: string; status: WorktreeStatus } | null>(null);
   const [switchedBranch, setSwitchedBranch] = useState<string | null>(null);
+  // M3.2 compare pairing (spec 4.4): null = idle; target '' = half-pair
+  // (base picked, the canvas rings it via compareBaseId); target set =
+  // complete pair and the CompareDetails panel takes over the
+  // CommitDetails slot.
+  const [comparePair, setComparePair] = useState<ComparePair | null>(null);
   // Integrated terminal (bottom panel). `termOpen` is deliberately not
   // persisted: auto-restoring it would silently spawn a login shell on
   // every launch — a terminal should be an explicit user action.
@@ -303,6 +311,15 @@ function App() {
         setGitData(data);
         loadDiffStats(data);
         setSelectedCommit(null);
+        // Repo switch: nothing of the OLD repo's panel state may leak
+        // into the new session. comparePair is the real fix (Task 5 --
+        // no backdrop guards it; stale oids would be fed to the NEW
+        // repo's compare calls); the checkout confirm/banner resets are
+        // defensive one-liners (Task 4 review Low-1: the z-80 backdrop
+        // makes them unreachable today, but the cost is one line each).
+        setComparePair(null);
+        setCheckoutDialog(null);
+        setSwitchedBranch(null);
         setExpandedDead(new Set());
         setViewResetKey(k => k + 1);
         // A freshly opened repo never inherits the previous one's window
@@ -354,6 +371,10 @@ function App() {
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
+      // Same old-repo panel-state reset as the picker path above.
+      setComparePair(null);
+      setCheckoutDialog(null);
+      setSwitchedBranch(null);
       setExpandedDead(new Set());
       setViewResetKey(k => k + 1);
       // Same session-window reset as the picker path above.
@@ -505,6 +526,38 @@ function App() {
   const handleCloseDetails = useCallback(() => {
     setSelectedCommit(null);
   }, []);
+
+  // Plain NODE click (Timeline only) = exit compare + open single-commit
+  // details (spec 4.4 panel-competition rule). Deliberately a wrapper
+  // around handleCommitClick rather than a line inside it: arrow-key
+  // stepping also calls handleCommitClick, and stepping must NOT touch
+  // comparePair (spec 4.4 -- with the compare panel open, arrows move
+  // the selection underneath it; the pair survives).
+  const handleNodeClick = useCallback((commitId: string) => {
+    setComparePair(null);
+    handleCommitClick(commitId);
+  }, [handleCommitClick]);
+
+  // Ctrl/Cmd+click node pairing (spec 4.4): nextPair owns every
+  // transition (idle/complete -> new base; half -> fills the target) --
+  // App only stores the result.
+  const handleCompareClick = useCallback((commitId: string) => {
+    setComparePair(p => nextPair(p, commitId));
+  }, []);
+
+  // Lane-menu "compare with HEAD": headToLaneTip already produced a
+  // COMPLETE pair (base = HEAD, target = lane tip).
+  const handleComparePair = useCallback((pair: ComparePair) => {
+    setComparePair(pair);
+  }, []);
+
+  const handleCloseCompare = useCallback(() => {
+    setComparePair(null);
+  }, []);
+
+  // Half-pair marker for the canvas: the pending base is ringed only
+  // while the pair is incomplete -- a complete pair opens the panel.
+  const compareBaseId = comparePair && comparePair.target === '' ? comparePair.base : null;
 
   // M2.1 lane-menu action: rebuild the view with only the target lane's
   // blood-line closure. The closure is computed from the RAW gitData -- the
@@ -832,6 +885,23 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedCommit, gitData, handleCommitClick, hiddenIds, outOfRange]);
+
+  // Esc closes ONLY the compare panel (spec 4.4): selectedCommit is left
+  // untouched, and no global Esc-for-single-details behavior is added
+  // (none exists today). A half-pair (target '') is not an open panel --
+  // Esc leaves it for a plain click or the next ctrl+click to resolve.
+  // Inputs keep their own Esc handling (locate dropdown), so typing in
+  // one never closes the panel behind it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !comparePair || comparePair.target === '') return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      setComparePair(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [comparePair]);
 
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
@@ -1178,7 +1248,7 @@ function App() {
           <>
             <Timeline
               data={view?.data ?? gitData}
-              onCommitClick={handleCommitClick}
+              onCommitClick={handleNodeClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
               onViewFromBranch={handleViewFromBranch}
@@ -1199,6 +1269,9 @@ function App() {
               traceGroupLabel={traceGroupLabel}
               headBranch={gitData?.head_branch ?? null}
               onCheckoutBranch={handleCheckoutBranch}
+              onCompareClick={handleCompareClick}
+              compareBaseId={compareBaseId}
+              onComparePair={handleComparePair}
             />
             {locateOpen && (
               <div className="locate-float">
@@ -1265,10 +1338,19 @@ function App() {
                 )}
               </div>
             )}
-            <CommitDetails
-              commit={selectedCommit}
-              onClose={handleCloseDetails}
-            />
+            {/* Panel slot is EXCLUSIVE (spec 4.4): a complete pair renders
+                CompareDetails instead of CommitDetails; a plain node click
+                clears the pair (handleNodeClick) and restores the single
+                view. Arrow-key stepping only moves selectedCommit, so the
+                pair survives underneath -- by design. */}
+            {comparePair && comparePair.target !== '' ? (
+              <CompareDetails pair={comparePair} onClose={handleCloseCompare} />
+            ) : (
+              <CommitDetails
+                commit={selectedCommit}
+                onClose={handleCloseDetails}
+              />
+            )}
           </>
         )}
       </main>

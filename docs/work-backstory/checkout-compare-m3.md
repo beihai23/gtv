@@ -2,7 +2,7 @@
 arc: checkout-compare-m3
 started: 294b613
 status: in-progress
-commits: [461978f, f14a604, 6371ec4, 407dbde]
+commits: [461978f, f14a604, 6371ec4, 407dbde, a55091d]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -200,3 +200,47 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
   门禁；chunk >500kB 警告为既有）。Rust 侧零改动、mock.html 未碰
   （Task 6 统一补桩）、i18n 零新键（Task 3 的 12 键本任务启用 8 个，
   余 4 个留给 Task 5）。
+- Task 5（接线 M3.2：Ctrl 配对手势 + CompareDetails 面板 + 与 HEAD
+  对比）：DiffView + FileDiffState 从 CommitDetails.tsx 逐字搬出到
+  新 DiffView.tsx（唯一改动是两个 export 关键字），CommitDetails 仅
+  换成 import——CSS 类名与行为零变化，本任务是评审重点的等价搬动。
+  CompareDetails 自取数（useEffect 键 = base+target，cancelled 旗丢
+  陈旧响应，懒加载 state 随 fetch 重置），文件列表/行级 diff 结构照
+  CommitDetails 抄，头部 base/target 两行用 CompareSide 三字段
+  （short_id/subject/author）。
+- **简报自相矛盾处按 spec 裁决**：简报要求「handleCommitClick 开头加
+  setComparePair(null)」与「箭头步进 :750-775 零改动（箭头不碰
+  pair）」不能同时成立——箭头 effect 最后一行就是调 handleCommitClick
+  （App.tsx:830），把清 pair 塞进去会让箭头步进顺手关掉对比面板，
+  违反 spec §4.4「箭头键步进只动 selectedCommit，不碰 comparePair」。
+  落地为 handleNodeClick wrapper（清 pair + 委派），只喂给 Timeline
+  的 onCommitClick；handleCommitClick 本体逐字未动，箭头/locate 走
+  原通道因此天然不碰 pair（对比面板开着时箭头在面板底下换选择，
+  属预期行为）。
+- Esc 语义：新全局 keydown（放在箭头 effect 之后），仅当完整对
+  （target 非空）开着时 setComparePair(null)，selectedCommit 不动；
+  半选（target 空串）不算「对比开着」，Esc 不清它（留给普通点击或
+  下一次 ctrl+点击解决）；input/textarea 焦点时让行（locate 下拉的
+  Esc 归它自己），照箭头 effect 的 target.tagName 守卫先例。不新增
+  「全局 Esc 关单详情」行为（现状无此行为，红线）。
+- 三环语义区分（Timeline 注释明文）：单选 = accent 双环（r+8 光晕 +
+  r+4 实线）；HEAD = 绿环（r+5）；配对 pending = --compare-ring 双环
+  （r+11 光晕 + r+7 虚线 1.5px），半径、线宽、虚线三重可区分。环色
+  走新 token cssVar('--compare-ring', ...)，五套主题各配一紫
+  （#b388ff/#b48ead/#bd93f9/#6c71c4/#8250df）——简报写「两套 palette」
+  与现实不符（THEMES 共五套），五套全配：漏配的三套会静默落到硬编码
+  fallback，与既有 token 机制不一致。
+- App.css +14 行（≤15 预算内）：.compare-side（面板头部三行堆叠）
+  与 .lane-menu button:disabled（「与 HEAD 对比」置灰——无既有
+  disabled 样式，置灰是本任务硬需求）。「base 环样式」本体是 D3 SVG
+  attr 描边，不走 CSS，故 CSS 预算花在面板与菜单上。
+- repo 切换重置块（handleOpenRepo/handleOpenLatestRepo 的
+  setSelectedCommit(null) 处）各加三行：setComparePair(null)（本任务
+  必须——comparePair 无 backdrop 挡着，旧仓 oid 残留会把新仓
+  getCompareDetail 打挂）+ setCheckoutDialog(null) +
+  setSwitchedBranch(null)（捎带，Task 4 评审 Low-1，防御性）。
+- 门禁实况：npm test 81/81（8 文件）；npm run build 过（tsc strict；
+  chunk >500kB 警告为既有）。Rust 侧零改动、mock.html 未碰（Task 6
+  统一补桩）、i18n 零新键（余下 4 键本任务全启用：compareWithHead/
+  compareBase/compareTarget/nodeCompareTip）、compare.ts 纯函数零
+  改动、箭头步进代码零改动。真机不跑（Task 6 mock 桩 E2E 统一验）。
