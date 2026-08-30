@@ -2,7 +2,7 @@
 arc: checkout-compare-m3
 started: 294b613
 status: in-progress
-commits: [461978f, f14a604, 6371ec4, 407dbde, a55091d]
+commits: [461978f, f14a604, 6371ec4, 407dbde, a55091d, 009508a]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -244,3 +244,33 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
   统一补桩）、i18n 零新键（余下 4 键本任务全启用：compareWithHead/
   compareBase/compareTarget/nodeCompareTip）、compare.ts 纯函数零
   改动、箭头步进代码零改动。真机不跑（Task 6 mock 桩 E2E 统一验）。
+- Task 6（mock.html invoke 桩 + E2E 七项全量验收）：唯一源码侧改动
+  mock.html——新增 `window.MOCK = { worktree: 'clean'|'dirty'|'merge',
+  checkout: 'ok'|'err' }` 档位（js 实时翻档，免 reload）与四个 invoke
+  桩（get_worktree_status 三档 / checkout_branch ok+err / get_compare_detail
+  静态合成 / get_pair_file_diff 手写 patch），并在 ready 注入
+  `d.head_branch='main'`（dump 早于该字段）。compare 桩 CONTRACT
+  APPROXIMATION：mock 跑不了 git，文件列表与合计写死（+10/0、0/-4、
+  +6/-2、合计 16/6，逐数断言），但两侧按 id 查 DATA 真提交——面板头部
+  如实反映实际配对；base===target 照 git 空差异诚实返回空列表（spec
+  §5 边界因此可测）。既有桩行为零变化。
+- E2E 关键决策：dump 里 `DATA.branches[1]`（feat/1）是死泳道——默认
+  视图被 collapse 进 trace row，chip 不存在，右键不到。方向验证改用
+  活泳道 **now/1**（tip 09016ec「active 1」），与 HEAD a78834f 天然
+  区分方向。另外默认视图 compressed，「`.node[i]` ↔ DATA.commits[i]」
+  简报映射不成立（527 可见 vs 1477 总数）——改用 d3 `__data__` 直读
+  节点 id，更稳。
+- E2E 发现（未修，红线 src/ 不动）：**CompareDetails 文件行不渲染
+  每文件 +/-**——Task 5 简报明文「直接渲染 additions/deletions + status
+  字母」、spec §4.5「文件列表带每文件 +/−」，实际行内只有 status 字母
+  + 路径 + 展开箭头（照 CommitDetails 无数字行抄死了）。数据模型
+  FileChange.additions/deletions 已到位，纯展示缺口。
+- E2E 发现（既有、非 M3）：App 每次重渲（toast 出现/消失、error banner、
+  对话框）都会整幅重画 d3 场景——`patchLinks={showPatchLinks ?
+  patchLinks : []}`（App.tsx，125742b 引入）每渲一个新 `[]`，落在 draw
+  useCallback 依赖里。React `<svg>` 不重挂、transform/节点数/选择全保
+  留，视觉无感，纯性能疣。七项断言的「无重建」按 React/data/viewport
+  三层取证，d3 `<g>` 身份不作为断言依据。
+- E2E 其余：tag 泳道菜单实测 3 项（简报写 4 项是漏算——relatedOnly 从
+  M2 起就 tag-gated，mock.html 注释本有记载）；核心断言（无第五/六项）
+  通过。console 全程零错误；门禁 npm test 81/81 + build 过。

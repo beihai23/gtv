@@ -11,8 +11,16 @@
     // Mock Tauri v2 internals BEFORE app code runs; data from a GitData
     // dump (see docs/tools/gen_inactive_repo.sh; regenerate any repo via dump_json).
     let DATA = null;
+    // M3 E2E gear (switchable live from js, no reload needed): the
+    // worktree-preflight and checkout-ack stubs below read these on every
+    // invoke. 'worktree': 'clean' | 'dirty' | 'merge'; 'checkout': 'ok' | 'err'.
+    window.MOCK = { worktree: 'clean', checkout: 'ok' };
     const ready = fetch('/mock-data.json').then(r => r.json()).then(d => {
       DATA = d;
+      // The dump predates the head_branch field (M3.2 backend addition):
+      // HEAD (a78834f) sits on 'main', which is that lane's tip, so the
+      // current-lane marker belongs on the main chip.
+      d.head_branch = 'main';
       // Synthetic remote counterparts (M2.3 acceptance): the dump has no
       // origin/* refs at all, so the first three lanes' tip commits (by
       // lane_index, tip = largest x) get an origin/<name> copy of their
@@ -108,6 +116,76 @@
               }));
           }
           case 'jump_to_commit': return DATA;
+          case 'get_worktree_status': {
+            // CONTRACT APPROXIMATION of git_reader.rs worktree_status: the
+            // real backend counts porcelain records; the mock serves three
+            // fixed gears (window.MOCK.worktree) so E2E can drive the
+            // clean / dirty-confirm / merge-refusal lanes. The dirty counts
+            // (3 modified / 2 untracked) are fixed E2E assertion anchors.
+            if (window.MOCK.worktree === 'dirty')
+              return { modified: 3, untracked: 2, merge_in_progress: false };
+            if (window.MOCK.worktree === 'merge')
+              return { modified: 0, untracked: 0, merge_in_progress: true };
+            return { modified: 0, untracked: 0, merge_in_progress: false };
+          }
+          case 'checkout_branch': {
+            // CONTRACT APPROXIMATION of the Rust safe-checkout writer: the
+            // real ack is followed by a repo-changed watcher rebuild; the
+            // mock has no watcher, so the ack is the whole effect and the
+            // view intentionally stays put (the E2E no-rebuild assertion).
+            if (window.MOCK.checkout === 'err')
+              throw new Error('mock: uncommitted changes would be overwritten');
+            return { branch: args?.branch };
+          }
+          case 'get_compare_detail': {
+            // CONTRACT APPROXIMATION of commands.rs get_compare_detail:
+            // real per-file numbers come from git2 tree diffs; the mock
+            // cannot run git, so the file list and totals are static
+            // synthesis -- added +10/0, deleted 0/-4, modified +6/-2,
+            // totals 16/6 -- asserted number by number in E2E. Only the
+            // two sides are real DATA commits (looked up by id), so the
+            // panel header reflects the actual pair. base === target
+            // mirrors git's honest empty diff (spec 5): zero files.
+            const side = (id) => {
+              const c = DATA.commits.find(x => x.id === id);
+              return {
+                id,
+                short_id: c ? c.short_id : String(id).slice(0, 7),
+                subject: c ? c.message.split('\n')[0] : '',
+                author: c ? c.author_name : '',
+              };
+            };
+            if (args?.base === args?.target) {
+              return { base: side(args?.base), target: side(args?.target), files: [], total_additions: 0, total_deletions: 0 };
+            }
+            return {
+              base: side(args?.base), target: side(args?.target),
+              files: [
+                { path: 'mock/added.txt', additions: 10, deletions: 0, status: 'A' },
+                { path: 'mock/deleted.txt', additions: 0, deletions: 4, status: 'D' },
+                { path: 'mock/modified.txt', additions: 6, deletions: 2, status: 'M' },
+              ],
+              total_additions: 16, total_deletions: 6,
+            };
+          }
+          case 'get_pair_file_diff': {
+            // CONTRACT APPROXIMATION: same static-synthesis stance -- one
+            // hand-written patch served for any file of any pair. The two
+            // '-' lines and three '+' lines are E2E substring anchors.
+            return [
+              'diff --git a/mock/modified.txt b/mock/modified.txt',
+              '--- a/mock/modified.txt',
+              '+++ b/mock/modified.txt',
+              '@@ -1,3 +1,6 @@',
+              ' kept context line',
+              '-mock removed line one',
+              '-mock removed line two',
+              '+mock added line one',
+              '+mock added line two',
+              '+mock added line three',
+              ' kept trailing line',
+            ].join('\n');
+          }
           default: return null; // plugin:dialog|open -> null (no native dialog)
         }
       },
