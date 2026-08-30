@@ -14,7 +14,7 @@
 
 - **只读红线的唯一豁免**：全 arc 只有 `checkout_branch` 一个命令写仓库（SAFE 模式、无 force、merge 进行中拒绝、脏时必须显式确认）。其余一切改动只读。README/AGENTS.md 的措辞放宽放 Task 7，之前不动文档承诺。
 - git2 访问全部落 `src-tauri/src/git_reader.rs`（AGENTS.md 布局约定）；`commands.rs` 只做 State/锁/spawn_blocking 薄包装；`models.rs` 与 `src/types.ts` 在同一 commit 内同步改（手工镜像契约）。
-- 门禁（每任务）：`cd src-tauri && cargo test` 全绿 + `npm test` 全绿（当前 65）+ `npm run build` 过。Rust 侧注释同英文 ASCII。
+- 门禁（每任务）：`cd src-tauri && cargo test` 全绿 + `npm test` 全绿（当前 73，含 1feb89b 集成终端的 terminalSize 8 例；tour_repo 的 2 个失败是每个新克隆必现的既有 gitlink 问题，不算回归）+ `npm run build` 过。Rust 侧注释同英文 ASCII。
 - App.tsx TDZ 地雷（M1.3）：新 memo/useCallback 依赖必须声明在前。
 - i18n en/zh 两侧同步；新 UI 文案含 `{n}` 插值走 `t(key, vars)`（settings.tsx:411 模式）。
 - E2E 用 mock.html，dev server 起 **1421** 端口（先探测，用户 1420 不碰）；gstack browse CLI（`$HOME/.claude/skills/gstack/browse/dist/browse`），输入框 `fill` 不是 `type`，修饰键点击用 js dispatchEvent 带 `ctrlKey: true`。
