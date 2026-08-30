@@ -184,10 +184,11 @@ pub struct SearchHit {
     pub in_view: bool,
 }
 
-/// Worktree preflight for the checkout confirm dialog: how many tracked
-/// files carry uncommitted modifications, how many files are untracked,
-/// and whether a merge or cherry-pick is in progress (checkout refuses
-/// while one is).
+/// Worktree preflight for the checkout confirm dialog: how many paths
+/// carry uncommitted changes vs HEAD, staged or not (edits, deletions,
+/// renames, typechanges), how many paths are untracked, and whether a
+/// merge, cherry-pick, or revert is in progress (checkout refuses while
+/// one is).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeStatus {
     pub modified: usize,

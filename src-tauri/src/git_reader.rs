@@ -179,11 +179,12 @@ impl GitReader {
     }
 
     /// Preflight snapshot for the checkout confirm dialog (spec 4.1):
-    /// uncommitted-change counts plus whether a merge or cherry-pick is
-    /// in progress. Tracked files with worktree modifications (including
-    /// type-change and rename) count as modified, untracked files count
-    /// as untracked -- exactly the two buckets the spec defines, so
-    /// worktree deletions are intentionally not counted.
+    /// uncommitted-change counts plus whether a merge, cherry-pick, or
+    /// revert is in progress. Bucketed by git-status-porcelain semantics:
+    /// an entry whose only flag is WT_NEW is untracked (untracked files
+    /// carry no other flag); every other entry -- staged or unstaged
+    /// edits, deletions, renames, typechanges -- is a change vs HEAD and
+    /// counts as modified.
     pub fn worktree_status(&self) -> Result<WorktreeStatus, String> {
         // INCLUDE_UNTRACKED is opt-in in libgit2; without it WT_NEW never
         // appears and the untracked count would always be 0. The other
@@ -196,23 +197,26 @@ impl GitReader {
             .statuses(Some(&mut options))
             .map_err(|e| format!("Failed to read worktree status: {}", e))?;
 
-        let modified_flags = Status::WT_MODIFIED | Status::WT_TYPECHANGE | Status::WT_RENAMED;
         let mut modified = 0;
         let mut untracked = 0;
         for entry in statuses.iter() {
-            let status = entry.status();
-            if status.intersects(modified_flags) {
-                modified += 1;
-            } else if status.contains(Status::WT_NEW) {
+            // One status entry per path, so if/else counts each dirty path
+            // exactly once even when it carries both INDEX_* and WT_*
+            // flags (staged, then edited again).
+            if entry.status() == Status::WT_NEW {
                 untracked += 1;
+            } else {
+                modified += 1;
             }
         }
 
-        // Unfinished merge/revert state lives in these pseudo-refs; either
-        // one means checkout must refuse, so the dialog can say why up
-        // front instead of the checkout failing later.
+        // Unfinished merge, cherry-pick, or revert state lives in these
+        // pseudo-refs; any of them means checkout must refuse, so the
+        // dialog can say why up front instead of the checkout failing
+        // later.
         let merge_in_progress = self.repo.find_reference("MERGE_HEAD").is_ok()
-            || self.repo.find_reference("CHERRY_PICK_HEAD").is_ok();
+            || self.repo.find_reference("CHERRY_PICK_HEAD").is_ok()
+            || self.repo.find_reference("REVERT_HEAD").is_ok();
 
         Ok(WorktreeStatus {
             modified,
@@ -227,17 +231,18 @@ impl GitReader {
     /// changes carry over; anything a plain `git checkout` would refuse to
     /// overwrite fails the call BEFORE anything is written), and only then
     /// does HEAD move, so a refused checkout leaves HEAD untouched. There
-    /// is deliberately no force option and no way around a merge or
-    /// cherry-pick in progress. Tags and remote-tracking names (origin/x)
-    /// do not resolve as local branches and are rejected.
+    /// is deliberately no force option and no way around a merge,
+    /// cherry-pick, or revert in progress. Tags and remote-tracking names
+    /// (origin/x) do not resolve as local branches and are rejected.
     ///
     /// Returns an ack only, never GitData: rebuilding the view is the
     /// watcher repo-changed chain's job, so two rebuilds can never race.
     pub fn checkout_branch(&self, name: &str) -> Result<CheckoutAck, String> {
         if self.repo.find_reference("MERGE_HEAD").is_ok()
             || self.repo.find_reference("CHERRY_PICK_HEAD").is_ok()
+            || self.repo.find_reference("REVERT_HEAD").is_ok()
         {
-            return Err("merge or cherry-pick in progress".to_string());
+            return Err("merge, cherry-pick, or revert in progress".to_string());
         }
 
         let branch = self
@@ -263,7 +268,13 @@ impl GitReader {
             .map_err(|e| format!("Checkout failed: {}", e))?;
         self.repo
             .set_head(&format!("refs/heads/{}", name))
-            .map_err(|e| format!("Failed to move HEAD: {}", e))?;
+            .map_err(|e| {
+                format!(
+                    "Worktree moved to {} but HEAD could not follow: {} \
+                     (run `git checkout {}` to finish)",
+                    name, e, name
+                )
+            })?;
 
         log::info!("Checked out branch {}", name);
         Ok(CheckoutAck {

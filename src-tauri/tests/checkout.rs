@@ -3,7 +3,8 @@
 //! second, with the SAFE strategy: compatible uncommitted changes carry
 //! over to the target branch, anything a plain `git checkout` would refuse
 //! to overwrite aborts the whole call (HEAD and the worktree stay
-//! untouched), and a merge or cherry-pick in progress is refused outright.
+//! untouched), and a merge, cherry-pick, or revert in progress is
+//! refused outright.
 //! worktree_status is the preflight for the confirm dialog:
 //! modified/untracked counts plus the merge-in-progress flag.
 
@@ -178,7 +179,7 @@ fn merge_in_progress_is_refused_until_resolved() {
     let err = reader
         .checkout_branch("feature")
         .expect_err("checkout must refuse while a merge is in progress");
-    assert_eq!(err, "merge or cherry-pick in progress");
+    assert_eq!(err, "merge, cherry-pick, or revert in progress");
     assert_eq!(head_branch(&dir), "main", "refused before any write");
 
     // The refusal tracks the merge state, not the branch: gone MERGE_HEAD,
@@ -187,6 +188,39 @@ fn merge_in_progress_is_refused_until_resolved() {
     reader
         .checkout_branch("feature")
         .expect("usable again once the merge state is gone");
+    assert_eq!(head_branch(&dir), "feature");
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+#[test]
+fn revert_in_progress_is_refused_until_resolved() {
+    let dir = temp_repo("revert");
+    write(&dir, "a.txt", "base");
+    add_and_commit(&dir, "c1");
+    git(&dir, &["checkout", "-b", "feature"]);
+    write(&dir, "a.txt", "feature");
+    add_and_commit(&dir, "feature change");
+    git(&dir, &["checkout", "main"]);
+
+    // Simulate the state an unfinished `git revert` leaves behind.
+    let head = git_out(&dir, &["rev-parse", "HEAD"]);
+    fs::write(dir.join(".git").join("REVERT_HEAD"), format!("{}\n", head))
+        .expect("write REVERT_HEAD");
+
+    let reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let err = reader
+        .checkout_branch("feature")
+        .expect_err("checkout must refuse while a revert is in progress");
+    assert_eq!(err, "merge, cherry-pick, or revert in progress");
+    assert_eq!(head_branch(&dir), "main", "refused before any write");
+
+    // The refusal tracks the revert state, not the branch: gone
+    // REVERT_HEAD, the same checkout succeeds.
+    fs::remove_file(dir.join(".git").join("REVERT_HEAD")).expect("remove REVERT_HEAD");
+    reader
+        .checkout_branch("feature")
+        .expect("usable again once the revert state is gone");
     assert_eq!(head_branch(&dir), "feature");
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
@@ -243,6 +277,73 @@ fn worktree_status_counts_modified_untracked_and_merge_state() {
     assert!(status.merge_in_progress);
     assert_eq!(status.modified, 2);
     assert_eq!(status.untracked, 1);
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+#[test]
+fn staged_edit_counts_as_modified() {
+    let dir = temp_repo("staged-edit");
+    write(&dir, "a.txt", "one");
+    add_and_commit(&dir, "c1");
+    write(&dir, "a.txt", "one-staged");
+    git(&dir, &["add", "a.txt"]); // INDEX_MODIFIED only: no WT flag at all.
+
+    let reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let status = reader.worktree_status().expect("status read");
+    assert_eq!(status.modified, 1, "cleanly staged edit differs from HEAD");
+    assert_eq!(status.untracked, 0);
+    assert!(!status.merge_in_progress);
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+#[test]
+fn staged_new_file_counts_as_modified_not_untracked() {
+    let dir = temp_repo("staged-new");
+    write(&dir, "a.txt", "one");
+    add_and_commit(&dir, "c1");
+    write(&dir, "new.txt", "staged-new");
+    git(&dir, &["add", "new.txt"]); // INDEX_NEW only.
+
+    let reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let status = reader.worktree_status().expect("status read");
+    assert_eq!(status.modified, 1, "a staged new file differs from HEAD");
+    assert_eq!(status.untracked, 0, "a staged file is not untracked");
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+#[test]
+fn unstaged_deletion_counts_as_modified() {
+    let dir = temp_repo("unstaged-del");
+    write(&dir, "a.txt", "one");
+    write(&dir, "b.txt", "two");
+    add_and_commit(&dir, "c1");
+    fs::remove_file(dir.join("a.txt")).expect("remove a.txt"); // WT_DELETED.
+
+    let reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let status = reader.worktree_status().expect("status read");
+    assert_eq!(status.modified, 1, "a deleted tracked file differs from HEAD");
+    assert_eq!(status.untracked, 0);
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+#[test]
+fn one_dirty_path_is_counted_once() {
+    let dir = temp_repo("single-count");
+    write(&dir, "a.txt", "one");
+    add_and_commit(&dir, "c1");
+    write(&dir, "a.txt", "staged");
+    git(&dir, &["add", "a.txt"]);
+    write(&dir, "a.txt", "staged-plus-worktree");
+    // One entry: INDEX_MODIFIED | WT_MODIFIED -> one modified path.
+
+    let reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let status = reader.worktree_status().expect("status read");
+    assert_eq!(status.modified, 1, "one status entry per path: no double count");
+    assert_eq!(status.untracked, 0);
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
 }

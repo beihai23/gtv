@@ -58,3 +58,31 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
   NotFound，与本次改动无关。npm test 73/73 全绿（简报写 65 是 M2 时代
   的旧数，M1.3 arc 后 locate/terminalSize 已加 8 例）。npm run build 过
   （types.ts 镜像编译，chunk >500kB 警告为既有）。
+- 评审修复波（461978f 独立评审 CHANGES_REQUESTED，三项全采纳；评审已在
+  一次性 worktree 实证补丁并编译跑通，本波照单落地）：
+  1. Important-1（预裁定）：staged 变更两桶皆空——git2 的 status flags 把
+     head→index（staged，INDEX_*）与 index→worktree（WT_*）分成两组位，
+     只 `git add` 过的改动不带任何 WT_* 位，原实现两桶都收不到，脏确认
+     对话框会被 `modified: 0` 骗过去。分桶改为 git-status-porcelain 语义：
+     仅带 WT_NEW 的 entry 计 untracked（untracked 独来独往，不携带其他
+     flag），其余任何 flag（INDEX_* 整组、WT_DELETED、WT_RENAMED、
+     WT_TYPECHANGE）都是对 HEAD 的未提交变更，计 modified。上面那条
+     Process 里"两桶只收 WT_* / WT_DELETED 有意不计"的表述作废——INDEX_*
+     整组漏掉不是保守是漏报。git2 每个 dirty path 恰一条 entry（flags 合并），
+     if/else 每条只进一桶，MM 双 flag 场景断言 modified 1 钉死无重复计数。
+     新增 4 例：staged 编辑 / staged 新文件（非 untracked）/ 未 staged
+     删除 / MM 单计。
+  2. Minor-1：先树后头顺序下 set_head 失败（exotic：需 refdb/文件系统级
+     故障）的残余态是"index+工作区 = 目标树，HEAD 仍在旧分支"，原错误串
+     "Failed to move HEAD" 对此只字不提。改为如实陈述中间态并附恢复命令：
+     "Worktree moved to <name> but HEAD could not follow: <e> (run
+     `git checkout <name>` to finish)"。
+  3. Nit 采纳：REVERT_HEAD 与 MERGE_HEAD/CHERRY_PICK_HEAD 并列纳入进行中
+     探测——checkout_branch 拒绝串与 worktree_status 的 merge_in_progress
+     旗两处同步（旗的职责就是让对话框提前说出拒绝理由，两处探测集不同步
+     会自相矛盾），拒绝串放宽为 "merge, cherry-pick, or revert in
+     progress"，精确断言随之更新，另加 REVERT_HEAD 拒绝 + 删除后恢复一例。
+  4. 门禁复跑：cargo test 47 过 / 2 败（checkout 套件 7→12；2 败仍为
+     tour_repo contentless gitlink 既有状态）；npm test 73/73；npm run
+     build 过。commands.rs:279 的命令层注释仍写 "merge or cherry-pick"
+     旧措辞——该文件不在本修复波允许触碰清单内，留给后续顺路提交。
