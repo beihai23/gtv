@@ -66,7 +66,12 @@ from the commit graph itself.
   Dracula, Solarized Dark, GitHub Light)
 - Remembers your last repository
 
-**Read-only.** gtv never modifies your repository.
+**Read-only, one deliberate exception.** gtv does not modify your repository —
+the only write it ever performs is a branch switch you explicitly confirm:
+compatible uncommitted changes are carried over safely, and if they conflict
+with the target branch the switch fails cleanly, before writing anything.
+Nothing is discarded or force-overwritten. The integrated terminal is a plain
+shell where you type your own commands; that is you working, not gtv writing.
 
 ## Download
 

@@ -8,7 +8,11 @@ fork point, and folds back into its parent at a merge. It reconstructs branch li
 from pure git data — no server, no metadata store, no account. Inspired by gmaster's
 Branch Explorer, but an independent codebase.
 
-gtv **never modifies the repository** it opens. Keep it that way.
+gtv is **read-only by design, with exactly one sanctioned write**: a branch
+switch the user explicitly confirms (`checkout_branch` — SAFE mode: compatible
+uncommitted changes are carried over, never forced; a merge/cherry-pick/revert
+in progress is refused). That single exception is the entire write surface.
+Do not add any other path that mutates the repository.
 
 ## Tech stack
 
@@ -37,9 +41,11 @@ src-tauri/src/
   layout.rs       pure lane-propagation engine; NO git2 dependency, operates only
                   on models so it is unit-testable with hand-built graphs
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
-                  (walk_commits + load_more pagination), lazy diff stats;
-                  feeds layout::compute_layout and returns GitData;
-                  change_fingerprint powers the repo-change poller
+                  (walk_commits + load_more pagination), lazy diff stats,
+                  worktree status + SAFE branch checkout (the one sanctioned
+                  write) and two-commit compare; feeds layout::compute_layout
+                  and returns GitData; change_fingerprint powers the
+                  repo-change poller
   commands.rs     #[tauri::command] handlers + AppState (Mutex-guarded current
                   repo/path/branch/view + pagination ViewSession + the live
                   PtySession)
@@ -50,7 +56,7 @@ src-tauri/src/
   watcher.rs      repo-change poller thread: fingerprints the open repo every
                   1.5s and emits "repo-changed" so the frontend reloads
 src-tauri/tests/
-  layout_pure.rs  9 pure-graph algorithm tests (no git repo involved)
+  layout_pure.rs  10 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
   relative_worktrees_ext.rs  regression: repos created by git >= 2.48
                   `worktree add --relative-paths` must open (libgit2 >= 1.9.4)
@@ -58,6 +64,17 @@ src-tauri/tests/
                   small chunks: paged result must equal the full walk, the
                   loaded set must stay downward-closed, and excluded stale
                   seeds must never be loaded
+  checkout.rs     the M3.1 write path (temp repos via the git CLI): SAFE branch
+                  checkout — clean switch, dirty carry-over, conflict refusal
+                  with zero side effects, merge/revert-in-progress refusal —
+                  plus worktree-status bucket counts (staged/untracked/MM)
+  compare.rs      two-commit compare (file list with per-file +/−, line-level
+                  patches, empty diff, unknown oids) + head_branch branch/
+                  detached states + regression pins for the parent-vs-commit
+                  diff channel
+  search.rs       full-history commit search backend: substring match on
+                  subject/author (id-prefix for hex), newest-first, in_view
+                  membership in the caller's loaded window
   terminal_pty.rs spawn_pty smoke tests: output streaming, cwd, id monotonicity,
                   drop-kill teardown
   repo_fingerprint.rs  change_fingerprint behavior: stable across reads, moves
@@ -75,11 +92,20 @@ src/
                   consumes them via var(--x)), persisted in localStorage
                   (gtv_lang / gtv_theme / gtv_show_stale)
   terminalSize.ts bottom-terminal height clamp + persistence (gtv_term_height)
+  compare.ts      compare-pairing pure functions: nextPair (Ctrl+click
+                  base/target state machine) + headToLaneTip (pair for the
+                  lane-menu "compare with HEAD" item)
   App.tsx         top-level state: repo opening, branch panel, view options,
                   terminal toggle (Ctrl+`) + repo-changed refresh
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
+  components/CompareDetails.tsx two-commit compare panel (Ctrl+click pairing):
+                                side summaries, per-file +/− counts, line diffs
+  components/CheckoutDialog.tsx dirty-worktree confirm dialog for the branch
+                                switch (three-state copy by status counts)
+  components/DiffView.tsx       per-file expandable line diff, shared by
+                                CommitDetails and CompareDetails
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
@@ -114,10 +140,10 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 73 cases: `src/inactive.test.ts`, `src/locate.test.ts`,
+(`npm test`, 81 cases: `src/inactive.test.ts`, `src/locate.test.ts`,
 `src/related.test.ts`, `src/daterange.test.ts`, `src/refs.test.ts`,
-`src/persist.test.ts`, `src/terminalSize.test.ts`); all other automated testing
-lives in Rust.
+`src/persist.test.ts`, `src/terminalSize.test.ts`, `src/compare.test.ts`);
+all other automated testing lives in Rust.
 
 ## Testing strategy
 
@@ -173,11 +199,17 @@ lives in Rust.
 
 ## Security considerations
 
-- The app is **read-only by design**: `GitReader` only opens repos and walks
-  history/diffs; there is intentionally no write path. Do not add commands that
-  mutate the user's repository. All of gtv's own git access stays inside git2
-  (no shelling out to `git`).
-- The integrated terminal (`terminal.rs` + `TerminalPanel.tsx`) is the one
+- The app is **read-only by design, with exactly one sanctioned write**:
+  `checkout_branch` — a branch switch the user explicitly confirms after a
+  dirty-worktree preflight dialog. It is SAFE-mode only (compatible uncommitted
+  changes are carried over; a conflict aborts cleanly before anything is
+  written; `force` appears nowhere in the codebase) and it refuses while a
+  merge/cherry-pick/revert is in progress. Outside that single command,
+  `GitReader` only opens repos and walks history/diffs; there is intentionally
+  no other write path. Do not add commands that mutate the user's repository —
+  that red line is unchanged and absolute. All of gtv's own git access stays
+  inside git2 (no shelling out to `git`).
+- The integrated terminal (`terminal.rs` + `TerminalPanel.tsx`) is the other
   deliberate exception: a **user-driven login shell** in a PTY. The user typing
   write commands there is the feature itself — gtv never feeds commands into it
   programmatically, it only relays keystrokes and output, and it watches for

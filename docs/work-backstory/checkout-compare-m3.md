@@ -1,8 +1,8 @@
 ---
 arc: checkout-compare-m3
 started: 294b613
-status: in-progress
-commits: [461978f, f14a604, 6371ec4, 407dbde, a55091d, 009508a]
+status: resolved
+commits: [294b613, db57de6, 461978f, f14a604, 6371ec4, 407dbde, a55091d, 009508a, 8b03e51, f6ff608, b9b504a, "docs closure at HEAD"]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -315,3 +315,57 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
   存活实证（终审前每渲必换）。L8 无浏览器复验路径（mock 无事件插件，
   listen 失败被吞、repo-changed 无法注入），代码级核验。遗留：绿硬编码
   祝圣不动（backlog）、AGENTS.md 测试计数归文档收尾任务。
+- Task 7（opus 终审 + 修复波 + 文档收尾）：终审范围 461978f^..HEAD（8 个
+  实现提交 + 前置 spec/plan/docs，26 文件 +2143/−43），对照 spec/plan/
+  六份任务评审逐行核，结论 **Ready to merge: Yes**——0 Critical / 2
+  Important / 8 Low / 3 Nit。四不变量机械复核全 PASS：①唯一写面 =
+  checkout_tree+set_head 两处 git2 变更调用，force 全库零命中，AppState
+  零触碰；②checkout 成功路径仅两个 setter、零数据 effect 依赖，重建唯一
+  所有权在 watcher 链路；③render_file_patch 与 arc 前内联实现逐段字节
+  等价（6371ec4 后 git_reader.rs 仅收过一处注释级改动，b9b504a），
+  回归钉在位；④DiffView
+  逐字节搬动（仅两个 export 关键字），CommitDetails 行为零变化。十项
+  累积队列裁定 9 修 1 留（绿硬编码祝圣免修，tokenize 记 backlog）；I1
+  （双面板懒加载陈旧补丁竞态——新代码引入而非继承，升级 Important）与
+  I2（半配对 base 经 watcher/换视图/过滤/跳转四路径静默蒸发——其中三条
+  是高频主动操作，升级 Important）在修复波 b9b504a 一次清零（上一条）。
+  文档收尾（本 commit，arc 关闭）：roadmap 3.1/3.2/3.4 归档「已完成的
+  地基」——3.4 核实为既有能力（CommitDetails 内嵌行级 diff），本 arc 的
+  CompareDetails 补齐对比侧，DiffView 两面板共用；README/AGENTS 只读
+  措辞放宽为「唯一写例外 = 显式确认的分支切换（SAFE 携带、无 force、
+  冲突写前干净失败、merge/cherry-pick/revert 进行中拒绝）」，除此外不
+  加任何写命令的红线原样保留并强调，集成终端豁免段改双豁免表述；AGENTS
+  测试索引 81 例/8 文件，tests/ 清单补 checkout.rs/compare.rs（顺带补
+  漏列的 search.rs、修 layout_pure 9→10），src/ 清单补 compare.ts 与
+  CheckoutDialog/CompareDetails/DiffView 三组件。门禁：npm test 81/81
+  （8 文件）、npm run build 绿（chunk 警告既有）；cargo 不重跑（文档
+  零 Rust 改动，末次实测 53 pass / 2 tour_repo 预存在失败）。遗留
+  backlog：主题绿/红 tokenize（终审 N1）、app-wide Esc 约定（Task 5
+  Nit-4）；用户手动验收清单见 .superpowers/sdd/m3-task-7-report.md。
+
+## Lessons
+
+- **E2E 兜住了实现与评审的共同盲区。** 对比面板每文件 +/− 数字在数据
+  模型、后端测试、面板实现、逐行评审四层全过，唯独 Task 6 的 mock E2E
+  逐数断言一击命中（数据到位、纯展示缺口）。「看起来对」的代码评审兜
+  不住展示层缺口；断言到具体数字的 E2E 兜得住。
+- **简报也会错，spec 优先的裁决权在实现者。** 本轮简报三处实错：
+  handleCommitClick 开头清 pair 会连箭头步进一起误伤（违反 spec §4.4）、
+  tag 泳道菜单项数写 4 实为 3、建议的第二条验证泳道是默认视图里没有
+  chip 的死泳道——三处都被实现者以 spec/实测纠正。简报是意图不是真理；
+  发现矛盾时停下对 spec 裁决，比照单全收便宜得多。
+- **「先入队、终审统一裁定」的纪律让积压一次清零且敢留。** 六轮任务
+  评审累积 10 项 Low/Nit 全部入队不即时修，终审统一裁定 9 修 1 留：
+  祝圣免修的绿硬编码、验证成立故不修的完整配对存活，都是先验证后裁定
+  才敢下的结论；即时修反而打断任务边界、引入未经裁定的扩界。
+- **ack-only + 单一重建路径让最难的不变量变成机械可验。**
+  checkout_branch 只回 ack、不碰 AppState、刷新全权交 watcher 既有
+  链路——终审「无第二重建路径」因此退化为机械计数（成功路径两个
+  setter、零数据 effect 依赖），四不变量里最省力的一条 PASS。写路径
+  越窄，审计越便宜。
+- **实现者的 API 实测异议值得上升为预裁定评审项。** git2 status flags
+  把 staged（INDEX_*）与 worktree（WT_*）分成两组位，简报的分桶草图会
+  让 staged-only 脏工作区报 modified:0 骗过确认对话框——实现者实测
+  发现、协调者升格为预裁定 Important-1、临时 worktree 11/11 实证补丁、
+  修复波落地（f14a604）。若实现者选择服从简报，这个 bug 会直接进
+  Task 4 接线。
