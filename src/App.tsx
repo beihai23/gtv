@@ -31,6 +31,11 @@ const SHOW_TAGS_KEY = 'gtv_show_tags';
 // view is computed (avoids per-render Set churn re-triggering its effects).
 const NO_IDS: Set<string> = new Set();
 
+// Same stable-identity trick for the patchLinks "off" branch: a fresh []
+// per render would land in Timeline's draw-effect deps and force a full d3
+// scene redraw on every App render (NO_IDS precedent).
+const NO_LINKS: PatchLink[] = [];
+
 // Branch/tag chip labels: show the full name up to this many chars; longer
 // names keep head and tail with an ellipsis in the middle (CSS can only
 // truncate at the end, which hides the distinguishing tail of long names).
@@ -425,6 +430,11 @@ function App() {
   const handleRepoRefresh = useCallback(async () => {
     if (!latestRepo || refreshingRef.current) return;
     refreshingRef.current = true;
+    // A pending checkout confirm holds preflight counts this rebuild just
+    // invalidated -- close it (the world changed, re-ask) instead of
+    // letting the user confirm against stale numbers. SAFE checkout stays
+    // the correctness backstop either way.
+    setCheckoutDialog(null);
     try {
       const keepId = selectedCommit?.id ?? null;
       const data = await openRepository(latestRepo, showStaleBranches);
@@ -559,6 +569,23 @@ function App() {
   // while the pair is incomplete -- a complete pair opens the panel.
   const compareBaseId = comparePair && comparePair.target === '' ? comparePair.base : null;
 
+  // Half-pair repair (single point, mirrors the selectedCommit keep-if-
+  // survived logic in handleRepoRefresh): any rebuild -- watcher refresh,
+  // view-from-branch, chip filtering, a locate jump -- can drop the
+  // pending base out of the loaded set. The canvas ring then vanishes
+  // (Timeline filters by loaded node ids) while the pair survives, and the
+  // next ctrl+click would complete a pair against an invisible base.
+  // COMPLETE pairs are deliberately left alone: the panel resolves both
+  // oids via the backend's resolve_commit straight into the object db,
+  // independent of the loaded window (verified in the M3 final review).
+  useEffect(() => {
+    setComparePair(p =>
+      p && p.target === '' && gitData && !gitData.commits.some(c => c.id === p.base)
+        ? null
+        : p
+    );
+  }, [gitData]);
+
   // M2.1 lane-menu action: rebuild the view with only the target lane's
   // blood-line closure. The closure is computed from the RAW gitData -- the
   // display copy (view) collapses lanes and rewrites lane_index, while the
@@ -594,15 +621,18 @@ function App() {
   // handleCheckoutBranch, which depends on it (the M1.3 TDZ rule).
   const doCheckout = useCallback(async (branch: string) => {
     setError(null);
+    // Optimistic close (final review L3): the dialog drops the moment
+    // confirm is clicked -- its preflight counts were what the user just
+    // consented to -- and the unmount doubles as the double-click guard
+    // (a second click lands on nothing). Failure re-surfaces through the
+    // error banner below, never by re-opening the dialog.
+    setCheckoutDialog(null);
     try {
       await checkoutBranch(branch);
-      setCheckoutDialog(null);
       setSwitchedBranch(branch);
     } catch (err) {
-      // Close a pending confirm so the error banner is not dimmed behind
-      // the backdrop; the backend text already states the set_head
-      // half-success residual state honestly.
-      setCheckoutDialog(null);
+      // The backend text already states the set_head half-success
+      // residual state honestly.
       recordFrontendError(errText(err));
       setError(errText(err));
     }
@@ -1256,7 +1286,7 @@ function App() {
               compressed={compressed}
               showMergeLinks={showMergeLinks}
               showRefLabels={showRefLabels}
-              patchLinks={showPatchLinks ? patchLinks : []}
+              patchLinks={showPatchLinks ? patchLinks : NO_LINKS}
               fitSignal={fitSignal}
               hasMore={gitData.has_more ?? false}
               loadingOlder={loadingOlder}

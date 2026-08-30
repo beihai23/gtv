@@ -1,4 +1,4 @@
-import { laneTip } from './locate';
+import { laneTips } from './locate';
 import type { GitData } from './types';
 
 // ---------------------------------------------------------------------------
@@ -21,15 +21,15 @@ export function nextPair(pair: ComparePair | null, id: string): ComparePair {
 }
 
 /** Lane-menu "compare with HEAD": base = HEAD commit id, target = the lane
- *  tip commit id (tip rule reused from locate.ts). null -- callers gray the
- *  menu item out -- when HEAD is not among the loaded commits (windowed or
- *  paged out), the lane is not in the branches registry, or the lane has no
- *  loaded commits. */
+ *  tip commit id (tip rule reused from locate.ts laneTips). null -- callers
+ *  gray the menu item out -- when HEAD is not among the loaded commits
+ *  (windowed or paged out), the lane is not in the branches registry, or
+ *  the lane has no loaded commits. */
 export function headToLaneTip(data: GitData, laneName: string): ComparePair | null {
   const head = data.commits.find(c => c.is_head);
   if (!head) return null;
   if (!data.branches.some(b => b.name === laneName)) return null;
-  const tip = laneTip(data.commits).get(laneName);
+  const tip = laneTips(data.commits).get(laneName);
   if (!tip) return null;
   return { base: head.id, target: tip.id };
 }

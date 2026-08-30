@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CompareDetail } from '../types';
 import type { ComparePair } from '../compare';
 import { getCompareDetail, getPairFileDiff } from '../api';
 import { useSettings } from '../settings';
+import { recordFrontendError } from '../issueContext';
 import { DiffView, type FileDiffState } from './DiffView';
 
 // Two-commit compare panel (M3.2, spec 4.5). Self-fetching: handed a
@@ -25,11 +26,22 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
   const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
 
+  // Stale-response guard for the lazy diff: toggleFile snapshots the pair
+  // at call time, but its getPairFileDiff can resolve AFTER the pair
+  // changed -- the effect below clears the diffs cache, yet a late resolve
+  // would re-seed the NEW pair's cache with the OLD pair's patch (and the
+  // `diffs[path]` early return would then serve it). The ref is how a late
+  // resolve notices the pair moved on. Same shape as CommitDetails'
+  // commitIdRef guard.
+  const pairRef = useRef(pair);
+
   // Fetch on mount and on every pair change (key = base+target). The
-  // cancelled flag drops stale responses, and the lazy-diff state resets
-  // with the fetch so an old file's patch never shows under a new pair.
+  // cancelled flag drops stale detail responses, and the lazy-diff state
+  // resets with the fetch; together with the pairRef guard above, an old
+  // file's patch never shows (nor lingers in the cache) under a new pair.
   useEffect(() => {
     let cancelled = false;
+    pairRef.current = pair;
     setDetail(null);
     setError(null);
     setExpandedPath(null);
@@ -37,7 +49,13 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
     setLoadingPath(null);
     getCompareDetail(pair.base, pair.target)
       .then(d => { if (!cancelled) setDetail(d); })
-      .catch(e => { if (!cancelled) setError(String(e)); });
+      .catch(e => {
+        if (cancelled) return;
+        // Parity with the single-details path (App handleCommitClick):
+        // the panel shows the error AND it enters the issue-report ring.
+        recordFrontendError(String(e));
+        setError(String(e));
+      });
     return () => { cancelled = true; };
   }, [pair.base, pair.target]);
 
@@ -49,11 +67,16 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
     setExpandedPath(path);
     if (diffs[path]) return;
 
+    // Call-time snapshot; the ref check after the await drops responses
+    // that no longer belong to the pair the panel is showing.
+    const { base, target } = pair;
     setLoadingPath(path);
     try {
-      const text = await getPairFileDiff(pair.base, pair.target, path);
+      const text = await getPairFileDiff(base, target, path);
+      if (pairRef.current.base !== base || pairRef.current.target !== target) return;
       setDiffs(prev => ({ ...prev, [path]: { text } }));
     } catch (e) {
+      if (pairRef.current.base !== base || pairRef.current.target !== target) return;
       setDiffs(prev => ({ ...prev, [path]: { text: String(e), isError: true } }));
     } finally {
       setLoadingPath(prev => (prev === path ? null : prev));

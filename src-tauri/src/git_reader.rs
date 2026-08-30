@@ -806,10 +806,12 @@ impl GitReader {
         Ok(text)
     }
 
-    /// Resolve a revspec (full or short oid, branch or tag name) to the
-    /// commit it names -- anything `git rev-parse` accepts. Both compare
-    /// methods go through this, so a pair produced by compare_detail
-    /// (oids) and one typed from the command line resolve identically.
+    /// Resolve a revspec to the commit it names: full or short oid, branch
+    /// name, or tag name -- a single-commit subset of `git rev-parse`
+    /// (libgit2's revparse rejects range forms like `A..B` cleanly with an
+    /// Err, never a panic). Both compare methods go through this, so a
+    /// pair produced by compare_detail (oids) and one typed from the
+    /// command line resolve identically.
     fn resolve_commit(&self, spec: &str) -> Result<git2::Commit<'_>, String> {
         let object = self
             .repo

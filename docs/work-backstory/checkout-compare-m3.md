@@ -282,3 +282,36 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
   （行文本 "Amock/added.txt+10−0▸" 等，computed color 实证绿
   #4CAF50/红 #F44336），点行展开懒加载照常，console 零错误；门禁
   npm test 81/81、npm run build 过。
+- 终审修复波（9 项一次清零，裁定见 .superpowers/sdd/m3-final-review.md）：
+  I1 两面板懒加载陈旧补丁竞态——CompareDetails 加 pairRef（pair 变更
+  effect 内刷新）+ toggleFile 调用时快照 base/target、await 后 ref 不匹配
+  即丢（成功/失败两分支同守卫）；CommitDetails 同构 commitIdRef（预存在
+  竞态，同一 3 行形状，其余逐字未动）。I2 半配对修复——单点 effect 键
+  gitData：半配对 base 不在已加载集即清（覆盖 watcher/换视图/过滤/跳转
+  四路径）；完整配对**不修**，注释写明终审核实的自足 claim（面板按 oid
+  经后端 resolve_commit 直读对象库，与已加载窗口无关）。队列 #1 laneTip
+  统一改名 laneTips（返回 Map 取复数；inactive.ts 同名局部是时间戳语义
+  的 module-private 同形词，不改仅注记）——matchLoaded 改调导出、删 4
+  行内联镜像、陈旧"off limits"注释改写、compare.ts 跟随。#2 确认按钮
+  改乐观关闭（点击即关对话框，卸载兼作双击守卫；失败走错误 banner 不
+  重开对话框）——裁定取代终审原稿的 busyRef。#3 三态确认文案
+  （both/modified-only/untracked-only 三键 en+zh，untracked-only 键自带
+  诚实去向"原样保留；仅目标分支跟踪同路径文件才失败"）+ 真取消键
+  cancel 取代复用的 close；carryNote 仅 modified>0 时显示（纯 untracked
+  用户本就无"携带"可言，终审 L1 指其答非所问）。#4 resolve_commit 注释
+  软化为"单提交子集：oid/分支/tag（libgit2 对区间形态干净 Err 非 panic）"。
+  #9 CompareDetails 主 fetch 失败补 recordFrontendError（与单详情路径
+  对齐，issueContext.ts 纯模块组件可直接 import）。#10 模块级 NO_LINKS
+  空数组照 NO_IDS 先例替换 patchLinks false 分支的新鲜 []。L8
+  handleRepoRefresh 开头关悬挂确认框（预检计数已被重建作废；SAFE 仍是
+  正确性兜底）。门禁：cargo 53 pass/2 预存在 tour_repo 失败、npm 81/81、
+  build 绿。mock 复验（1421，零触碰 1420）：三态文案 en+zh 逐字断言；
+  取消键可关对话框且零副作用；native 输入管线三连击确认只发 1 次
+  checkout（对话框首击即卸载，后两击落空）、单确认 toast 恰一次；I1 竞态
+  以"配对标签补丁 + 1200ms 延迟桩"确定性复现——旧配对在飞补丁被守卫
+  丢弃，新配对同路径展开取到新配对补丁（CommitDetails 同法亦验）；I2
+  半配对随"独占 now/1"重建被清（后续 ctrl+click 成新半选而非对幽灵 base
+  补全），base 幸存的重建半选保留；NO_LINKS 以 d3 `<g>` 身份跨 App 重渲
+  存活实证（终审前每渲必换）。L8 无浏览器复验路径（mock 无事件插件，
+  listen 失败被吞、repo-changed 无法注入），代码级核验。遗留：绿硬编码
+  祝圣不动（backlog）、AGENTS.md 测试计数归文档收尾任务。

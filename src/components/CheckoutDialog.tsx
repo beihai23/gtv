@@ -19,6 +19,16 @@ interface CheckoutDialogProps {
  */
 export function CheckoutDialog({ branch, status, onConfirm, onClose }: CheckoutDialogProps) {
   const { t } = useSettings();
+  // Three-state body copy (final review L1): both / modified-only /
+  // untracked-only. The untracked-only key itself states where the files
+  // go (kept, still untracked; failure only on a same-path tracked file),
+  // and the carry note -- about MODIFIED changes riding along -- is only
+  // relevant when there are modified files.
+  const bodyKey = status.modified > 0 && status.untracked > 0
+    ? 'confirmCheckoutBodyBoth'
+    : status.modified > 0
+      ? 'confirmCheckoutBodyModified'
+      : 'confirmCheckoutBodyUntracked';
   return (
     // Backdrop click = cancel; the card stops the click (IssueReportDialog
     // overlay contract).
@@ -32,11 +42,11 @@ export function CheckoutDialog({ branch, status, onConfirm, onClose }: CheckoutD
           <div><strong>{branch}</strong></div>
           {/* Counts only -- no file-granularity promises: an untracked
               directory is a single porcelain record (Task 1 ruling). */}
-          <div>{t('confirmCheckoutBody', { modified: status.modified, untracked: status.untracked })}</div>
-          <div className="issue-note">{t('carryNote')}</div>
+          <div>{t(bodyKey, { modified: status.modified, untracked: status.untracked })}</div>
+          {status.modified > 0 && <div className="issue-note">{t('carryNote')}</div>}
           <div className="issue-note">{t('terminalNote')}</div>
           <div className="issue-actions">
-            <button className="view-btn" onClick={onClose}>{t('close')}</button>
+            <button className="view-btn" onClick={onClose}>{t('cancel')}</button>
             <button className="open-btn issue-report-btn" onClick={onConfirm}>{t('checkoutThisBranch')}</button>
           </div>
         </div>

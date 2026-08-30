@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CommitDetail } from '../types';
 import { getFileDiff } from '../api';
 import { useSettings } from '../settings';
@@ -17,7 +17,14 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
   const [loadingPath, setLoadingPath] = useState<string | null>(null);
 
   const commitId = commit?.id ?? null;
+  // Stale-response guard (pre-existing race, same shape as CompareDetails'
+  // pairRef): toggleFile's in-flight patch can resolve after the commit
+  // prop changed -- the effect below clears the diffs cache, but a late
+  // resolve would re-seed the NEW commit's cache with the OLD commit's
+  // patch. The ref is how a late resolve notices the commit moved on.
+  const commitIdRef = useRef(commitId);
   useEffect(() => {
+    commitIdRef.current = commitId;
     setExpandedPath(null);
     setDiffs({});
     setLoadingPath(null);
@@ -40,11 +47,16 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
     setExpandedPath(path);
     if (diffs[path]) return;
 
+    // Call-time snapshot; the ref check after the await drops responses
+    // that no longer belong to the commit the panel is showing.
+    const id = commit.id;
     setLoadingPath(path);
     try {
-      const text = await getFileDiff(commit.id, path);
+      const text = await getFileDiff(id, path);
+      if (commitIdRef.current !== id) return;
       setDiffs(prev => ({ ...prev, [path]: { text } }));
     } catch (e) {
+      if (commitIdRef.current !== id) return;
       setDiffs(prev => ({ ...prev, [path]: { text: String(e), isError: true } }));
     } finally {
       setLoadingPath(prev => (prev === path ? null : prev));

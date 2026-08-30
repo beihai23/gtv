@@ -53,6 +53,7 @@ const en: Record<string, string> = {
   all: 'All',
   none: 'None',
   close: 'Close',
+  cancel: 'Cancel',
   enabled: 'Enabled ({n})',
   disabled: 'Disabled ({n})',
   panelFooter: 'Double-click a chip to solo it — for daily work: None, then double-click the 2-3 branches you care about.',
@@ -118,7 +119,13 @@ const en: Record<string, string> = {
   loadingOlder: 'Loading older history…',
   checkoutThisBranch: 'Check out this branch',
   confirmCheckoutTitle: 'Switch branch?',
-  confirmCheckoutBody: '{modified} modified, {untracked} untracked files',
+  // Three-state body copy (final review L1): "0 modified, N untracked"
+  // reads badly for untracked-only users, and for them the carry note is
+  // the wrong promise -- untracked files are NOT carried, they simply stay
+  // untracked. Only the untracked-only key needs to say where files go.
+  confirmCheckoutBodyBoth: '{modified} modified, {untracked} untracked files',
+  confirmCheckoutBodyModified: '{modified} modified files',
+  confirmCheckoutBodyUntracked: '{untracked} untracked files stay as they are (still untracked); the switch fails only if the target branch tracks a file at the same path',
   carryNote: 'Compatible uncommitted changes will be carried over; the switch fails cleanly if they conflict with the target.',
   terminalNote: 'This rewrites worktree files, including under your open terminal.',
   switchedTo: 'Switched to {branch}',
@@ -168,6 +175,7 @@ const zh: Record<string, string> = {
   all: '全选',
   none: '全不选',
   close: '关闭',
+  cancel: '取消',
   enabled: '已启用 ({n})',
   disabled: '未启用 ({n})',
   panelFooter: '双击 chip 可只看该分支——日常使用：先"全不选"，再双击你关心的 2-3 个分支。',
@@ -233,7 +241,9 @@ const zh: Record<string, string> = {
   loadingOlder: '正在加载更早的历史…',
   checkoutThisBranch: '切换到此分支',
   confirmCheckoutTitle: '切换分支？',
-  confirmCheckoutBody: '{modified} 处已修改、{untracked} 个未跟踪文件',
+  confirmCheckoutBodyBoth: '{modified} 处已修改、{untracked} 个未跟踪文件',
+  confirmCheckoutBodyModified: '{modified} 处已修改',
+  confirmCheckoutBodyUntracked: '{untracked} 个未跟踪文件将原样保留（仍为未跟踪）；仅当目标分支跟踪同路径文件时切换失败',
   carryNote: '兼容的未提交变更将随行携带；与目标冲突时切换会干净失败。',
   terminalNote: '切换会重写工作区文件（含你开着的终端下的文件）。',
   switchedTo: '已切换到 {branch}',
