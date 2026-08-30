@@ -42,6 +42,8 @@ pub fn run() {
             commands::is_valid_git_repo,
             commands::get_branch_list,
             commands::switch_branch,
+            commands::get_worktree_status,
+            commands::checkout_branch,
             commands::filter_by_branches,
             commands::load_older_commits,
             commands::get_patch_links,

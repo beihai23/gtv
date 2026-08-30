@@ -104,6 +104,19 @@ export interface SearchHit {
   in_view: boolean;
 }
 
+/** Worktree preflight for the checkout confirm dialog; mirrors models.rs. */
+export interface WorktreeStatus {
+  modified: number;
+  untracked: number;
+  merge_in_progress: boolean;
+}
+
+/** Ack returned by checkoutBranch; mirrors models.rs. Carries no view
+ *  data on purpose: the repo-changed watcher path is the only rebuilder. */
+export interface CheckoutAck {
+  branch: string;
+}
+
 // --- Integrated terminal (bottom panel); mirrors models.rs ---
 // Event names: "terminal-output" (TerminalOutput), "terminal-exit"
 // (TerminalExit), "repo-changed" (plain string path).

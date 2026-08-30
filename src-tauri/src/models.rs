@@ -184,6 +184,25 @@ pub struct SearchHit {
     pub in_view: bool,
 }
 
+/// Worktree preflight for the checkout confirm dialog: how many tracked
+/// files carry uncommitted modifications, how many files are untracked,
+/// and whether a merge or cherry-pick is in progress (checkout refuses
+/// while one is).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeStatus {
+    pub modified: usize,
+    pub untracked: usize,
+    pub merge_in_progress: bool,
+}
+
+/// Ack returned by checkout_branch. Deliberately carries no view data:
+/// the watcher's repo-changed -> refresh chain is the only view rebuilder,
+/// so a checkout can never race a second rebuild.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckoutAck {
+    pub branch: String,
+}
+
 // --- Integrated terminal (bottom panel) ---
 // Event names used with `emit`/`listen`: "terminal-output" (TerminalOutput),
 // "terminal-exit" (TerminalExit), "repo-changed" (plain String path, emitted

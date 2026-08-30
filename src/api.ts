@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo, WorktreeStatus, CheckoutAck } from './types';
 
 export async function selectAndOpenRepository(includeStale: boolean): Promise<GitData | null> {
   const selected = await open({
@@ -45,6 +45,18 @@ export async function getBranchList(): Promise<BranchLane[]> {
 
 export async function switchBranch(branchName: string): Promise<GitData> {
   return invoke<GitData>('switch_branch', { branchName });
+}
+
+/// Worktree preflight for the checkout confirm dialog (modified/untracked
+/// counts + merge-in-progress flag). Read-only.
+export async function getWorktreeStatus(): Promise<WorktreeStatus> {
+  return invoke<WorktreeStatus>('get_worktree_status');
+}
+
+/// SAFE checkout of a local branch -- the backend's only write path. The
+/// ack carries no view data: the repo-changed watcher rebuilds the view.
+export async function checkoutBranch(branch: string): Promise<CheckoutAck> {
+  return invoke<CheckoutAck>('checkout_branch', { branch });
 }
 
 export async function filterByBranches(branchNames: string[]): Promise<GitData> {

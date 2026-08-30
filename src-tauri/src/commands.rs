@@ -254,6 +254,48 @@ pub async fn switch_branch(
     Ok(data)
 }
 
+/// Worktree preflight for the checkout confirm dialog: modified/untracked
+/// counts plus the merge-in-progress flag. Read-only.
+#[tauri::command]
+pub async fn get_worktree_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<WorktreeStatus, String> {
+    let path = {
+        let current_path = state.current_path.lock().unwrap();
+        current_path.clone().ok_or("No repository opened")?
+    };
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.worktree_status()
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// SAFE checkout of a local branch -- the app's only write path. Returns an
+/// ack only and never touches AppState's view/session: the watcher's
+/// repo-changed event is the sole refresh path, so a checkout can never
+/// race a second view rebuild. Refuses while a merge or cherry-pick is in
+/// progress and never discards conflicting changes (no force option).
+#[tauri::command]
+pub async fn checkout_branch(
+    branch: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<CheckoutAck, String> {
+    let path = {
+        let current_path = state.current_path.lock().unwrap();
+        current_path.clone().ok_or("No repository opened")?
+    };
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.checkout_branch(&branch)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 #[tauri::command]
 pub async fn filter_by_branches(
     branch_names: Vec<String>,

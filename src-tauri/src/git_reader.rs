@@ -1,6 +1,7 @@
 use crate::layout::{self, LaneSeed, TAG_COLOR};
 use crate::models::*;
-use git2::{BranchType, Oid, Repository, Sort};
+use git2::build::CheckoutBuilder;
+use git2::{BranchType, Oid, Repository, Sort, Status, StatusOptions};
 use std::collections::{HashMap, HashSet};
 
 pub struct GitReader {
@@ -175,6 +176,99 @@ impl GitReader {
             .collect();
         refs.sort();
         Ok(format!("{}|{}", head, refs.join(";")))
+    }
+
+    /// Preflight snapshot for the checkout confirm dialog (spec 4.1):
+    /// uncommitted-change counts plus whether a merge or cherry-pick is
+    /// in progress. Tracked files with worktree modifications (including
+    /// type-change and rename) count as modified, untracked files count
+    /// as untracked -- exactly the two buckets the spec defines, so
+    /// worktree deletions are intentionally not counted.
+    pub fn worktree_status(&self) -> Result<WorktreeStatus, String> {
+        // INCLUDE_UNTRACKED is opt-in in libgit2; without it WT_NEW never
+        // appears and the untracked count would always be 0. The other
+        // defaults match `git status --porcelain` (index+workdir, ignored
+        // files excluded, untracked dirs reported as a single entry).
+        let mut options = StatusOptions::new();
+        options.include_untracked(true);
+        let statuses = self
+            .repo
+            .statuses(Some(&mut options))
+            .map_err(|e| format!("Failed to read worktree status: {}", e))?;
+
+        let modified_flags = Status::WT_MODIFIED | Status::WT_TYPECHANGE | Status::WT_RENAMED;
+        let mut modified = 0;
+        let mut untracked = 0;
+        for entry in statuses.iter() {
+            let status = entry.status();
+            if status.intersects(modified_flags) {
+                modified += 1;
+            } else if status.contains(Status::WT_NEW) {
+                untracked += 1;
+            }
+        }
+
+        // Unfinished merge/revert state lives in these pseudo-refs; either
+        // one means checkout must refuse, so the dialog can say why up
+        // front instead of the checkout failing later.
+        let merge_in_progress = self.repo.find_reference("MERGE_HEAD").is_ok()
+            || self.repo.find_reference("CHERRY_PICK_HEAD").is_ok();
+
+        Ok(WorktreeStatus {
+            modified,
+            untracked,
+            merge_in_progress,
+        })
+    }
+
+    /// SAFE checkout of a local branch -- the app's ONLY write path to a
+    /// repository. The order is tree-first, head-second: the target tip's
+    /// tree is checked out with the SAFE strategy (compatible uncommitted
+    /// changes carry over; anything a plain `git checkout` would refuse to
+    /// overwrite fails the call BEFORE anything is written), and only then
+    /// does HEAD move, so a refused checkout leaves HEAD untouched. There
+    /// is deliberately no force option and no way around a merge or
+    /// cherry-pick in progress. Tags and remote-tracking names (origin/x)
+    /// do not resolve as local branches and are rejected.
+    ///
+    /// Returns an ack only, never GitData: rebuilding the view is the
+    /// watcher repo-changed chain's job, so two rebuilds can never race.
+    pub fn checkout_branch(&self, name: &str) -> Result<CheckoutAck, String> {
+        if self.repo.find_reference("MERGE_HEAD").is_ok()
+            || self.repo.find_reference("CHERRY_PICK_HEAD").is_ok()
+        {
+            return Err("merge or cherry-pick in progress".to_string());
+        }
+
+        let branch = self
+            .repo
+            .find_branch(name, BranchType::Local)
+            .map_err(|_| format!("Branch not found: {}", name))?;
+        let tip = branch
+            .get()
+            .target()
+            .ok_or_else(|| format!("Branch has no target: {}", name))?;
+        let tree = self
+            .repo
+            .find_commit(tip)
+            .and_then(|commit| commit.tree())
+            .map_err(|e| format!("Failed to resolve branch tip: {}", e))?;
+
+        // SAFE is libgit2's default; select it explicitly because the
+        // no-force guarantee is this command's whole safety contract.
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe();
+        self.repo
+            .checkout_tree(tree.as_object(), Some(&mut checkout))
+            .map_err(|e| format!("Checkout failed: {}", e))?;
+        self.repo
+            .set_head(&format!("refs/heads/{}", name))
+            .map_err(|e| format!("Failed to move HEAD: {}", e))?;
+
+        log::info!("Checked out branch {}", name);
+        Ok(CheckoutAck {
+            branch: name.to_string(),
+        })
     }
 
     /// Walk commits from the given seed tips (TIME|TOPO, newest first),
