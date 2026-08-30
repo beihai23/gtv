@@ -144,6 +144,13 @@
   border-color: white;
 }
 
+/* Checkout success: the error banner's structure with a green fill
+   (hardcoded like the red it mirrors -- the theme system has no green
+   token; auto-dismissed by the App timer effect). */
+.error.success {
+  background: #2ea043;
+}
+
 .main {
   flex: 1;
   display: flex;
@@ -647,6 +654,18 @@
 }
 /* Sediment-row chips (collapsed inactive lanes) read as quieter than branches. */
 .lane-chip.trace-chip { font-style: italic; opacity: 0.85; }
+/* Current-branch chip (spec 4.3): dot prefix plus a link-tinted fill.
+   rgba(var(--link-rgb), 0.25) is the established "active" tint (same as
+   .view-btn.active), so every theme gets a fitting highlight for free. */
+.lane-chip.head-lane {
+  background: rgba(var(--link-rgb), 0.25);
+  font-weight: 600;
+}
+.lane-chip.head-lane::before {
+  content: '●';
+  margin-right: 5px;
+  font-size: 9px;
+}
 
 /* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
 .view-toolbar {

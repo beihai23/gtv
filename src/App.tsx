@@ -4,10 +4,11 @@ import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { SettingsDialog } from './components/SettingsDialog';
 import { IssueReportDialog } from './components/IssueReportDialog';
+import { CheckoutDialog } from './components/CheckoutDialog';
 import TerminalPanel from './components/TerminalPanel';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit } from './api';
+import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -17,7 +18,7 @@ import { saveSelection, loadSelection, restoreSelection } from './persist';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
-import type { GitData, CommitDetail, BranchLane, PatchLink } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, WorktreeStatus } from './types';
 import type { SearchHit } from './types';
 
 const LATEST_REPO_KEY = 'gtv_latest_repo';
@@ -56,6 +57,11 @@ function App() {
   const [showAllTags, setShowAllTags] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showIssueReport, setShowIssueReport] = useState(false);
+  // M3.1 checkout: pending dirty-worktree confirm (null until the preflight
+  // reports a dirty worktree) and the branch of the last successful switch
+  // (drives the transient success banner; null = no banner).
+  const [checkoutDialog, setCheckoutDialog] = useState<{ branch: string; status: WorktreeStatus } | null>(null);
+  const [switchedBranch, setSwitchedBranch] = useState<string | null>(null);
   // Integrated terminal (bottom panel). `termOpen` is deliberately not
   // persisted: auto-restoring it would silently spawn a login shell on
   // every launch — a terminal should be an explicit user action.
@@ -527,6 +533,59 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  // M3.1 checkout (spec 4.2). After a successful checkout the app does
+  // NOTHING else to the view -- no setGitData, no refresh call: the
+  // repo-changed watcher (1.5s poll + 500ms debounce -> handleRepoRefresh)
+  // is the ONE rebuild path (spec 4.3, arc invariant). Declared above
+  // handleCheckoutBranch, which depends on it (the M1.3 TDZ rule).
+  const doCheckout = useCallback(async (branch: string) => {
+    setError(null);
+    try {
+      await checkoutBranch(branch);
+      setCheckoutDialog(null);
+      setSwitchedBranch(branch);
+    } catch (err) {
+      // Close a pending confirm so the error banner is not dimmed behind
+      // the backdrop; the backend text already states the set_head
+      // half-success residual state honestly.
+      setCheckoutDialog(null);
+      recordFrontendError(errText(err));
+      setError(errText(err));
+    }
+  }, []);
+
+  // Lane-menu "check out this branch": preflight the worktree, then either
+  // confirm (dirty) or switch right away (clean). Checking out the CURRENT
+  // branch goes through unchanged too (git semantics: safe no-op, spec 5).
+  const handleCheckoutBranch = useCallback(async (branch: string) => {
+    try {
+      const status = await getWorktreeStatus();
+      if (status.merge_in_progress) {
+        // No confirm path around an in-progress merge/cherry-pick/revert.
+        setError(t('mergeInProgress'));
+        return;
+      }
+      // Untracked alone counts as dirty: an untracked file at a path the
+      // target tracks makes a safe checkout fail, so it must be confirmed.
+      if (status.modified > 0 || status.untracked > 0) {
+        setCheckoutDialog({ branch, status });
+        return;
+      }
+      await doCheckout(branch);
+    } catch (err) {
+      recordFrontendError(errText(err));
+      setError(errText(err));
+    }
+  }, [t, doCheckout]);
+
+  // Success hint is transient: auto-hide after a few seconds. The cleanup
+  // clears the timer on unmount and on a fresh switch (re-triggered effect).
+  useEffect(() => {
+    if (!switchedBranch) return;
+    const timer = window.setTimeout(() => setSwitchedBranch(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [switchedBranch]);
 
   const toggleBranchFilter = useCallback((branchName: string) => {
     if (selectedBranches.includes(branchName)) {
@@ -1091,6 +1150,14 @@ function App() {
         </div>
       )}
 
+      {/* Checkout success hint: same banner slot as the error strip (green
+          variant), auto-dismissed by the timer effect above. */}
+      {switchedBranch && (
+        <div className="error success">
+          <span className="error-msg">{t('switchedTo', { branch: switchedBranch })}</span>
+        </div>
+      )}
+
       <main className="main">
         {!gitData ? (
           <div className="welcome">
@@ -1130,6 +1197,8 @@ function App() {
               traceBars={view?.traceBars ?? []}
               onExpandTraceGroup={expandTraceGroup}
               traceGroupLabel={traceGroupLabel}
+              headBranch={gitData?.head_branch ?? null}
+              onCheckoutBranch={handleCheckoutBranch}
             />
             {locateOpen && (
               <div className="locate-float">
@@ -1213,6 +1282,15 @@ function App() {
       />
 
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+
+      {checkoutDialog && (
+        <CheckoutDialog
+          branch={checkoutDialog.branch}
+          status={checkoutDialog.status}
+          onConfirm={() => doCheckout(checkoutDialog.branch)}
+          onClose={() => setCheckoutDialog(null)}
+        />
+      )}
 
       {showIssueReport && (
         <IssueReportDialog

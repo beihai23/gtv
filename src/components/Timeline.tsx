@@ -44,6 +44,12 @@ interface TimelineProps {
   /** Action label for a trace group's title ("Collapse" when the group is
    *  fully expanded, "Expand" otherwise) — App owns the toggle state. */
   traceGroupLabel: (kind: DeadKind) => string;
+  /** Shorthand of the branch HEAD is on; null while detached. Drives the
+   *  current-branch lane chip marker (spec 4.3). */
+  headBranch: string | null;
+  /** "Check out this branch" (lane context menu, M3.1): switch the actual
+   *  worktree HEAD (App owns the dirty-confirm state machine). */
+  onCheckoutBranch: (branchName: string) => void;
 }
 
 const MINIMAP_W = 280;
@@ -75,7 +81,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -450,7 +456,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
       .data(data.branches, (d: BranchLane) => d.name)
       .join('div')
-      .attr('class', 'lane-chip')
+      // Current-branch marker (spec 4.3): the head-lane class adds the dot
+      // prefix + tint; a null title attr strips the marker on non-head chips.
+      .attr('class', (d: BranchLane) => (d.name === headBranch ? 'lane-chip head-lane' : 'lane-chip'))
+      .attr('title', (d: BranchLane) => (d.name === headBranch ? t('currentBranchTip') : null))
       .style('color', (d: BranchLane) => d.color)
       .style('border-color', (d: BranchLane) => d.color)
       .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
@@ -1184,7 +1193,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch]);
 
   useEffect(() => {
     draw();
@@ -1322,6 +1331,15 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
           {!laneMenu.lane.is_tag && (
             <button onClick={() => { onRelatedBranch(laneMenu.lane.name); setLaneMenu(null); }}>
               {t('relatedOnly')}
+            </button>
+          )}
+          {/* M3.1: real worktree checkout (tags are not checkout targets).
+              The CURRENT branch's own lane is not special-cased either:
+              checking it out is a git safe no-op (spec 5). Coexists with
+              "View from this branch" above -- worktree change vs view-only. */}
+          {!laneMenu.lane.is_tag && (
+            <button onClick={() => { onCheckoutBranch(laneMenu.lane.name); setLaneMenu(null); }}>
+              {t('checkoutThisBranch')}
             </button>
           )}
         </div>

@@ -62,12 +62,14 @@ describe('headToLaneTip', () => {
       [
         commit('m1', 0, 'main'),
         commit('h1', 0, 'main', { is_head: true, x: 10 }),
-        commit('f1', 1, 'feat', { x: 5 }),
-        commit('f2', 1, 'feat', { x: 9 }), // lane tip by x despite listing first-to-last
+        commit('f1', 1, 'feat', { x: 9 }), // lane tip: highest x, listed FIRST
+        commit('f2', 1, 'feat', { x: 5 }),
       ],
       [lane('main', 0), lane('feat', 1, { fork_point: 'm1' })],
     );
-    expect(headToLaneTip(data, 'feat')).toEqual({ base: 'h1', target: 'f2' });
+    // f2 is the LAST feat commit in list order -- a list-order tip rule
+    // would pick it; only the highest-x rule yields f1.
+    expect(headToLaneTip(data, 'feat')).toEqual({ base: 'h1', target: 'f1' });
   });
 
   it('HEAD absent from the loaded commits -> null (windowed/paged out)', () => {

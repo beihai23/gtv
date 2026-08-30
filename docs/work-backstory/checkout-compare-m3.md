@@ -2,7 +2,7 @@
 arc: checkout-compare-m3
 started: 294b613
 status: in-progress
-commits: [461978f, f14a604, 6371ec4]
+commits: [461978f, f14a604, 6371ec4, 407dbde]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -162,3 +162,41 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
 - 门禁实况：npm test 81/81（73 + compare 8 例；locate.test.ts 现有
   10 例不动全绿——新增导出不触 matchLoaded 语义）；npm run build 过
   （chunk >500kB 警告为既有）。Rust 侧零改动、mock.html 未碰。
+- Task 4（接线 M3.1：泳道菜单第五项 + 脏确认对话框 + 当前分支泳道标记）：
+  App 状态机照 spec §4.2 逐条——handleCheckoutBranch 预检
+  get_worktree_status：merge_in_progress → error 通道且无确认路径；
+  脏（modified>0 或 untracked>0——untracked 单独存在也算脏，同名路径
+  未跟踪文件会令 SAFE checkout 失败）→ 弹 CheckoutDialog；干净直切。
+  doCheckout 成功后除关对话框 + 轻提示外**零操作**——不 setGitData、
+  不调任何 refresh；repo-changed watcher（1.5s 指纹轮询 + 500ms 防抖 →
+  handleRepoRefresh）是唯一重建路径（spec §4.3 防双重建竞态，四不变量
+  之一，调用点注释明文钉死）。失败分支先关对话框再走 error 通道——
+  对话框开着会把 banner 压在暗化 backdrop 后面，呈现等于没呈现（简报
+  未明说，按「错误必须可见」的意图落地）。
+- CheckoutDialog 照 IssueReportDialog overlay 契约（settings-backdrop
+  点击 = 取消 + 内层卡片 stopPropagation），卡片类全复用既有
+  settings-dialog/settings-header/settings-body/issue-note/issue-actions，
+  零新增 CSS。按钮文案零新键：取消复用 close、确认直接用动词短语
+  checkoutThisBranch（动作即确认，比裸 Confirm 更诚实）。当前分支自身
+  泳道不特判（git 语义安全无操作，spec §5，照常走确认/直切）。
+- 轻提示选型：error banner 同款结构的成功变体（`.error.success` 绿底
+  覆盖规则，一条 CSS，非独立 toast）。state 形状 `switchedBranch:
+  string | null`——存分支名、渲染时 t('switchedTo') 插值（切语言即时
+  跟随）；4s 自动消退（effect 定时器，cleanup 覆盖卸载与连续切换）。
+  绿色走硬编码 #2ea043：主题系统没有绿 token，而 .error 自身的红就是
+  硬编码先例；为单用途给五主题 × 绿 token 超出本任务文件清单。
+- 当前分支标记：chip join 里 `d.name === headBranch` 的 chip 加
+  head-lane 类（::before ● 前缀 + `rgba(var(--link-rgb), 0.25)` 填充
+  ——与 .view-btn.active 同款 active 色，五主题通吃）+ title=
+  currentBranchTip；detached（headBranch null）无标记，且 attr(null)
+  会清掉旧标记。draw 依赖数组补 headBranch：实践中 head_branch 变化必
+  伴随 data 整体重建（watcher setGitData）本已免费，补上是因为 join
+  现在直接读它，依赖数组应如实反映。
+- 捎带（Task 3 评审 Low-1）：headToLaneTip happy-path fixture x 对调
+  ——f1 x=9 列表在前、f2 x=5 在后，期望 target 由 f2 改 f1：现在
+  「列表最后一条」与「x 最大」分属两个提交，列表序实现会误取 f2 而挂
+  测试，tip 规则真正钉死。断言语义（pair 形状与方向）不变。
+- 门禁实况：npm test 81/81（8 文件）；npm run build 过（tsc strict
+  门禁；chunk >500kB 警告为既有）。Rust 侧零改动、mock.html 未碰
+  （Task 6 统一补桩）、i18n 零新键（Task 3 的 12 键本任务启用 8 个，
+  余 4 个留给 Task 5）。
