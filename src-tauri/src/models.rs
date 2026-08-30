@@ -90,6 +90,11 @@ pub struct GitData {
     /// paged in via load_older_commits.
     #[serde(default)]
     pub has_more: bool,
+    /// Shorthand of the branch HEAD currently sits on; None while detached
+    /// (or on an unborn HEAD). Powers the current-lane marker; unrelated to
+    /// layout's is_head, which marks the HEAD commit itself.
+    #[serde(default)]
+    pub head_branch: Option<String>,
 }
 
 /// An anomalous empty time range that was folded to a fixed pixel width.
@@ -170,6 +175,29 @@ pub struct CommitDetail {
     pub total_additions: i32,
     #[serde(default)]
     pub total_deletions: i32,
+}
+
+/// One side of a two-commit compare: just enough to head the compare
+/// panel (full id, short id, subject, author).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareSide {
+    pub id: String,
+    pub short_id: String,
+    pub subject: String,
+    pub author: String,
+}
+
+/// Two-commit compare (base -> target): the file list of the two-tree
+/// diff with REAL per-file additions/deletions (get_commit_detail
+/// deliberately leaves its per-file numbers at 0), plus the running
+/// totals and both-side summaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareDetail {
+    pub base: CompareSide,
+    pub target: CompareSide,
+    pub files: Vec<FileChange>,
+    pub total_additions: usize,
+    pub total_deletions: usize,
 }
 
 /// One full-history search hit (Cmd+F). `in_view` tells the frontend

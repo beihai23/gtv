@@ -2,7 +2,7 @@
 arc: checkout-compare-m3
 started: 294b613
 status: in-progress
-commits: []
+commits: [461978f, f14a604]
 ---
 
 # M3 checkout 与对比（真实 checkout + 分支/提交对比）
@@ -86,3 +86,50 @@ M3.1（git2 SAFE checkout 后端 + 脏确认对话框 + 当前分支泳道标记
      tour_repo contentless gitlink 既有状态）；npm test 73/73；npm run
      build 过。commands.rs:279 的命令层注释仍写 "merge or cherry-pick"
      旧措辞——该文件不在本修复波允许触碰清单内，留给后续顺路提交。
+- Task 2（Rust compare 后端 + `head_branch`，TDD）：先写
+  `tests/compare.rs` 六例看红（13 个编译错：compare_detail /
+  pair_file_diff / head_branch 三者皆缺），再落实现。六例：三态文件
+  列表（增/删/改各一，每文件 +/− 与合计手数——new.txt A +2/0、gone.txt
+  D 0/−2、mod.txt M +1/−1、合计 +3/−3；git CLI 提交输出自证 "3 files
+  changed, 3 insertions(+), 3 deletions(-)"）、行级 patch（+TWO/−two
+  与 a/b 文件头；未变文件必须解析不到 delta）、空 diff（同 oid 零文件
+  零合计，另验方向性：target->base 的 new.txt 变 D 0/−2，两侧合计互为
+  镜像）、不存在 oid 双侧皆 Err、head_branch 三态（main→Some("main")、
+  checkout feature→Some("feature")、--detach→None 且 is_head 仍在）、
+  回归钉（get_commit_detail 每文件 +/- 仍为 0、合计 3/3，get_file_diff
+  原样可用，root 提交走空树）。
+- 类型决策：**复用 FileChange**——path/additions/deletions/status 四字
+  段恰好覆盖对比文件列表的全部所需，compare 只是把它硬编码 0 的两个字
+  段填上真值；新增类型只有头部两侧摘要 `CompareSide` 与容器
+  `CompareDetail`（files/total_*，totals 按简报 usize）。
+- 每文件统计的实现点：delta 遍历带 enumerate 拿索引，
+  `Patch::from_diff(&diff, i)` 逐文件再 `line_stats()`。简报草图按
+  `stats.additions()` 方法式访问写的——git2 0.20 实际 `line_stats()`
+  直接返回 `(context, additions, deletions)` 三元组（无 DiffLineStats
+  结构体包装），按元组解构适配，语义不变。binary 文件无 hunk 计 0/0；
+  `from_diff` 返回 None（如纯 mode 变更）同样计 0/0。
+- 既有通道零回归的手法：把 get_file_diff 的尾部（delta 路径定位 + 建
+  patch + 二进制占位 + 200KB 截断，含常量本体）原样抽成私有
+  `render_file_patch`，两通道共用——常量只有一份（无新魔数），错误串与
+  输出字节级不变，get_file_diff 自身的 oid 解析段（Oid::from_str 三段
+  错误串）原封未动。compare 两方法的 oid 解析则走新私有
+  `resolve_commit`（revparse_single + peel_to_commit，收全/短 oid、分支
+  名、tag 名，与 `git rev-parse` 同宽），compare_detail 产出的 pair 在
+  pair_file_diff 里必然可解析。
+- `head_branch`：全仓 grep `GitData {` 仅两处构造点——`build_view` 与
+  `load_more`，两处都在 head_oid 旁一并取值填入。判别用
+  `repo.head().is_branch()`：分支头时 head() 解析为 refs/heads/<b>（true，
+  shorthand 即分支名），detached 时返回名为 HEAD 的 direct ref（false→
+  None），unborn 时 head() 直接 Err→None。layout 的 is_head 逻辑未动。
+- 捎带项落地：commands.rs checkout_branch 命令层 doc 注释由 "merge or
+  cherry-pick" 拓宽为 "merge, cherry-pick, or revert"（与 git_reader.rs
+  现行文案及拒绝串一致，Task 1 修复波欠账清偿）。
+- types.ts 镜像的连锁修正：`npm run build` = `tsc && vite build`，而
+  tsconfig include 整个 src（含三个测试文件的 `gitData()` 全字面量构造
+  助手）——GitData 加必填 `head_branch: string | null` 后
+  related/daterange/inactive 三个测试助手必须补 `head_branch: null`
+  （fixture 默认按 detached 语义取 null）。纯类型补齐，73 例计数与行为
+  不动。mock.html 未碰（Task 6 统一补桩）。
+- 门禁实况：cargo test 53 过（新增 compare 6 例）/ 2 败（tour_repo
+  contentless gitlink 既有，与基线一致）；checkout 套件 12/12 无回归；
+  npm test 73/73；npm run build 过（chunk >500kB 警告为既有）。

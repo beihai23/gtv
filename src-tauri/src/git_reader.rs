@@ -140,6 +140,18 @@ impl GitReader {
         self.repo.head().ok()?.target().map(|t| t.to_string())
     }
 
+    /// Shorthand of the branch HEAD sits on, or None while detached (or on
+    /// an unborn HEAD). head() resolves the symbolic ref to refs/heads/<b>
+    /// when on a branch; detached, it returns a direct ref named HEAD, so
+    /// is_branch() is the discriminator.
+    fn head_branch(&self) -> Option<String> {
+        let head = self.repo.head().ok()?;
+        if !head.is_branch() {
+            return None;
+        }
+        head.shorthand().map(|s| s.to_string())
+    }
+
     /// Cheap change detector for the repo-watcher poller (watcher.rs):
     /// HEAD (symbolic name + oid) plus the sorted list of every ref
     /// (`name=oid`). Covers commit, amend, checkout (branch and detached),
@@ -371,6 +383,7 @@ impl GitReader {
     fn build_view(&self, seeds: &[LaneSeed], limit: usize) -> Result<GitData, String> {
         let main_branch = self.detect_main_branch(seeds);
         let head_id = self.head_oid();
+        let head_branch = self.head_branch();
         let mut commits = self.walk_commits(seeds, &HashSet::new(), limit)?;
         // A full chunk means older history may still be out there.
         let has_more = commits.len() == limit;
@@ -396,6 +409,7 @@ impl GitReader {
             main_branch,
             time_gaps,
             has_more,
+            head_branch,
         })
     }
 
@@ -425,6 +439,7 @@ impl GitReader {
 
         let main_branch = self.detect_main_branch(seeds);
         let head_id = self.head_oid();
+        let head_branch = self.head_branch();
         let mut commits = existing;
         let (branches, edges, time_gaps) =
             layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
@@ -442,6 +457,7 @@ impl GitReader {
             main_branch,
             time_gaps,
             has_more,
+            head_branch,
         })
     }
 
@@ -713,8 +729,6 @@ impl GitReader {
     /// Unified diff patch text for one file in a commit (vs first parent,
     /// or the empty tree for the root commit). Large patches are truncated.
     pub fn get_file_diff(&self, commit_id: &str, path: &str) -> Result<String, String> {
-        const MAX_PATCH_BYTES: usize = 200 * 1024;
-
         let oid = Oid::from_str(commit_id).map_err(|e| format!("Invalid commit id: {}", e))?;
         let commit = self
             .repo
@@ -737,6 +751,17 @@ impl GitReader {
             .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
             .map_err(|e| format!("Failed to get diff: {}", e))?;
 
+        self.render_file_patch(&diff, path)
+    }
+
+    /// Shared tail of the per-file patch channels -- get_file_diff's
+    /// parent-vs-commit and pair_file_diff's two-tree form: locate the
+    /// delta whose new path (or old path, so renames still resolve)
+    /// equals `path`, render it, then apply the binary placeholder and
+    /// the 200KB truncation.
+    fn render_file_patch(&self, diff: &git2::Diff, path: &str) -> Result<String, String> {
+        const MAX_PATCH_BYTES: usize = 200 * 1024;
+
         // Match against the new path (what the file list shows); fall back to
         // the old path so renames still resolve.
         let idx = (0..diff.deltas().len())
@@ -758,7 +783,7 @@ impl GitReader {
             })
             .ok_or_else(|| format!("File not found in commit diff: {}", path))?;
 
-        let mut patch = git2::Patch::from_diff(&diff, idx)
+        let mut patch = git2::Patch::from_diff(diff, idx)
             .map_err(|e| format!("Failed to build patch: {}", e))?
             .ok_or_else(|| format!("No patch for file: {}", path))?;
 
@@ -779,6 +804,144 @@ impl GitReader {
             ));
         }
         Ok(text)
+    }
+
+    /// Resolve a revspec (full or short oid, branch or tag name) to the
+    /// commit it names -- anything `git rev-parse` accepts. Both compare
+    /// methods go through this, so a pair produced by compare_detail
+    /// (oids) and one typed from the command line resolve identically.
+    fn resolve_commit(&self, spec: &str) -> Result<git2::Commit<'_>, String> {
+        let object = self
+            .repo
+            .revparse_single(spec)
+            .map_err(|e| format!("Revision not found: {} ({})", spec, e))?;
+        object
+            .peel_to_commit()
+            .map_err(|_| format!("Not a commit: {}", spec))
+    }
+
+    /// Two-commit compare (base -> target), read-only: the two-tree diff's
+    /// file list with REAL per-file additions/deletions -- one
+    /// Patch::from_diff per delta, the per-file pass get_commit_detail
+    /// deliberately skips (its per-file numbers stay 0) -- plus the
+    /// running totals (sum of the per-file numbers) and both-side
+    /// summaries for the compare header. An empty diff (same oid twice)
+    /// is honestly reported as zero files, zero totals.
+    pub fn compare_detail(&self, base_oid: &str, target_oid: &str) -> Result<CompareDetail, String> {
+        let base = self.resolve_commit(base_oid)?;
+        let target = self.resolve_commit(target_oid)?;
+        let base_tree = base
+            .tree()
+            .map_err(|e| format!("Failed to get tree of {}: {}", base_oid, e))?;
+        let target_tree = target
+            .tree()
+            .map_err(|e| format!("Failed to get tree of {}: {}", target_oid, e))?;
+
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&base_tree), Some(&target_tree), None)
+            .map_err(|e| format!("Failed to get diff: {}", e))?;
+
+        let side = |commit: &git2::Commit| -> CompareSide {
+            let id = commit.id().to_string();
+            CompareSide {
+                short_id: id[..7.min(id.len())].to_string(),
+                id,
+                subject: commit.summary().unwrap_or("").to_string(),
+                author: commit.author().name().unwrap_or("Unknown").to_string(),
+            }
+        };
+
+        let mut files = Vec::new();
+        let mut total_additions = 0usize;
+        let mut total_deletions = 0usize;
+        for (i, delta) in diff.deltas().enumerate() {
+            let path = delta
+                .new_file()
+                .path()
+                .and_then(|p| p.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let status = match delta.status() {
+                git2::Delta::Added => "A",
+                git2::Delta::Deleted => "D",
+                git2::Delta::Modified => "M",
+                git2::Delta::Renamed => "R",
+                _ => "?",
+            }
+            .to_string();
+
+            // Per-file line counts from the file's own patch. Binary files
+            // render no hunks and count as 0/0; a delta with no textual
+            // patch at all (e.g. a mode-only change) likewise.
+            let (additions, deletions) =
+                match git2::Patch::from_diff(&diff, i)
+                    .map_err(|e| format!("Failed to build patch for {}: {}", path, e))?
+                {
+                    Some(patch) => {
+                        // line_stats() -> (context, additions, deletions).
+                        let (_, additions, deletions) = patch
+                            .line_stats()
+                            .map_err(|e| format!("Failed to count lines in {}: {}", path, e))?;
+                        (additions, deletions)
+                    }
+                    None => (0, 0),
+                };
+            total_additions += additions;
+            total_deletions += deletions;
+
+            files.push(FileChange {
+                path,
+                additions: additions as i32,
+                deletions: deletions as i32,
+                status,
+            });
+        }
+
+        log::info!(
+            "Compare {}..{}: {} files, +{} -{}",
+            base_oid,
+            target_oid,
+            files.len(),
+            total_additions,
+            total_deletions
+        );
+
+        Ok(CompareDetail {
+            base: side(&base),
+            target: side(&target),
+            files,
+            total_additions,
+            total_deletions,
+        })
+    }
+
+    /// Unified diff patch text for one file between ANY two commits
+    /// (base -> target) -- the two-tree generalization of get_file_diff,
+    /// sharing its render tail, so the 200KB truncation, binary
+    /// placeholder, and rename-aware path lookup behave identically.
+    pub fn pair_file_diff(
+        &self,
+        base_oid: &str,
+        target_oid: &str,
+        path: &str,
+    ) -> Result<String, String> {
+        let base = self.resolve_commit(base_oid)?;
+        let target = self.resolve_commit(target_oid)?;
+        let base_tree = base
+            .tree()
+            .map_err(|e| format!("Failed to get tree of {}: {}", base_oid, e))?;
+        let target_tree = target
+            .tree()
+            .map_err(|e| format!("Failed to get tree of {}: {}", target_oid, e))?;
+
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&base_tree), Some(&target_tree), None)
+            .map_err(|e| format!("Failed to get diff: {}", e))?;
+
+        self.render_file_patch(&diff, path)
     }
 
     /// Normalized patch hash for a commit vs its first parent: file paths

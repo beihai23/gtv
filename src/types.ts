@@ -57,6 +57,9 @@ export interface GitData {
   time_gaps: TimeGap[];
   /** True while older history can still be paged in via loadOlderCommits. */
   has_more: boolean;
+  /** Shorthand of the branch HEAD sits on; null while detached (or on an
+   *  unborn HEAD). Mirrors models.rs; drives the current-lane marker. */
+  head_branch: string | null;
 }
 
 export interface FileChange {
@@ -102,6 +105,26 @@ export interface SearchHit {
   author_name: string;
   timestamp: number;
   in_view: boolean;
+}
+
+/** One side of a two-commit compare (enough to head the compare panel);
+ *  mirrors models.rs. */
+export interface CompareSide {
+  id: string;
+  short_id: string;
+  subject: string;
+  author: string;
+}
+
+/** Two-commit compare (base -> target): per-file changes with real
+ *  per-file +/- numbers (unlike CommitDetail, whose per-file numbers stay
+ *  0) plus running totals; mirrors models.rs. */
+export interface CompareDetail {
+  base: CompareSide;
+  target: CompareSide;
+  files: FileChange[];
+  total_additions: number;
+  total_deletions: number;
 }
 
 /** Worktree preflight for the checkout confirm dialog; mirrors models.rs. */

@@ -133,6 +133,34 @@ pub fn get_file_diff(
     reader.get_file_diff(&commit_id, &path)
 }
 
+/// Two-commit compare (base -> target): file list with real per-file
+/// +/- numbers, running totals, and both-side commit summaries. Read-only.
+#[tauri::command]
+pub fn get_compare_detail(
+    base: String,
+    target: String,
+    state: tauri::State<AppState>,
+) -> Result<CompareDetail, String> {
+    let current_repo = state.current_repo.lock().unwrap();
+    let reader = current_repo.as_ref().ok_or("No repository opened")?;
+    reader.compare_detail(&base, &target)
+}
+
+/// Unified diff patch text for one file between two commits (base ->
+/// target). Read-only; same truncation and binary handling as
+/// get_file_diff.
+#[tauri::command]
+pub fn get_pair_file_diff(
+    base: String,
+    target: String,
+    path: String,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    let current_repo = state.current_repo.lock().unwrap();
+    let reader = current_repo.as_ref().ok_or("No repository opened")?;
+    reader.pair_file_diff(&base, &target, &path)
+}
+
 #[tauri::command]
 pub fn get_current_path(state: tauri::State<AppState>) -> Option<String> {
     let current_path = state.current_path.lock().unwrap();
@@ -276,8 +304,9 @@ pub async fn get_worktree_status(
 /// SAFE checkout of a local branch -- the app's only write path. Returns an
 /// ack only and never touches AppState's view/session: the watcher's
 /// repo-changed event is the sole refresh path, so a checkout can never
-/// race a second view rebuild. Refuses while a merge or cherry-pick is in
-/// progress and never discards conflicting changes (no force option).
+/// race a second view rebuild. Refuses while a merge, cherry-pick, or
+/// revert is in progress and never discards conflicting changes (no force
+/// option).
 #[tauri::command]
 pub async fn checkout_branch(
     branch: String,

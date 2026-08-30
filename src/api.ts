@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo, WorktreeStatus, CheckoutAck } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo, WorktreeStatus, CheckoutAck, CompareDetail } from './types';
 
 export async function selectAndOpenRepository(includeStale: boolean): Promise<GitData | null> {
   const selected = await open({
@@ -25,6 +25,18 @@ export async function getCommitDetail(commitId: string): Promise<CommitDetail> {
 
 export async function getFileDiff(commitId: string, path: string): Promise<string> {
   return invoke<string>('get_file_diff', { commitId, path });
+}
+
+/// Two-commit compare (base -> target): file list with real per-file
+/// +/- numbers, running totals, and both-side summaries. Read-only.
+export async function getCompareDetail(base: string, target: string): Promise<CompareDetail> {
+  return invoke<CompareDetail>('get_compare_detail', { base, target });
+}
+
+/// Unified diff patch text for one file between two commits (base ->
+/// target); same truncation and binary handling as getFileDiff.
+export async function getPairFileDiff(base: string, target: string, path: string): Promise<string> {
+  return invoke<string>('get_pair_file_diff', { base, target, path });
 }
 
 export async function getCurrentPath(): Promise<string | null> {
