@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod fetcher;
 pub mod git_reader;
 pub mod layout;
 pub mod log_buffer;
@@ -31,12 +32,18 @@ pub fn run() {
             // filesystem watcher, so no extra deps and no events on
             // transient index files.
             watcher::spawn_poller(app.handle().clone());
+            // Auto-fetcher (fetcher.rs): plain std thread fetching the
+            // ACTIVE repository's remotes every 60 s. Writes refs/remotes
+            // and objects only, and never emits: the watcher's poll is
+            // the single refresh path.
+            fetcher::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
             commands::close_repository,
             commands::set_active_repository,
+            commands::set_auto_fetch,
             commands::get_commit_detail,
             commands::get_file_diff,
             commands::get_compare_detail,

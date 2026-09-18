@@ -1,7 +1,9 @@
 use crate::layout::{self, LaneSeed, TAG_COLOR};
 use crate::models::*;
 use git2::build::CheckoutBuilder;
-use git2::{BranchType, Oid, Repository, Sort, Status, StatusOptions};
+use git2::{
+    BranchType, Cred, Oid, RemoteCallbacks, Repository, Sort, Status, StatusOptions,
+};
 use std::collections::{HashMap, HashSet};
 
 pub struct GitReader {
@@ -332,8 +334,9 @@ impl GitReader {
         })
     }
 
-    /// SAFE checkout of a local branch -- the app's ONLY write path to a
-    /// repository. The order is tree-first, head-second: the target tip's
+    /// SAFE checkout of a local branch -- one of the app's exactly two
+    /// write paths to a repository (the other is fetch_remotes below).
+    /// The order is tree-first, head-second: the target tip's
     /// tree is checked out with the SAFE strategy (compatible uncommitted
     /// changes carry over; anything a plain `git checkout` would refuse to
     /// overwrite fails the call BEFORE anything is written), and only then
@@ -387,6 +390,59 @@ impl GitReader {
         Ok(CheckoutAck {
             branch: name.to_string(),
         })
+    }
+
+    /// Fetch every configured remote of this repository, updating remote-
+    /// tracking refs and objects ONLY (.git internals; worktree, local
+    /// branches, HEAD, stash are never touched -- the second and last item
+    /// of the write whitelist). One failing remote does not abort the rest;
+    /// failures are collected into the returned Vec<String> for silent logging.
+    ///
+    /// Empty refspec slice = each remote's configured default refspecs
+    /// (`+refs/heads/*:refs/remotes/<name>/*` in .git/config, present for
+    /// any `git clone` / `git remote add` remote), and NO prune (minimum
+    /// write surface). Credentials are SSH-agent keys only: the callback
+    /// fires solely when the transport asks, so anonymous HTTPS and local
+    /// file:// remotes never call it; a private HTTPS remote with no
+    /// credentials simply fails into the failure list -- no dialog, no
+    /// panic. Nothing else happens after a successful fetch: no events, no
+    /// fingerprint writes -- the watcher's next poll sees the refs/remotes
+    /// movement on its own (the single refresh path, spec 4.3).
+    pub fn fetch_remotes(&self) -> Result<Vec<String>, String> {
+        let names = self
+            .repo
+            .remotes()
+            .map_err(|e| format!("Failed to enumerate remotes: {}", e))?;
+
+        let mut failures: Vec<String> = Vec::new();
+        for name in names.iter().flatten() {
+            let mut remote = match self.repo.find_remote(name) {
+                Ok(remote) => remote,
+                Err(e) => {
+                    failures.push(format!("{}: {}", name, e));
+                    continue;
+                }
+            };
+
+            // SSH-agent credentials. The callback runs only when the
+            // transport actually asks for them; anonymous HTTPS and local
+            // paths never do.
+            let mut callbacks = RemoteCallbacks::new();
+            callbacks.credentials(|_url, username_from_url, _allowed| {
+                Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
+            });
+            let mut options = git2::FetchOptions::new();
+            options.remote_callbacks(callbacks);
+
+            // Empty refspec slice: the remote's configured default
+            // refspecs apply. No prune, no reflog message (libgit2's
+            // default), no force flags -- the least a fetch can write.
+            let refspecs: [&str; 0] = [];
+            if let Err(e) = remote.fetch(&refspecs, Some(&mut options), None) {
+                failures.push(format!("{}: {}", name, e));
+            }
+        }
+        Ok(failures)
     }
 
     /// Walk commits from the given seed tips (TIME|TOPO, newest first),

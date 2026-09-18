@@ -3,7 +3,7 @@ use crate::layout::LaneSeed;
 use crate::models::*;
 use crate::terminal::PtySession;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
@@ -68,6 +68,12 @@ pub struct AppState {
     pub active: Mutex<u64>,
     /// Settings toggle consumed by the fetcher thread (Task 3); default on.
     pub auto_fetch: Mutex<bool>,
+    /// Fetcher-thread busy flag (Task 3): true while one tick's fetch is
+    /// in flight, so a network-hung fetch never stacks behind itself
+    /// (busy-skip). Owned by the fetcher alone and deliberately NOT
+    /// per-session: the fetch target follows `active`, so a repo close
+    /// has nothing of its own to clean up here.
+    pub fetching: AtomicBool,
 }
 
 impl Default for AppState {
@@ -77,6 +83,7 @@ impl Default for AppState {
             next_repo_id: AtomicU64::new(1),
             active: Mutex::new(0),
             auto_fetch: Mutex::new(true),
+            fetching: AtomicBool::new(false),
         }
     }
 }
@@ -359,6 +366,21 @@ pub fn set_active_repository_impl(state: &AppState, repo_id: u64) -> Result<(), 
 #[tauri::command]
 pub fn set_active_repository(repo_id: u64, state: tauri::State<AppState>) -> Result<(), String> {
     set_active_repository_impl(&state, repo_id)
+}
+
+/// Settings toggle for the auto-fetch thread (spec 4.2): writes the flag
+/// the fetcher reads at the top of every tick. There is deliberately NO
+/// immediate-trigger semantics -- enabling mid-cycle takes effect on the
+/// next tick (<= 60 s later), and disabling likewise stops future ticks
+/// without cancelling one already in flight.
+pub fn set_auto_fetch_impl(state: &AppState, enabled: bool) -> Result<(), String> {
+    *state.auto_fetch.lock().unwrap() = enabled;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_auto_fetch(enabled: bool, state: tauri::State<AppState>) -> Result<(), String> {
+    set_auto_fetch_impl(&state, enabled)
 }
 
 pub async fn get_commit_detail_impl(

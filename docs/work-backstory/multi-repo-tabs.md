@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: in-progress
-commits: [55ca115, 58473ff]
+commits: [55ca115, 58473ff, 77df2d1, ad8534d]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -148,3 +148,44 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   entered 信号造出确定性的 spawn 跨 close 窗口：Err "No repository opened"
   + spawner 产出的 session 被 drop-kill，exit 回调 5s 内到）。门禁：cargo
   test 73 过 / 2 败（新增 3；tour_repo 既有）；npm test 81/81；build 过。
+- Task 3（Rust：fetcher 线程 + fetch_remotes + set_auto_fetch）：写仓库第二例外落地。
+  fetch_remotes 落 git_reader.rs（git2 全落此文件铁律）：`repo.remotes()` 枚举逐个
+  `find_remote` + `fetch(&[], ...)`——空 refspec slice 走 remote 配置的默认 refspec
+  （+refs/heads/*:refs/remotes/<name>/*，git clone / git remote add 造的 remote 必有）；
+  不 prune；RemoteCallbacks 只装 `Cred::ssh_key_from_agent`（callback 仅在 transport
+  索要时触发：匿名 HTTPS 与本地 file:// 永不调它，私有 HTTPS 无凭证 → 失败进列表，
+  不弹窗不 panic）；单 remote 失败 push 进 Vec<String> 继续下一个。一个 rustc 现实：
+  空 slice 推不出 `AsRef<str>` 元素类型，需 `let refspecs: [&str; 0] = []` 显式标注。
+  fetch 后零副作用：不 emit、不碰 fingerprint——watcher 下一轮 fingerprint 命中
+  refs/remotes 移动，单一刷新路径铁律。
+  fetcher.rs：`spawn(app)` 起 std::thread 60s 循环（骨架照 watcher.rs，panic=abort
+  注释复刻）；线程私有一个 current_thread tokio Runtime（tick 的 spawn_blocking 需要
+  异步驱动，循环外构建一次终身复用）；`pub async fn fetch_tick(&AppState) ->
+  TickOutcome` 可直测（测试不睡 60s）。检查序：auto_fetch 关 → AutoOff（先于一切
+  注册表读取）；读 active（自有锁）后**紧邻**短持 repos 锁复查该 id 仍注册（评审
+  Nit-5 必写：两 tick 之间 tab 可能已关/切走，未复查的 id 绝不 fetch）并 clone
+  canonical path 即放锁——active 与 repos 两锁从不嵌套持有（沿既有代码纪律，复查
+  与读 active 「紧邻完成」即满足简报要求）；busy `AtomicBool::swap(true)` 已真 →
+  Busy（上一轮网络挂死不叠加）；`spawn_blocking` 短命 `GitReader::new(path)?.
+  fetch_remotes()`（绝不持 repos 锁）。busy 标志 = AppState.fetching: AtomicBool
+  （fetcher 专有、非 per-session：fetch 目标随 active 走，repo 关闭时无它自己的
+  东西要清理）；swap 之后所有路径 store(false)。TickOutcome 五变体：Skip 的语义
+  裁定为「tick 已派发但仓打不开（目录被删）或 blocking task 死亡」——简报枚举列了
+  Skip 但步骤描述里三处早退都写 Skip，与测试断言的 AutoOff/NoActive/Busy 冲突，
+  按 summary 与测试为准，Skip 落在唯一剩下的真实分支上，五变体全部有构造点。
+  失败列表 ONE 行 log::info 汇总（离线不刷屏），成功完全静默。set_auto_fetch 按
+  impl 模式一行壳；**无立即触发语义**（开关下次 tick 生效，≤60s 延迟，文档注明，
+  真机手动项）。
+  测试 6 例（multi_repo.rs，file:// bare 上游零网络；**实证确认** libgit2 对
+  file:// remote 的 fetch 行为符合假设，fixture 零修正）：fetch 落地 + 写面钉死
+  （refs/remotes/origin/main = 上游新 oid，HEAD oid / 本地分支 oid / worktree 文件
+  字节三重不变——这三条断言就是写白名单验收）；死 remote 不弃全体（failures 含
+  dead 不含 origin，origin 新提交照常落地）；busy-skip（store(true) → Busy 且新
+  提交未落地、标志不被误清；清掉 → Fetched 且标志复位）；auto_fetch=false 空转 +
+  回开下一 tick 恢复（钉住无立即触发语义）；仅 active 仓（A 动 B 不动）；Nit-5
+  （close 后手工把 active 指回已关 id 模拟两 tick 间竞态 → NoActive 不 panic，且
+  因 A 目录还在、断言其 refs 确实未动——不复查就真的会写；切 active 到 B 后正常
+  fetch）。fixture：seed 工作树 + `clone --bare` 造上游 + `clone file://` 造被测仓，
+  上游前进 = seed 里提交再 push（被测仓全程不被碰）。
+  门禁：cargo test 79 过 / 2 败（新增 6；2 败仍 tour_repo 既有）；npm test 81/81；
+  build 过。真机网络 fetch（SSH agent、私有 HTTPS）列真机手动项，不在测试范围。

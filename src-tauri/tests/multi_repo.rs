@@ -7,13 +7,16 @@
 
 use gtv_lib::commands::{
     close_repository_impl, filter_by_branches_impl, get_commit_detail_impl, jump_to_commit_impl,
-    load_older_commits_impl, open_repository_impl, set_active_repository_impl, AppState,
+    load_older_commits_impl, open_repository_impl, set_active_repository_impl,
+    set_auto_fetch_impl, AppState,
 };
+use gtv_lib::fetcher::{fetch_tick, TickOutcome};
 use gtv_lib::git_reader::GitReader;
 use gtv_lib::watcher::diff_fingerprints;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Run git in `dir`. Identity/gpg overrides are passed inline so the test
@@ -487,4 +490,241 @@ fn open_error_leaves_registry_untouched() {
     assert_eq!(*state.active.lock().unwrap(), 0);
 
     std::fs::remove_dir_all(&not_a_repo).expect("clean up temp dir");
+}
+
+// --- Auto-fetch (Task 3): fetch_remotes + fetcher tick over file:// remotes ---
+
+/// Bare upstream wired as the `origin` of a working clone, built entirely
+/// with the git CLI over the local file:// transport (zero network). The
+/// seed worktree stays alive so tests can advance the upstream WITHOUT
+/// touching the clone under test: `advance_upstream` commits in the seed
+/// and pushes to the bare. Returns (seed, upstream, clone).
+fn build_fetch_fixture(
+    name: &str,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let base = std::env::temp_dir().join(format!("gtv-fetch-{}-{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).expect("create temp dir");
+    let seed = base.join("seed");
+    let upstream = base.join("upstream.git");
+    let clone = base.join("clone");
+    git(&base, &["init", "-b", "main", seed.to_str().unwrap()], &day(1));
+    std::fs::write(seed.join("file.txt"), "v1\n").expect("write seed file");
+    git(&seed, &["add", "."], &day(1));
+    commit(&seed, "seed-1", &day(1));
+    git(
+        &base,
+        &[
+            "clone",
+            "--bare",
+            seed.to_str().unwrap(),
+            upstream.to_str().unwrap(),
+        ],
+        &day(1),
+    );
+    git(
+        &base,
+        &[
+            "clone",
+            format!("file://{}", upstream.display()).as_str(),
+            clone.to_str().unwrap(),
+        ],
+        &day(1),
+    );
+    (seed, upstream, clone)
+}
+
+/// One new commit on the upstream's main, pushed from the seed worktree.
+/// The clone under test is never touched. Returns the new tip oid.
+fn advance_upstream(seed: &Path, upstream: &Path, msg: &str, date: &str) -> String {
+    std::fs::write(seed.join("file.txt"), format!("{}\n", msg)).expect("write upstream file");
+    git(seed, &["add", "."], date);
+    commit(seed, msg, date);
+    git(
+        seed,
+        &[
+            "push",
+            format!("file://{}", upstream.display()).as_str(),
+            "main",
+        ],
+        date,
+    );
+    git_sha(seed, "HEAD")
+}
+
+#[test]
+fn fetch_remotes_updates_tracking_refs_only() {
+    let (seed, upstream, clone) = build_fetch_fixture("land");
+
+    // Write-boundary baseline: HEAD, the local branch, the tracking ref,
+    // and the worktree file bytes.
+    let head_before = git_sha(&clone, "HEAD");
+    let main_before = git_sha(&clone, "main");
+    let origin_main_before = git_sha(&clone, "refs/remotes/origin/main");
+    let worktree_before = std::fs::read(clone.join("file.txt")).expect("worktree file");
+
+    let new_tip = advance_upstream(&seed, &upstream, "up-1", &day(7));
+    assert_ne!(origin_main_before, new_tip);
+
+    let failures = GitReader::new(clone.to_str().unwrap())
+        .expect("open clone")
+        .fetch_remotes()
+        .expect("fetch_remotes");
+    assert!(failures.is_empty(), "no remote fails: {:?}", failures);
+
+    // The tracking ref landed on the upstream's new tip...
+    assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
+    // ...and NOTHING else moved: HEAD, the local branch, and the worktree
+    // stay byte-identical. These assertions ARE the write-whitelist
+    // acceptance for fetch (spec 3, item 2).
+    assert_eq!(git_sha(&clone, "HEAD"), head_before);
+    assert_eq!(git_sha(&clone, "main"), main_before);
+    let worktree_after = std::fs::read(clone.join("file.txt")).expect("worktree file");
+    assert_eq!(worktree_after, worktree_before);
+    assert_eq!(worktree_after, b"v1\n".to_vec());
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+#[test]
+fn one_dead_remote_does_not_abort_the_live_one() {
+    let (seed, upstream, clone) = build_fetch_fixture("dead");
+    // A second remote whose path does not exist: file:// to nowhere.
+    let dead_url = format!(
+        "file://{}",
+        clone.parent().unwrap().join("nope.git").display()
+    );
+    git(&clone, &["remote", "add", "dead", dead_url.as_str()], &day(1));
+
+    let new_tip = advance_upstream(&seed, &upstream, "up-1", &day(7));
+
+    let failures = GitReader::new(clone.to_str().unwrap())
+        .expect("open clone")
+        .fetch_remotes()
+        .expect("fetch_remotes");
+    // Exactly the dead remote failed, named as such; origin is absent from
+    // the failure list and its new commit landed anyway.
+    assert_eq!(failures.len(), 1, "failures: {:?}", failures);
+    assert!(
+        failures[0].starts_with("dead:"),
+        "failure names the dead remote: {:?}",
+        failures
+    );
+    assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+#[test]
+fn busy_flag_skips_the_tick_until_cleared() {
+    let (seed, upstream, clone) = build_fetch_fixture("busy");
+    let state = AppState::default();
+    open(&state, &clone);
+
+    let new_tip = advance_upstream(&seed, &upstream, "up-1", &day(7));
+
+    // A previous fetch still in flight (planted): the tick must not
+    // dispatch, so the upstream's new commit stays unfetched...
+    state.fetching.store(true, Ordering::SeqCst);
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Busy);
+    assert_ne!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
+    // ...and the flag stays set (still owned by the "in-flight" fetch).
+    assert!(state.fetching.load(Ordering::SeqCst));
+
+    // Cleared: the next tick fetches and resets the flag on completion.
+    state.fetching.store(false, Ordering::SeqCst);
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
+    assert!(!state.fetching.load(Ordering::SeqCst));
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+#[test]
+fn auto_fetch_off_idles_the_tick() {
+    let (seed, upstream, clone) = build_fetch_fixture("autooff");
+    let state = AppState::default();
+    open(&state, &clone);
+
+    set_auto_fetch_impl(&state, false).expect("disable auto-fetch");
+    advance_upstream(&seed, &upstream, "up-1", &day(7));
+
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::AutoOff);
+    // Idled before any fetch: the tracking ref did not move.
+    assert_ne!(
+        git_sha(&clone, "refs/remotes/origin/main"),
+        git_sha(&seed, "HEAD")
+    );
+
+    // Flipping the setting back on resumes on the NEXT tick: the toggle
+    // is read at tick top and has no immediate-trigger semantics.
+    set_auto_fetch_impl(&state, true).expect("enable auto-fetch");
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(
+        git_sha(&clone, "refs/remotes/origin/main"),
+        git_sha(&seed, "HEAD")
+    );
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+#[test]
+fn only_the_active_repo_is_fetched() {
+    let (seed_a, upstream_a, clone_a) = build_fetch_fixture("only-a");
+    let (seed_b, upstream_b, clone_b) = build_fetch_fixture("only-b");
+    let state = AppState::default();
+    let a = open(&state, &clone_a);
+    open(&state, &clone_b); // opening makes B active
+    set_active_repository_impl(&state, a.repo_id).expect("activate a");
+
+    let tip_a = advance_upstream(&seed_a, &upstream_a, "up-a", &day(7));
+    let tip_b = advance_upstream(&seed_b, &upstream_b, "up-b", &day(7));
+
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    // A (active) moved; B (background) did not: fetch targets ONLY the
+    // active tab (spec 4.3).
+    assert_eq!(git_sha(&clone_a, "refs/remotes/origin/main"), tip_a);
+    assert_ne!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
+
+    std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");
+    std::fs::remove_dir_all(seed_b.parent().unwrap()).expect("clean up temp dir b");
+}
+
+#[test]
+fn closed_active_id_yields_noactive_without_panic() {
+    let (seed_a, upstream_a, clone_a) = build_fetch_fixture("nit5-a");
+    let (seed_b, upstream_b, clone_b) = build_fetch_fixture("nit5-b");
+    let state = AppState::default();
+    let a = open(&state, &clone_a);
+    let b = open(&state, &clone_b);
+
+    // Nit-5: simulate the between-ticks race -- the tab closed but the
+    // fetcher's cached `active` still names its id (the observable state
+    // of the window where close removed the session but has not yet reset
+    // `active`). close normally zeroes it; the plant reproduces the race.
+    let tip_a = advance_upstream(&seed_a, &upstream_a, "up-a", &day(7));
+    close_repository_impl(&state, a.repo_id).expect("close a");
+    *state.active.lock().unwrap() = a.repo_id;
+
+    let tip_b = advance_upstream(&seed_b, &upstream_b, "up-b", &day(7));
+
+    // No panic, and no dispatch: without the re-verification this tick
+    // would have fetched closed tab A (its directory still exists, so the
+    // write would really have landed).
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::NoActive);
+    assert!(!state.fetching.load(Ordering::SeqCst));
+    assert_ne!(git_sha(&clone_a, "refs/remotes/origin/main"), tip_a);
+    assert_ne!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
+
+    // Switching active to the live tab fetches that one fine.
+    set_active_repository_impl(&state, b.repo_id).expect("activate b");
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
+
+    std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");
+    std::fs::remove_dir_all(seed_b.parent().unwrap()).expect("clean up temp dir b");
 }
