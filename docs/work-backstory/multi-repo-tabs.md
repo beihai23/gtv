@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: resolved
-commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3, b3143a8, 5dfa328, 597320e, fc39526, 8596902, e303868, f73cf3c]
+commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3, b3143a8, 5dfa328, 597320e, fc39526, 8596902, e303868, f73cf3c, 64bdc4f]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -600,6 +600,15 @@ AskUserQuestion 交用户裁决 → **subprocess**（2026-09-18）。
   spec 文末 Amendments 节（5.1 偏差、5.3 键对齐、6-6 守卫确认、fetch
   决策记录）；真机清单收口汇总（下节）；plan 文档 trailer 行更正
   （"Claude Fable 5" → Claude Code）。
+- **复审（sonnet 聚焦复审）READY-WITH-WAVE → 已收**：11/11 修复项逐
+  hunk 落实；subprocess 管线七项契约独立实核；坏 remote 行为复审者
+  在 tmp 目录独立三方实证；独立 E2E（含 F1 回归：终端开着 locate 输
+  6 键 0 spawn）全过；门禁独立复跑一致。唯一 Minor：README "every
+  tab (including its terminal and view state) is restored" 言过其实
+  （termOpen 刻意不持久化、视图状态仅会话内保活）→ orchestrator 按
+  T4/T6 先例直接落 64bdc4f 一行改写（恢复面只声明 tab 集 + 激活
+  tab）。3 项 Nit 记录不动（+Infinity DOM 不可达、mock re-attach 尺寸
+  注释已自曝、守卫依赖家族枚举恒成功）。
 
 ## 真机用户手册清单（Task 8 收口汇总；取代上面 Task 7 的散列清单）
 
