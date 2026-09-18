@@ -125,3 +125,26 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   反证不再 spawn），kill 后 respawn 新 id；未知 repo_id 四命令 Err。门禁：
   cargo test 70 过 / 2 败（新增 5；2 败仍 tour_repo 既有）；npm test 81/81；
   build 过。
+- Task 2 修复波（评审 I-1 MUST-FIX + L-1/L-2，见 tabs-task-2-fix-report.md）：
+  简报自任的「单次锁内直接转发」是误读旧两段式现状——pty 写**可以**秒级阻塞
+  （子进程不读 stdin、tty 输入队列满、大粘贴挂到子进程读为止），Task 2 落地
+  后等于一个 tab 的粘贴能冻住全 app 的 repos 锁。形状修正而非打补丁：
+  `RepoSession.terminal` 改 `Option<Arc<Mutex<PtySession>>>`——内层 per-session
+  锁复刻旧全局终端锁给单 session 写者的串行化，去掉跨 session 耦合；write/
+  resize/kill/spawn 一律「短持 repos 锁 clone/take 句柄 → 放锁 → 内层锁做
+  pty IO」，kill 的 taken Arc 与 close 的整个 RepoSession 都在锁外 drop
+  （PtySession::Drop 的非阻塞不变量从此只保护调用者，不再护全局注册表，L-2
+  连带了结）。释放顺序写成代码事实：write/resize 先绑定结果再返回，
+  MutexGuard 语句末落、Arc 函数末落，注册表永远不是「drop 还被锁着的 session
+  mutex」的那一方。kill 语义按裁定从静默 Ok 钉成 Err "No terminal session"
+  （前端唯一调用点 .catch 吞错，无感）。**macOS 实证发现**：默认 canonical
+  tty 在输入队列满时丢弃溢出（8MB 写 0.34s 完成，不阻塞），raw 模式才阻塞
+  （约 1KB 后卡死直到子进程死）——wedge 回归测试的 fixture 因此是
+  `stty raw -echo; printf rawset; sleep 10`，先等 "rawset" marker 握手再发起
+  8MB detached 写，期间断言第二仓 open 2s 内完成（旧形状实跑验证：该测试
+  2.42s 有界失败，报错信息即病灶）；防挂三保险：writer 线程不 join、子进程
+  sleep 10 硬上界、进程退出关 master fd 兜底。另钉 L-1a（无 session 的
+  write/resize/kill 精确错误串，路由检查在前）与 L-1b（延迟 spawner +
+  entered 信号造出确定性的 spawn 跨 close 窗口：Err "No repository opened"
+  + spawner 产出的 session 被 drop-kill，exit 回调 5s 内到）。门禁：cargo
+  test 73 过 / 2 败（新增 3；tour_repo 既有）；npm test 81/81；build 过。

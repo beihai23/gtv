@@ -4,7 +4,7 @@ use crate::models::*;
 use crate::terminal::PtySession;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::task;
 
 /// Pagination state of the current view: which seeds to continue walking
@@ -40,10 +40,20 @@ pub struct RepoSession {
     /// the frontend's second-level tabs, refreshed on repo-changed.
     pub family: Vec<WorktreeMember>,
     /// This tab's integrated terminal (spec 4.2); None until the panel
-    /// first spawns a shell. No inner Mutex — the repos lock guards it like
-    /// every other field. Dropping the PtySession kills the child (master
-    /// fd closes -> SIGHUP -> the reader reaps and emits "terminal-exit").
-    pub terminal: Option<PtySession>,
+    /// first spawns a shell. Arc-shared so every terminal command can
+    /// clone the handle under a short repos lock and then talk to the
+    /// session through this inner mutex alone. A pty write CAN block for
+    /// seconds (child not reading stdin, e.g. a paused TUI app in raw
+    /// mode -> the tty input queue fills -> the write hangs until the
+    /// child drains), so the blocking must sit on this per-session lock,
+    /// never on the global repos lock: one tab's wedged paste may stall
+    /// that session's writers, not every repo command and the watcher.
+    /// The inner mutex keeps the writer serialization the pre-multi-repo
+    /// global terminal mutex gave the single session, minus the
+    /// cross-session coupling. Dropping the LAST Arc drops the
+    /// PtySession, which kills the child (master fd closes -> SIGHUP ->
+    /// the reader reaps and emits "terminal-exit").
+    pub terminal: Option<Arc<Mutex<PtySession>>>,
 }
 
 pub struct AppState {
@@ -308,17 +318,20 @@ pub async fn open_repository(
 /// Remove a repository's session (tab close). Unknown ids error like every
 /// other repo-routed command. The removed RepoSession is bound (NOT
 /// discarded at the remove statement) so its drop — including the tab's
-/// PtySession, whose Drop kills the child: master fd closes -> SIGHUP ->
-/// the reader EOFs, reaps and emits "terminal-exit" — runs after the repos
-/// lock is released. If the closed repo was the active one, active goes
-/// back to "none" (0) — the frontend names the new active explicitly.
+/// terminal handle, whose last-Arc PtySession::Drop kills the child
+/// (master fd closes -> SIGHUP -> the reader EOFs, reaps and emits
+/// "terminal-exit") — runs after the repos lock is released; the explicit
+/// drop keeps that lock discipline a code fact, not a comment promise.
+/// If the closed repo was the active one, active goes back to "none" (0)
+/// — the frontend names the new active explicitly.
 pub fn close_repository_impl(state: &AppState, repo_id: u64) -> Result<(), String> {
     let removed = {
         let mut repos = state.repos.lock().unwrap();
         repos.remove(&repo_id).ok_or("No repository opened")?
     };
-    // Explicit drop: kills the closed tab's terminal; never blocks (Drop
-    // only try_locks the child and closes fds — the reap happens on the
+    // Explicit drop: detaches the closed tab's terminal (and kills the
+    // child when this was the last Arc); never blocks (Drop only
+    // try_locks the child and closes fds — the reap happens on the
     // reader thread).
     drop(removed);
     let mut active = state.active.lock().unwrap();
@@ -826,7 +839,10 @@ pub async fn get_patch_links(
 
 // --- Integrated terminal (bottom panel) ---
 // One session per open repository (spec 4.2): every command routes through
-// repo_id into that repo's RepoSession.terminal, guarded by the repos lock.
+// repo_id into that repo's RepoSession.terminal. The repos lock is held
+// only long enough to clone (or take) the shared session handle; the pty
+// interaction itself runs under the session's own inner lock, so a
+// blocking write wedges one tab, not the registry.
 
 /// Spawn (or return the existing) shell session in the given open
 /// repository. Idempotent: a live session is returned as-is, so the
@@ -861,13 +877,16 @@ where
     S: FnOnce(std::path::PathBuf, u16, u16) -> Result<PtySession, String> + Send + 'static,
 {
     // Fast path under a short lock; the guard must be dropped before the
-    // await below, or the future stops being Send.
-    {
+    // await below, or the future stops being Send. The handle is cloned
+    // out and the session itself is only touched under the inner terminal
+    // lock, outside the repos lock.
+    let live = {
         let repos = state.repos.lock().unwrap();
         let session = repos.get(&repo_id).ok_or("No repository opened")?;
-        if let Some(terminal) = session.terminal.as_ref() {
-            return Ok(terminal.info());
-        }
+        session.terminal.clone()
+    };
+    if let Some(terminal) = live {
+        return Ok(terminal.lock().unwrap().info());
     }
     let path = std::path::PathBuf::from(session_path(state, repo_id)?);
     // openpty + fork is millisecond-scale, but it still has no business on
@@ -882,12 +901,17 @@ where
     let repo = repos.get_mut(&repo_id).ok_or("No repository opened")?;
     // A racing second spawn for the SAME repo can't come from the single
     // frontend caller, but if it ever does: first session wins, the loser
-    // is dropped (killed).
-    if let Some(existing) = repo.terminal.as_ref() {
-        return Ok(existing.info());
+    // is dropped (killed). The winner's info is read under its inner lock
+    // after the repos guard is gone.
+    if let Some(existing) = repo.terminal.clone() {
+        drop(repos);
+        return Ok(existing.lock().unwrap().info());
     }
+    // The fresh session is still exclusively ours here, so its info needs
+    // no lock; the insert only swaps the handle into the slot.
     let info = session.info();
-    repo.terminal = Some(session);
+    repo.terminal = Some(Arc::new(Mutex::new(session)));
+    drop(repos);
     Ok(info)
 }
 
@@ -902,17 +926,29 @@ pub async fn terminal_spawn(
     terminal_spawn_impl(&state, repo_id, cols, rows, &app).await
 }
 
-/// Forward keystrokes/paste from xterm.js to the repo's PTY. Fast path:
-/// route under the repos lock and forward the bytes right there (the pty
-/// write never blocks meaningfully).
+/// Forward keystrokes/paste from xterm.js to the repo's PTY. Lock
+/// discipline: the repos lock is held only to clone the session handle
+/// (plus the routing/slot error checks); the write itself runs under the
+/// session's inner lock, outside the repos lock. A pty write CAN block
+/// for seconds (child not reading stdin -> tty input queue full -> large
+/// paste hangs until the child drains), so the blocking must sit on the
+/// per-session lock only: a wedged paste in one tab must not freeze
+/// every repo command and the watcher app-wide.
 pub fn terminal_write_impl(state: &AppState, repo_id: u64, data: String) -> Result<(), String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session
-        .terminal
-        .as_ref()
-        .ok_or("No terminal session")?
-        .write_all(&data)
+    let terminal = {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo_id).ok_or("No repository opened")?;
+        session
+            .terminal
+            .as_ref()
+            .ok_or("No terminal session")?
+            .clone()
+    };
+    // Bind before returning: the guard must drop at the statement end,
+    // strictly before `terminal` (the cloned Arc) — the registry slot is
+    // never the one to drop a locked session mutex.
+    let result = terminal.lock().unwrap().write_all(&data);
+    result
 }
 
 #[tauri::command]
@@ -924,16 +960,23 @@ pub fn terminal_write(
     terminal_write_impl(&state, repo_id, data)
 }
 
-/// Sync the repo's PTY size after a frontend fit(). Fast path like write:
-/// route under the repos lock and resize right there.
+/// Sync the repo's PTY size after a frontend fit(). Same lock discipline
+/// as write: clone the handle under the repos lock, resize under the
+/// session's inner lock (an ioctl can stall behind a wedged writer on
+/// the same session; it must never stall the registry).
 pub fn terminal_resize_impl(state: &AppState, repo_id: u64, cols: u16, rows: u16) -> Result<(), String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session
-        .terminal
-        .as_ref()
-        .ok_or("No terminal session")?
-        .resize(cols, rows)
+    let terminal = {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo_id).ok_or("No repository opened")?;
+        session
+            .terminal
+            .as_ref()
+            .ok_or("No terminal session")?
+            .clone()
+    };
+    // Same guard-before-Arc drop order as write above.
+    let result = terminal.lock().unwrap().resize(cols, rows);
+    result
 }
 
 #[tauri::command]
@@ -946,13 +989,23 @@ pub fn terminal_resize(
     terminal_resize_impl(&state, repo_id, cols, rows)
 }
 
-/// Kill the repo's session (restart button). Setting the slot to None
-/// drops the PtySession, which closes the master fd → SIGHUP → the reader
-/// thread EOFs, reaps and emits "terminal-exit".
+/// Kill the repo's session (restart button). Taking the slot detaches the
+/// registry's handle; the taken Arc is dropped OUTSIDE the repos lock, so
+/// even the last-Arc PtySession::Drop (best-effort child kill + master fd
+/// close -> SIGHUP -> the reader thread EOFs, reaps and emits
+/// "terminal-exit") can never run under the global registry lock — the
+/// Drop non-blocking invariant (try_lock child, close fds, no joins) now
+/// only protects this caller, not the whole app. A wedged writer may
+/// still hold a cloned Arc; then the child lives until that write unblocks
+/// (child exit -> pty error), which is that writer alone — the registry
+/// and every other tab moved on.
 pub fn terminal_kill_impl(state: &AppState, repo_id: u64) -> Result<(), String> {
-    let mut repos = state.repos.lock().unwrap();
-    let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
-    session.terminal = None;
+    let taken = {
+        let mut repos = state.repos.lock().unwrap();
+        let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
+        session.terminal.take().ok_or("No terminal session")?
+    };
+    drop(taken);
     Ok(())
 }
 
