@@ -37,6 +37,13 @@ function App() {
 
   return (
     <div className="app">
+      {/* SettingsDialog stays BEFORE the repo body: it shares the z-80
+          backdrop class with Checkout/IssueReport, and at equal z the
+          paint order is DOM order -- the pre-extraction App rendered it
+          first, so a Cmd+, pressed while another modal is open leaves
+          that modal on top (first click closes it). Rendered after the
+          body, the same keypress would flip the stacking instead. */}
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       {/* Global shell (multi-repo-tabs Task 4): exactly ONE RepoView today;
           Task 5 mounts one per tab and moves gtv_latest_repo up into App. */}
       <RepoView
@@ -54,7 +61,6 @@ function App() {
         setShowIssueReport={setShowIssueReport}
         setShowSettings={setShowSettings}
       />
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
