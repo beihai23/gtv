@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: in-progress
-commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a]
+commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -222,3 +222,88 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   文件，除「原 :1268-1269 两行行尾空白被剥」外零差异；App 侧留守 hunk
   （Cmd+, 效应/showTags 块/视图偏好块/SettingsDialog 渲染）逐行比对 OK。
   门禁：npm test 81/81；npm run build 过（chunk >500kB 警告既有）；cargo 未动。
+- Task 4 修复波（b6325d3，评审 Important-1）：搬移把 SettingsDialog 挪到了
+  repo body 之后，但它与 Checkout/IssueReport 同用 z-80 backdrop——同 z 下
+  paint 序 = DOM 序，旧 App 先渲染 SettingsDialog，「别的 modal 开着时按
+  Cmd+,」由「第一击关掉上层 modal」翻转为「settings 盖上去」。可达行为
+  翻转（Cmd+, 不被 modal 挡），一行移回 + 注释钉死。
+- Task 5（前端：两级 tab 壳 + api.ts 全量 repoId + 统一去重 + 恢复 + 保活）
+  ——契约断裂期收口，T1 起断裂的全链路（picker 开仓/stale 切换/终端/刷新）
+  自此在真机恢复可用。
+  后端唯一增量 set_include_stale（impl 模式 + 一行壳）：短锁先翻
+  session.include_stale（竞争中的 get_branch_list 不得用旧策略应答）→
+  锁外 spawn_blocking read_git_data(2000) → update_view_session 存回 view+
+  分页 session（照 open 的快照模式）；watch_baseline/terminal/family 一概
+  不碰。测试的 fixture 难点：open 窗口固定 2000，小仓造不出 stale 分支，
+  2100 个 `git commit` 子进程又太慢——改用 **git fast-import 单进程流**
+  （2100 条链式 commit + stale 分支从 mark 80 分叉、tip 时间落在 c80/c81
+  之间，最新 2000 窗口必然排除它）；注意 fast-import 语法 `from` 在 `data`
+  **之后**（放错报 "expected 'data n'"）。+2 例：切换翻转 include_stale +
+  分页 seeds 含/不含 stale + get_branch_list 镜像过滤 + 未知 id Err；终端
+  跨两次切换同 id 仍可写（spawn_terminal_in_repo 注入 spawner，terminal_
+  multi 模式）。
+  tabs.ts 纯函数模块（测试先写，16 例）：groupTabsByCommondir 插入序稳定
+  归组；nextActiveAfterClose **返回 pre-close 列表的下标**（右侧优先→左侧
+  →-1），调用方先解析成 repoId 再 filter（下标跨 filter 会漂移，id 不会）；
+  migrateRestore gtv_tabs 优先、legacy gtv_latest_repo 单成员迁移读后删，
+  **gtv_tabs 胜出路径也删 legacy**（一旦有 tab 列表它就是唯一权威，迁移
+  read-once）；脏 gtv_tabs 落穿到 legacy 而非直接 null；persistTabs 写
+  {members:[{path,commondir}], active}（repoId 是运行期 id 不落盘）。
+  api.ts 全量改造（本 commit 起唯一契约面）：14 仓命令 + 4 终端命令全部
+  repoId 首参；openRepository 返回 OpenedRepo；删 getCurrentPath/
+  getCurrentBranch；增 closeRepository/setActiveRepository/setAutoFetch/
+  setIncludeStale；selectAndOpenRepository 保留为契约面（返回 OpenedRepo|
+  null）但 **App 不用它**——App 自己跑 dialog 再走 openTab(path)， picker
+  拿到的 path 要进 TabInfo，而 OpenedRepo 不带 path 字段（后端加字段超本
+  任务红线）。types.ts repo-changed 注释清为 RepoChanged{repo_id,path}。
+  RepoView 手术：props 终态 {repoId, path, initialData, active,
+  onOpenPicker, showTags, toggleShowTags, compressed, setCompressed,
+  showMergeLinks, setShowMergeLinks, showRefLabels, setShowRefLabels,
+  showIssueReport, setShowIssueReport, setShowSettings}——fitSignal/
+  setFitSignal props 拆除（内化：Fit 按钮 + active false→true 各 bump 一次，
+  display:none 回来后 D3 重测）。删除内部 open 流：picker（handleOpenRepo）
+  迁 App、恢复开仓（handleOpenLatestRepo）删、LATEST_REPO_KEY 四处全删
+  （:349 死 getCurrentPath echo 随之消灭）。gitData 初始 = initialData；
+  挂载 effect 承接 open 流尾巴（branchList + M2.4 选择恢复 + diff stats）。
+  **刷新路径的关键选型**：T1 统一去重后 re-open 拿回的是既有 view（绝不
+  重建），repo-changed 刷新与 stale 切换都改走 setIncludeStale(repoId,
+  当前策略)——它是唯一「从 HEAD 全量重读且不碰终端/基线」的命令，与旧
+  openRepository 刷新语义逐项等价（分页重建本就是 v1 接受的限制）。repo-
+  changed 监听按 payload.repo_id === repoId 过滤，各自独立防抖，不依赖
+  emit 顺序。四个键盘监听（Ctrl+`/Cmd+F/箭头/Esc）全部 !active 早退。
+  IssueReportDialog 仅 active 时渲染（T4 review Low-3：N 保活 tab 不叠 N
+  层 z-80；错误横幅保留各自渲染——随 display:none 隐藏，选型记报告）。
+  TerminalPanel/CommitDetails/CompareDetails 均加 repoId prop 透传。
+  App 状态机：tabs + activeRepoId（下标纯派生——id 跨 close 稳定而下标
+  漂移）+ families + openData（开仓 view，RepoView 首挂读取一次）；
+  applyTabs 单写者（refs 同步 + lastActiveInGroup 记录 + persistTabs 派生
+  active 下标）。openTab(path) 是唯一 path 入口（picker/恢复/二级 lazy/
+  T6 拖放），dedup 判定全靠后端 already_open；closeTab 先 closeRepository
+  （后端杀终端）再用邻位规则，families/openData 条目随 tab 清除；
+  Cmd+T/Cmd+W 均 preventDefault（**macOS Cmd+W 默认关整个窗口**，tab 壳
+  接管）；恢复 = migrateRestore → 依序 openTab → 记录 idx 夹取到末位。
+  family 刷新选型（简报裁定）：App 也 listen repo-changed，对命中仓 500ms
+  防抖后重调 openRepository(path)——already_open 语义返回新枚举的 family
+  快照 + 既有 view（丢弃），一次枚举代价可接受；open 会把 active 指到被
+  刷新仓，**随后显式恢复用户实际所在 tab 的 active**（fetch 目标不能被
+  后台仓劫走）；防 mid-flight close：返回全新 id 且无 tab 认领时回滚
+  closeRepository（防泄漏无主 session）。二级 worktree 行：激活家族
+  family>1 才渲染，已开成员高亮（**按 path 直接等值匹配** family 成员的
+  canonical path——经 symlink 打开的 tab path 可能对不上，后果仅是该 chip
+  暂不显「已开」，后端 dedup 保证不会开出重复 tab）；一级 tab 标题 = 家族
+  主目录名，组点击回到该组最后活跃成员。空 tab 欢迎态上提 App（RepoView
+  的 null-data 分支留作防御加载/错误态）。
+  CSS 只加 tab 布局最小类（.tabbar/.tab/.tab-label/.tab-close/.tab-new/
+  .worktree-row/.wt-chip/.tab-body/.tab-body-hidden），token 化，美化留 T6；
+  用户可见新文案仅裸 ×/+/• 与路径名（T6 落 i18n：newTab/closeTab/
+  mainWorktree/repoOpenFailed 等，spec 5.3 清单）；开仓失败呈 App 级
+  error 条（后端原文），下次成功开仓自清。
+  TDZ 走查（M1.3）：App 全链 useSettings→状态→refs→applyTabs→
+  integrateOpened→openTab→openPicker/closeTab/activateTab→activateGroup/
+  closeGroup→refreshFamily→两个监听 effect→恢复 effect→派生态→JSX，每步
+  引用先于使用；RepoView fitSignal 声明于首个使用者（激活 effect）之前，
+  mount effect 位于 loadDiffStats/handleFilterChange 之后（沿原 open 流
+  位置的铁律），四个键盘 effect 依赖数组补 active/repoId，无晚声明引用。
+  门禁：cargo test 81 过 / 2 败（multi_repo 18→20；2 败仍 tour_repo 既有
+  gitlink）；npm test 97 过（81 既有 + tabs.test.ts 16 新增）；npm run
+  build 过（chunk >500kB 警告既有）。mock.html 未碰（T7 桩）。

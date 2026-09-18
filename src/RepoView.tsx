@@ -8,7 +8,7 @@ import { CheckoutDialog } from './components/CheckoutDialog';
 import TerminalPanel from './components/TerminalPanel';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
-import { selectAndOpenRepository, openRepository, getCommitDetail, getBranchList, filterByBranches, getCurrentPath, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
+import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -20,17 +20,35 @@ import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
 import { nextPair } from './compare';
 import type { ComparePair } from './compare';
-import type { GitData, CommitDetail, BranchLane, PatchLink, WorktreeStatus } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, RepoChanged, WorktreeStatus } from './types';
 import type { SearchHit } from './types';
 
-// Per-repo view body, extracted zero-behavior from App.tsx (multi-repo-tabs
-// Task 4): everything that depends on the opened repository -- data state,
-// display-pipeline memos, handlers, header/toolbar, panels, terminal.
-// App.tsx stays the global shell (display prefs + global dialogs) and
-// renders ONE RepoView today; Task 5 mounts one instance per tab. Moved
-// code keeps its original declaration order (TDZ rule, the M1.3 lesson).
+// Per-repo view body (multi-repo-tabs Tasks 4+5): everything that depends
+// on ONE opened repository -- data state, display-pipeline memos,
+// handlers, header/toolbar, panels, terminal. App.tsx owns the tab shell:
+// it opens repos (single openTab entry, backend-deduped), restores them,
+// and mounts one RepoView per tab (kept alive via display:none; `active`
+// gates the keyboard handlers and the issue-dialog render). The view data
+// arrives as initialData from the tab's open; repo-changed events are
+// filtered on repo_id. Moved code keeps its original declaration order
+// (TDZ rule, the M1.3 lesson).
 interface RepoViewProps {
-  // Global display preferences (App-owned so every future tab shares them).
+  // Registry identity + open-time data: App ran the open and owns the
+  // tab; RepoView never opens anything itself (the picker moved to App
+  // with the rest of the open flow).
+  repoId: number;
+  path: string;
+  initialData: GitData;
+  // True while this tab is the active one. Keyboard handlers bail when
+  // inactive (N kept-alive tabs must not double-fire shortcuts) and the
+  // issue-report dialog renders only here (exactly one z-80 dialog, the
+  // active tab's -- T4 review Low-3). Activation false -> true bumps the
+  // internal fit signal (D3 re-measures after display:none).
+  active: boolean;
+  // Every open source lives in App (unified dedup, spec 5.2); the header
+  // button asks the shell to run the picker.
+  onOpenPicker: () => void;
+  // Global display preferences (App-owned so every tab shares them).
   showTags: boolean;
   toggleShowTags: () => void;
   compressed: boolean;
@@ -39,19 +57,13 @@ interface RepoViewProps {
   setShowMergeLinks: Dispatch<SetStateAction<boolean>>;
   showRefLabels: boolean;
   setShowRefLabels: Dispatch<SetStateAction<boolean>>;
-  // Fit stays a single App-owned signal until Task 5 makes it per-tab.
-  fitSignal: number;
-  setFitSignal: Dispatch<SetStateAction<number>>;
-  // Global dialogs whose VISIBILITY lives in App while the per-repo context
+  // Global dialog VISIBILITY lives in App while the per-repo context
   // (error, repo path, commit count) lives here: the issue dialog renders
-  // inside RepoView and takes the path as a prop -- the old getCurrentPath
-  // fallback called a backend command deleted in Task 1.
+  // inside RepoView and takes the path as a prop.
   showIssueReport: boolean;
   setShowIssueReport: (v: boolean) => void;
   setShowSettings: (v: boolean) => void;
 }
-
-const LATEST_REPO_KEY = 'gtv_latest_repo';
 
 // Stable empty-set fallback so the Timeline props keep one identity when no
 // view is computed (avoids per-render Set churn re-triggering its effects).
@@ -80,6 +92,11 @@ function errText(err: unknown): string {
 }
 
 export default function RepoView({
+  repoId,
+  path,
+  initialData,
+  active,
+  onOpenPicker,
   showTags,
   toggleShowTags,
   compressed,
@@ -88,14 +105,15 @@ export default function RepoView({
   setShowMergeLinks,
   showRefLabels,
   setShowRefLabels,
-  fitSignal,
-  setFitSignal,
   showIssueReport,
   setShowIssueReport,
   setShowSettings,
 }: RepoViewProps) {
   const { t, showStaleBranches, inactiveDays, hideRemotes, setHideRemotes } = useSettings();
-  const [gitData, setGitData] = useState<GitData | null>(null);
+  // Seeded from the tab's open (App): the view exists the moment this
+  // component mounts; the null branch below stays only as a defensive
+  // loading/error shape.
+  const [gitData, setGitData] = useState<GitData | null>(initialData);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,21 +137,32 @@ export default function RepoView({
   const [termOpen, setTermOpen] = useState(false);
   const [termAvailable, setTermAvailable] = useState(true);
 
+  // Fit signal is internal to the tab (Task 5): the Fit button bumps it,
+  // and so does activation -- a tab re-shown from display:none must have
+  // its D3 canvas re-measured (zero-size while hidden).
+  const [fitSignal, setFitSignal] = useState(0);
+  const prevActiveRef = useRef(active);
+  useEffect(() => {
+    if (!prevActiveRef.current && active) setFitSignal(n => n + 1);
+    prevActiveRef.current = active;
+  }, [active]);
+
   // Ctrl+` toggles the bottom terminal — works with focus anywhere,
   // including inside the xterm textarea (whose keydown we do NOT bail on
   // like the arrow-keys handler below; xterm's custom handler steps aside
   // for this combo and the event still bubbles here). Ctrl only: Cmd+` is
-  // the macOS cycle-windows shortcut and must stay free.
+  // the macOS cycle-windows shortcut and must stay free. Active tab only:
+  // kept-alive siblings register the same listener and must stay silent.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Backquote' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && gitData) {
+      if (e.code === 'Backquote' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && gitData && active) {
         e.preventDefault();
         setTermOpen(v => !v);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [gitData]);
+  }, [gitData, active]);
   const [viewResetKey, setViewResetKey] = useState(0);
   // Header search: jump to a commit by hash prefix or branch name.
   const [locateQuery, setLocateQuery] = useState('');
@@ -145,10 +174,10 @@ export default function RepoView({
   const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
   const [remotePending, setRemotePending] = useState(false);
   // Date-range window (M2.2): pure display state, session-only -- never
-  // persisted, and both repo-open handlers reset it to 'all' so a fresh
-  // repo never inherits the previous one's window. The Custom inputs keep
-  // their own 'YYYY-MM-DD' strings so switching presets and back never
-  // loses what the user typed.
+  // persisted, and the stale-toggle rebuild resets it to 'all' (the old
+  // re-open did the same; per-repo state starts clean on mount anyway).
+  // The Custom inputs keep their own 'YYYY-MM-DD' strings so switching
+  // presets and back never loses what the user typed.
   const [dateRange, setDateRange] = useState<DateRange>({ kind: 'all' });
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -160,8 +189,6 @@ export default function RepoView({
 
   // Inactive-lane collapse: which dead lanes the user has restored.
   const [expandedDead, setExpandedDead] = useState<Set<string>>(new Set());
-
-  const [latestRepo, setLatestRepo] = useState<string | null>(null);
 
   // Display pipeline (M2.2 order iron rule): gitData -> applyDateRange ->
   // computeInactive(filtered) -> dead union -> collapseLanes. collapseLanes
@@ -261,19 +288,12 @@ export default function RepoView({
     }
     let cancelled = false;
     setPatchLinksLoading(true);
-    getPatchLinks()
+    getPatchLinks(repoId)
       .then(links => { if (!cancelled) setPatchLinks(links ?? []); })
       .catch(() => { if (!cancelled) setPatchLinks([]); })
       .finally(() => { if (!cancelled) setPatchLinksLoading(false); });
     return () => { cancelled = true; };
-  }, [showPatchLinks, gitData]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(LATEST_REPO_KEY);
-    if (saved) {
-      setLatestRepo(saved);
-    }
-  }, []);
+  }, [showPatchLinks, gitData, repoId]);
 
   // Diff volume (node sizing) loads lazily after the first paint — one
   // tree diff per key commit is too expensive to block the open path on.
@@ -287,7 +307,7 @@ export default function RepoView({
       .sort((a, b) => b.timestamp - a.timestamp)
       .map(c => c.id);
     if (ids.length === 0) return;
-    getCommitStats(ids)
+    getCommitStats(repoId, ids)
       .then(stats => {
         const byId = new Map(stats.map(s => [s.id, s]));
         setGitData(prev => prev && ({
@@ -299,17 +319,17 @@ export default function RepoView({
         }));
       })
       .catch(() => {});
-  }, []);
+  }, [repoId]);
 
   // Rebuild the backend view for a branch subset. Declared ABOVE the
-  // repo-open handlers: they call it for the M2.4 selection restore, and a
-  // useCallback dep array is read during render, so a later declaration
-  // would be a TDZ error (the M1.3 landmine).
+  // selection-restore effect below: it calls this for the M2.4 restore,
+  // and a useCallback dep array is read during render, so a later
+  // declaration would be a TDZ error (the M1.3 landmine).
   const handleFilterChange = useCallback(async (branchNames: string[]) => {
     setSelectedBranches(branchNames);
     setLoading(true);
     try {
-      const data = await filterByBranches(branchNames);
+      const data = await filterByBranches(repoId, branchNames);
       setGitData(data);
       loadDiffStats(data);
     } catch (err) {
@@ -318,130 +338,100 @@ export default function RepoView({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [repoId, loadDiffStats]);
 
-  const handleOpenRepo = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await selectAndOpenRepository(showStaleBranches);
-      if (data) {
-        setGitData(data);
-        loadDiffStats(data);
-        setSelectedCommit(null);
-        // Repo switch: nothing of the OLD repo's panel state may leak
-        // into the new session. comparePair is the real fix (Task 5 --
-        // no backdrop guards it; stale oids would be fed to the NEW
-        // repo's compare calls); the checkout confirm/banner resets are
-        // defensive one-liners (Task 4 review Low-1: the z-80 backdrop
-        // makes them unreachable today, but the cost is one line each).
-        setComparePair(null);
-        setCheckoutDialog(null);
-        setSwitchedBranch(null);
-        setExpandedDead(new Set());
-        setViewResetKey(k => k + 1);
-        // A freshly opened repo never inherits the previous one's window
-        // (nor its typed Custom date strings).
-        setDateRange({ kind: 'all' });
-        setCustomFrom('');
-        setCustomTo('');
-
-        const path = await getCurrentPath();
-        if (path) {
-          localStorage.setItem(LATEST_REPO_KEY, path);
-          setLatestRepo(path);
-          // The OLD repo's selection must never be written under the NEW
-          // repo's key: setLatestRepo lands before the await below, and the
-          // save effect would fire with (newPath, oldSelection) across the
-          // batching boundary.
-          setSelectedBranches([]);
-        }
-
-        const branches = await getBranchList();
+  // Mount-time tail of the old open flow (Task 5): App opened the repo
+  // and handed us initialData; the chip list and the M2.4 selection
+  // restore are this view's own first-mount work. Runs once per mount --
+  // every dependency (repoId, path, loadDiffStats, handleFilterChange) is
+  // stable for the tab's lifetime.
+  useEffect(() => {
+    let cancelled = false;
+    loadDiffStats(initialData);
+    (async () => {
+      try {
+        const branches = await getBranchList(repoId);
+        if (cancelled) return;
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
         // M2.4: restore this repo's persisted focus set. handleFilterChange
         // itself sets selectedBranches, so no duplicate set here; null ->
         // keep the default full selection (no rebuild, no second flash).
-        if (path) {
-          const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
-          if (restored) handleFilterChange(restored);
-        }
-        setSearchQuery('');
-        setLocateQuery('');
-        setLocateOpen(false);
+        const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
+        if (restored) handleFilterChange(restored);
+      } catch (err) {
+        recordFrontendError(errText(err));
+        if (!cancelled) setError(errText(err));
       }
-    } catch (err) {
-      console.error('Error:', err);
-      recordFrontendError(errText(err));
-      setError(errText(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [showStaleBranches, handleFilterChange]);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleOpenLatestRepo = useCallback(async () => {
-    if (!latestRepo) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await openRepository(latestRepo, showStaleBranches);
-      setGitData(data);
-      loadDiffStats(data);
-      setSelectedCommit(null);
-      // Same old-repo panel-state reset as the picker path above.
-      setComparePair(null);
-      setCheckoutDialog(null);
-      setSwitchedBranch(null);
-      setExpandedDead(new Set());
-      setViewResetKey(k => k + 1);
-      // Same session-window reset as the picker path above.
-      setDateRange({ kind: 'all' });
-      setCustomFrom('');
-      setCustomTo('');
-
-      const branches = await getBranchList();
-      setBranchList(branches);
-      setSelectedBranches(branches.map(b => b.name));
-      // M2.4: restore the persisted focus set for this repo path. null ->
-      // keep the default full selection; handleFilterChange sets
-      // selectedBranches itself.
-      const restored = restoreSelection(loadSelection(latestRepo), branches.map(b => b.name));
-      if (restored) handleFilterChange(restored);
-      setSearchQuery('');
-      setLocateQuery('');
-      setLocateOpen(false);
-    } catch (err) {
-      console.error('Error:', err);
-      recordFrontendError(errText(err));
-      setError(errText(err));
-      localStorage.removeItem(LATEST_REPO_KEY);
-      setLatestRepo(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [latestRepo, showStaleBranches, handleFilterChange]);
-
-  // Changing the stale-branches setting re-opens the current repo so the
-  // backend session is rebuilt with the new policy.
+  // Changing the stale-branches setting rebuilds the backend session under
+  // the new policy via set_include_stale (Task 5): the unified dedup
+  // forbids the old re-open path -- already_open never resets a session.
+  // The reset sweep mirrors the old re-open exactly (stale lanes change,
+  // so panel state and the session window reseed).
   const staleSettingRef = useRef(showStaleBranches);
   useEffect(() => {
     if (staleSettingRef.current === showStaleBranches) return;
     staleSettingRef.current = showStaleBranches;
-    if (latestRepo) handleOpenLatestRepo();
-  }, [showStaleBranches, latestRepo, handleOpenLatestRepo]);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const data = await setIncludeStale(repoId, showStaleBranches);
+        if (cancelled) return;
+        setGitData(data);
+        loadDiffStats(data);
+        setSelectedCommit(null);
+        setComparePair(null);
+        setCheckoutDialog(null);
+        setSwitchedBranch(null);
+        setExpandedDead(new Set());
+        setViewResetKey(k => k + 1);
+        setDateRange({ kind: 'all' });
+        setCustomFrom('');
+        setCustomTo('');
+
+        const branches = await getBranchList(repoId);
+        if (cancelled) return;
+        setBranchList(branches);
+        setSelectedBranches(branches.map(b => b.name));
+        // M2.4: restore the persisted focus set for this repo path. null ->
+        // keep the default full selection; handleFilterChange sets
+        // selectedBranches itself.
+        const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
+        if (restored) handleFilterChange(restored);
+        setSearchQuery('');
+        setLocateQuery('');
+        setLocateOpen(false);
+      } catch (err) {
+        recordFrontendError(errText(err));
+        if (!cancelled) setError(errText(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showStaleBranches, repoId, path, loadDiffStats, handleFilterChange]);
 
   // Background refresh when the repo changed outside gtv (terminal git
   // commands, editor, another tool — the watcher.rs poller emits
-  // "repo-changed"). Unlike handleOpenLatestRepo this must not yank the
-  // user's context: keep the selection when its commit survived, keep the
-  // viewport (no viewResetKey bump), keep expanded lanes and filters.
-  // Loaded-older pagination state is rebuilt from scratch — accepted v1
-  // limitation. Rebased/amended commits get new oids, so stale selections
-  // drop naturally.
+  // "repo-changed"). This must not yank the user's context: keep the
+  // selection when its commit survived, keep the viewport (no viewResetKey
+  // bump), keep expanded lanes and filters. Loaded-older pagination state
+  // is rebuilt from scratch — accepted v1 limitation. Rebased/amended
+  // commits get new oids, so stale selections drop naturally.
+  // The rebuild rides setIncludeStale with the CURRENT policy: it is the
+  // one command that re-reads the view from HEAD without touching the
+  // terminal or the watcher baseline (a re-open is forbidden by the dedup
+  // semantics and would just return the stale session view).
   const refreshingRef = useRef(false);
   const handleRepoRefresh = useCallback(async () => {
-    if (!latestRepo || refreshingRef.current) return;
+    if (refreshingRef.current) return;
     refreshingRef.current = true;
     // A pending checkout confirm holds preflight counts this rebuild just
     // invalidated -- close it (the world changed, re-ask) instead of
@@ -450,19 +440,19 @@ export default function RepoView({
     setCheckoutDialog(null);
     try {
       const keepId = selectedCommit?.id ?? null;
-      const data = await openRepository(latestRepo, showStaleBranches);
+      const data = await setIncludeStale(repoId, showStaleBranches);
       setGitData(data);
       loadDiffStats(data);
       if (keepId && data.commits.some(c => c.id === keepId)) {
         try {
-          setSelectedCommit(await getCommitDetail(keepId));
+          setSelectedCommit(await getCommitDetail(repoId, keepId));
         } catch {
           setSelectedCommit(null);
         }
       } else {
         setSelectedCommit(null);
       }
-      const branches = await getBranchList();
+      const branches = await getBranchList(repoId);
       setBranchList(branches);
       setSelectedBranches(prev => {
         const names = new Set(branches.map(b => b.name));
@@ -476,22 +466,25 @@ export default function RepoView({
     } finally {
       refreshingRef.current = false;
     }
-  }, [latestRepo, showStaleBranches, selectedCommit, loadDiffStats]);
+  }, [repoId, showStaleBranches, selectedCommit, loadDiffStats]);
 
   // Debounce "repo-changed" bursts (rebase/fetch fire several) into one
-  // refresh. The handler lives in a ref so resubscription only happens
-  // when the repo itself changes, not on every selection.
+  // refresh. Events are filtered on payload.repo_id (T1 review Low-2):
+  // sibling tabs run their own listeners, and no emit ORDER is assumed --
+  // each event for THIS repo independently restarts the debounce. The
+  // handler lives in a ref so resubscription only happens when the repo
+  // itself changes, not on every selection.
   const refreshHandlerRef = useRef(handleRepoRefresh);
   useEffect(() => {
     refreshHandlerRef.current = handleRepoRefresh;
   }, [handleRepoRefresh]);
   const repoRefreshTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (!latestRepo) return;
     let dead = false;
     let un: (() => void) | null = null;
     try {
-      listen('repo-changed', () => {
+      listen<RepoChanged>('repo-changed', (e) => {
+        if (e.payload?.repo_id !== repoId) return;
         window.clearTimeout(repoRefreshTimer.current);
         repoRefreshTimer.current = window.setTimeout(() => {
           if (!dead) void refreshHandlerRef.current();
@@ -510,7 +503,7 @@ export default function RepoView({
       un?.();
       window.clearTimeout(repoRefreshTimer.current);
     };
-  }, [latestRepo]);
+  }, [repoId]);
 
   // Page in the next chunk of older history. The backend re-lays out the
   // whole loaded set; Timeline keeps the viewport anchored (no resetKey bump).
@@ -519,14 +512,14 @@ export default function RepoView({
     if (loadingOlder || !gitData?.has_more) return;
     setLoadingOlder(true);
     try {
-      const data = await loadOlderCommits();
+      const data = await loadOlderCommits(repoId);
       if (!data) return;
       setGitData(data);
       loadDiffStats(data);
       // Paging may have reached a previously stale branch tip: new lanes
       // mean the chip list needs a refresh (lane colors come from the view).
       if (data.branches.length !== gitData.branches.length) {
-        const branches = await getBranchList();
+        const branches = await getBranchList(repoId);
         setBranchList(branches);
       }
     } catch (err) {
@@ -534,17 +527,17 @@ export default function RepoView({
     } finally {
       setLoadingOlder(false);
     }
-  }, [loadingOlder, gitData, loadDiffStats]);
+  }, [loadingOlder, gitData, repoId, loadDiffStats]);
 
   const handleCommitClick = useCallback(async (commitId: string) => {
     try {
-      const detail = await getCommitDetail(commitId);
+      const detail = await getCommitDetail(repoId, commitId);
       setSelectedCommit(detail);
     } catch (err) {
       console.error('Failed to get commit detail:', err);
       recordFrontendError(errText(err));
     }
-  }, []);
+  }, [repoId]);
 
   const handleCloseDetails = useCallback(() => {
     setSelectedCommit(null);
@@ -612,7 +605,7 @@ export default function RepoView({
     setLoading(true);
     setError(null);
     try {
-      const data = await switchBranch(branchName);
+      const data = await switchBranch(repoId, branchName);
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
@@ -625,7 +618,7 @@ export default function RepoView({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [repoId, loadDiffStats]);
 
   // M3.1 checkout (spec 4.2). After a successful checkout the app does
   // NOTHING else to the view -- no setGitData, no refresh call: the
@@ -641,7 +634,7 @@ export default function RepoView({
     // error banner below, never by re-opening the dialog.
     setCheckoutDialog(null);
     try {
-      await checkoutBranch(branch);
+      await checkoutBranch(repoId, branch);
       setSwitchedBranch(branch);
     } catch (err) {
       // The backend text already states the set_head half-success
@@ -649,14 +642,14 @@ export default function RepoView({
       recordFrontendError(errText(err));
       setError(errText(err));
     }
-  }, []);
+  }, [repoId]);
 
   // Lane-menu "check out this branch": preflight the worktree, then either
   // confirm (dirty) or switch right away (clean). Checking out the CURRENT
   // branch goes through unchanged too (git semantics: safe no-op, spec 5).
   const handleCheckoutBranch = useCallback(async (branch: string) => {
     try {
-      const status = await getWorktreeStatus();
+      const status = await getWorktreeStatus(repoId);
       if (status.merge_in_progress) {
         // No confirm path around an in-progress merge/cherry-pick/revert.
         setError(t('mergeInProgress'));
@@ -702,9 +695,9 @@ export default function RepoView({
   // that scratch state would overwrite the curated set, and an empty save
   // restores as null (full default), losing it.
   useEffect(() => {
-    if (!latestRepo || selectedBranches.length === 0) return;
-    saveSelection(latestRepo, selectedBranches);
-  }, [latestRepo, selectedBranches]);
+    if (selectedBranches.length === 0) return;
+    saveSelection(path, selectedBranches);
+  }, [path, selectedBranches]);
 
   // Dead-lane chips toggle VISIBILITY ONLY: they never go through
   // toggleBranchFilter, so the lane stays inside selectedBranches and every
@@ -855,12 +848,12 @@ export default function RepoView({
     if (!r) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      getCommitDetail(r.kind === 'branch' ? r.commitId : r.id)
+      getCommitDetail(repoId, r.kind === 'branch' ? r.commitId : r.id)
         .then(d => { if (!cancelled) setSelectedCommit(d); })
         .catch(() => {});
     }, 120);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [locateOpen, locateIndex, locateResults]);
+  }, [locateOpen, locateIndex, locateResults, repoId]);
 
   // Full-history search: debounce the query, ask the backend, drop stale
   // responses (cancelled flag). <2 chars skips the call — the loaded-range
@@ -875,26 +868,28 @@ export default function RepoView({
     let cancelled = false;
     setRemotePending(true);
     const timer = setTimeout(() => {
-      searchCommits(q, SEARCH_LIMIT)
+      searchCommits(repoId, q, SEARCH_LIMIT)
         .then(hits => { if (!cancelled) { setRemoteHits(hits ?? []); setRemotePending(false); } })
         .catch(() => { if (!cancelled) { setRemoteHits([]); setRemotePending(false); } });
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [locateQuery, gitData]);
+  }, [locateQuery, gitData, repoId]);
 
-  // Cmd/Ctrl + F toggles the floating search over the graph.
+  // Cmd/Ctrl + F toggles the floating search over the graph. Active tab
+  // only: kept-alive siblings register the same listener and must stay
+  // silent (one shortcut, one action, regardless of tab count).
   const locateInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
-        if (!gitData) return;
+        if (!gitData || !active) return;
         e.preventDefault();
         setLocateOpen(v => !v);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [gitData]);
+  }, [gitData, active]);
   useEffect(() => {
     if (locateOpen) locateInputRef.current?.focus();
   }, [locateOpen]);
@@ -902,9 +897,10 @@ export default function RepoView({
   // ←/→ step to the previous/next commit on the SAME lane while the
   // detail panel is open. commits are in ascending (time, topo) order —
   // i.e. visual left→right — so index ±1 is the visual neighbor.
+  // Active tab only (same multi-instance gate as the handlers above).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedCommit || !gitData) return;
+      if (!active || !selectedCommit || !gitData) return;
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
@@ -927,24 +923,24 @@ export default function RepoView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedCommit, gitData, handleCommitClick, hiddenIds, outOfRange]);
+  }, [active, selectedCommit, gitData, handleCommitClick, hiddenIds, outOfRange]);
 
   // Esc closes ONLY the compare panel (spec 4.4): selectedCommit is left
   // untouched, and no global Esc-for-single-details behavior is added
   // (none exists today). A half-pair (target '') is not an open panel --
   // Esc leaves it for a plain click or the next ctrl+click to resolve.
   // Inputs keep their own Esc handling (locate dropdown), so typing in
-  // one never closes the panel behind it.
+  // one never closes the panel behind it. Active tab only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !comparePair || comparePair.target === '') return;
+      if (!active || e.key !== 'Escape' || !comparePair || comparePair.target === '') return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
       setComparePair(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [comparePair]);
+  }, [active, comparePair]);
 
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
@@ -956,7 +952,7 @@ export default function RepoView({
       setLoading(true);
       setError(null);
       try {
-        const data = await jumpToCommit(id);
+        const data = await jumpToCommit(repoId, id);
         setGitData(data);
         loadDiffStats(data);
         setSelectedCommit(null);
@@ -982,7 +978,7 @@ export default function RepoView({
     focusSeqRef.current += 1;
     setFocusTarget({ id, seq: focusSeqRef.current });
     handleCommitClick(id);
-  }, [handleCommitClick, gitData, inactive, loadDiffStats]);
+  }, [handleCommitClick, gitData, inactive, repoId, loadDiffStats]);
 
   const renderBranchChip = (branch: BranchLane) => (
     <button
@@ -1021,8 +1017,8 @@ export default function RepoView({
     <>
       <header className="header">
         <div className="header-left">
-          {gitData && latestRepo && (
-            <h1 className="repo-name" title={latestRepo}>{latestRepo.split('/').pop()}</h1>
+          {gitData && (
+            <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
           )}
           {gitData && rangedData && (
             <span className="repo-info">
@@ -1031,7 +1027,7 @@ export default function RepoView({
           )}
           <button
             className="open-btn"
-            onClick={handleOpenRepo}
+            onClick={onOpenPicker}
             disabled={loading}
           >
             {loading ? t('loading') : t('openRepo')}
@@ -1272,22 +1268,10 @@ export default function RepoView({
       )}
 
       <main className="main">
-        {!gitData ? (
-          <div className="welcome">
-            <h2>{t('welcomeTitle')}</h2>
-            <p>{t('welcomeSubtitle')}</p>
-            <p className="hint">{t('welcomeHint')}</p>
-            {latestRepo && (
-              <button
-                className="latest-repo-btn"
-                onClick={handleOpenLatestRepo}
-                disabled={loading}
-              >
-                {t('openLatest', { name: latestRepo.split('/').pop() ?? '' })}
-              </button>
-            )}
-          </div>
-        ) : (
+        {/* gitData is seeded from initialData, so this null branch is a
+            defensive loading/error shape only -- the no-tabs welcome state
+            lives in App (Task 5: "no tab" is shell-level, not view-level). */}
+        {!gitData ? null : (
           <>
             <Timeline
               data={view?.data ?? gitData}
@@ -1387,9 +1371,10 @@ export default function RepoView({
                 view. Arrow-key stepping only moves selectedCommit, so the
                 pair survives underneath -- by design. */}
             {comparePair && comparePair.target !== '' ? (
-              <CompareDetails pair={comparePair} onClose={handleCloseCompare} />
+              <CompareDetails repoId={repoId} pair={comparePair} onClose={handleCloseCompare} />
             ) : (
               <CommitDetails
+                repoId={repoId}
                 commit={selectedCommit}
                 onClose={handleCloseDetails}
               />
@@ -1401,6 +1386,7 @@ export default function RepoView({
       {/* Always mounted: hiding the panel keeps the PTY session (and its
           scrollback) alive, VSCode-style. */}
       <TerminalPanel
+        repoId={repoId}
         open={termOpen}
         onClose={() => setTermOpen(false)}
         onUnavailable={() => setTermAvailable(false)}
@@ -1415,11 +1401,16 @@ export default function RepoView({
         />
       )}
 
-      {showIssueReport && (
+      {/* Rendered on the ACTIVE tab only (T4 review Low-3): showIssueReport
+          is global while the context is per-repo -- with N kept-alive tabs
+          the dialog must stay unique, so the active tab owns it. The error
+          banners above render per tab (a hidden tab's strip is hidden with
+          it, under display:none). */}
+      {showIssueReport && active && (
         <IssueReportDialog
           currentError={error}
-          repoName={latestRepo?.split('/').pop() ?? null}
-          repoPath={latestRepo}
+          repoName={path.split('/').pop() ?? null}
+          repoPath={path}
           commitCount={gitData?.commits.length ?? null}
           onClose={() => setShowIssueReport(false)}
         />

@@ -44,6 +44,7 @@ pub fn run() {
             commands::close_repository,
             commands::set_active_repository,
             commands::set_auto_fetch,
+            commands::set_include_stale,
             commands::get_commit_detail,
             commands::get_file_diff,
             commands::get_compare_detail,

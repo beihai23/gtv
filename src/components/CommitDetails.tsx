@@ -6,11 +6,13 @@ import { filterRefs } from '../refs';
 import { DiffView, type FileDiffState } from './DiffView';
 
 interface CommitDetailsProps {
+  /** Which open repository the diff queries route to (Task 5). */
+  repoId: number;
   commit: CommitDetail | null;
   onClose: () => void;
 }
 
-export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
+export function CommitDetails({ repoId, commit, onClose }: CommitDetailsProps) {
   const { t, hideRemotes } = useSettings();
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, FileDiffState>>({});
@@ -52,7 +54,7 @@ export function CommitDetails({ commit, onClose }: CommitDetailsProps) {
     const id = commit.id;
     setLoadingPath(path);
     try {
-      const text = await getFileDiff(id, path);
+      const text = await getFileDiff(repoId, id, path);
       if (commitIdRef.current !== id) return;
       setDiffs(prev => ({ ...prev, [path]: { text } }));
     } catch (e) {

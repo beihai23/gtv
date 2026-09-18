@@ -142,7 +142,8 @@ export interface CheckoutAck {
 
 // --- Integrated terminal (bottom panel); mirrors models.rs ---
 // Event names: "terminal-output" (TerminalOutput), "terminal-exit"
-// (TerminalExit), "repo-changed" (plain string path).
+// (TerminalExit), "repo-changed" (RepoChanged: the registered repo whose
+// fingerprint moved -- listeners filter on payload.repo_id).
 
 /** Live terminal session handle returned by terminalSpawn. */
 export interface TerminalInfo {

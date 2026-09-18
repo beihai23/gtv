@@ -14,11 +14,13 @@ import { DiffView, type FileDiffState } from './DiffView';
 // CommitDetails (spec 4.4 panel-competition rule).
 
 interface CompareDetailsProps {
+  /** Which open repository the compare queries route to (Task 5). */
+  repoId: number;
   pair: ComparePair;
   onClose: () => void;
 }
 
-export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
+export function CompareDetails({ repoId, pair, onClose }: CompareDetailsProps) {
   const { t } = useSettings();
   const [detail, setDetail] = useState<CompareDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,17 +49,17 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
     setExpandedPath(null);
     setDiffs({});
     setLoadingPath(null);
-    getCompareDetail(pair.base, pair.target)
+    getCompareDetail(repoId, pair.base, pair.target)
       .then(d => { if (!cancelled) setDetail(d); })
       .catch(e => {
         if (cancelled) return;
-        // Parity with the single-details path (App handleCommitClick):
+        // Parity with the single-details path (RepoView handleCommitClick):
         // the panel shows the error AND it enters the issue-report ring.
         recordFrontendError(String(e));
         setError(String(e));
       });
     return () => { cancelled = true; };
-  }, [pair.base, pair.target]);
+  }, [repoId, pair.base, pair.target]);
 
   const toggleFile = async (path: string) => {
     if (expandedPath === path) {
@@ -72,7 +74,7 @@ export function CompareDetails({ pair, onClose }: CompareDetailsProps) {
     const { base, target } = pair;
     setLoadingPath(path);
     try {
-      const text = await getPairFileDiff(base, target, path);
+      const text = await getPairFileDiff(repoId, base, target, path);
       if (pairRef.current.base !== base || pairRef.current.target !== target) return;
       setDiffs(prev => ({ ...prev, [path]: { text } }));
     } catch (e) {

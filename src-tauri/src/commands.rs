@@ -383,6 +383,51 @@ pub fn set_auto_fetch(enabled: bool, state: tauri::State<AppState>) -> Result<()
     set_auto_fetch_impl(&state, enabled)
 }
 
+/// Rebuild one repo's view under a new include-stale setting WITHOUT
+/// touching its terminal or pagination identity: the dedup semantics
+/// forbid re-open (already_open never resets a session), so the settings
+/// toggle needs its own path. The flag flips under a short lock FIRST (a
+/// racing get_branch_list must not answer with the stale policy), then
+/// the view + pagination session are rebuilt from a fresh full read --
+/// open's snapshot pattern for those two fields alone. watch_baseline,
+/// terminal, and family are deliberately left exactly as they were.
+pub async fn set_include_stale_impl(
+    state: &AppState,
+    repo_id: u64,
+    enabled: bool,
+) -> Result<GitData, String> {
+    let path = session_path(state, repo_id)?;
+    {
+        let mut repos = state.repos.lock().unwrap();
+        let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
+        session.include_stale = enabled;
+    }
+
+    let result = task::spawn_blocking(move || {
+        let mut reader = GitReader::new(&path)?;
+        reader.read_git_data(2000)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
+
+    let data = update_view_session(state, repo_id, &result, enabled)?;
+    log::info!(
+        "Rebuilt view with include_stale={} ({} commits)",
+        enabled,
+        data.commits.len()
+    );
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn set_include_stale(
+    repo_id: u64,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<GitData, String> {
+    set_include_stale_impl(&state, repo_id, enabled).await
+}
+
 pub async fn get_commit_detail_impl(
     state: &AppState,
     repo_id: u64,

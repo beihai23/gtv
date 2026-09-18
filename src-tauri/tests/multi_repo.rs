@@ -6,9 +6,10 @@
 //! exactly the moved repos.
 
 use gtv_lib::commands::{
-    close_repository_impl, filter_by_branches_impl, get_commit_detail_impl, jump_to_commit_impl,
-    load_older_commits_impl, open_repository_impl, set_active_repository_impl,
-    set_auto_fetch_impl, AppState,
+    close_repository_impl, filter_by_branches_impl, get_branch_list_impl, get_commit_detail_impl,
+    jump_to_commit_impl, load_older_commits_impl, open_repository_impl,
+    set_active_repository_impl, set_auto_fetch_impl, set_include_stale_impl,
+    spawn_terminal_in_repo, terminal_write_impl, AppState,
 };
 use gtv_lib::fetcher::{fetch_tick, TickOutcome};
 use gtv_lib::git_reader::GitReader;
@@ -727,4 +728,203 @@ fn closed_active_id_yields_noactive_without_panic() {
 
     std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");
     std::fs::remove_dir_all(seed_b.parent().unwrap()).expect("clean up temp dir b");
+}
+
+// --- set_include_stale (Task 5): the stale toggle's own rebuild path ---
+
+/// Fixture whose `stale` branch tip falls outside the 2000-commit open
+/// window: main carries 2100 chained commits (fast-import -- ONE git
+/// process for all of them; 2100 `git commit` spawns would dominate the
+/// test's runtime), each dated 60 s apart, and `stale` forks at commit 80
+/// with its tip dated between commits 80 and 81. The newest-2000 window
+/// therefore holds main's marks 101..2100 and NOT the stale tip -- exactly
+/// what makes read_git_data report the branch stale.
+fn build_stale_window_fixture(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("gtv-multi-stale-{}-{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    git(&dir, &["init", "-b", "main"], &day(1));
+
+    let base = 1577836800i64; // 2020-01-01T00:00:00Z
+    let mut stream = String::new();
+    for i in 0..2100 {
+        let msg = format!("c{}", i);
+        stream.push_str("commit refs/heads/main\n");
+        stream.push_str(&format!("mark :{}\n", i + 1));
+        stream.push_str(&format!(
+            "committer gtv <gtv@gtv.local> {} +0000\n",
+            base + i as i64 * 60
+        ));
+        // fast-import grammar: data payload first, `from` after it.
+        stream.push_str(&format!("data {}\n{}\n", msg.len(), msg));
+        if i > 0 {
+            stream.push_str(&format!("from :{}\n", i));
+        }
+        stream.push('\n');
+    }
+    stream.push_str("commit refs/heads/stale\n");
+    stream.push_str("mark :3001\n");
+    stream.push_str(&format!(
+        "committer gtv <gtv@gtv.local> {} +0000\n",
+        base + 79 * 60 + 30
+    ));
+    stream.push_str("data 3\nst1\n");
+    stream.push_str("from :80\n\n");
+    stream.push_str("done\n");
+
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn git fast-import");
+    child
+        .stdin
+        .take()
+        .expect("fast-import stdin")
+        .write_all(stream.as_bytes())
+        .expect("write fast-import stream");
+    let status = child.wait().expect("wait fast-import");
+    assert!(status.success(), "git fast-import failed");
+    dir
+}
+
+/// The toggle flips session.include_stale, rebuilds the view + pagination
+/// session (stale seed retained or dropped), returns a fresh full-window
+/// read, and get_branch_list -- where include_stale is user-visible --
+/// mirrors the policy. Unknown ids error like every repo-routed command.
+#[test]
+fn set_include_stale_rebuilds_session_and_filters_branch_list() {
+    let dir = build_stale_window_fixture("toggle");
+    let state = AppState::default();
+    let repo = open(&state, &dir); // include_stale: true
+
+    // Fixture sanity: the window really excludes the stale tip.
+    assert_eq!(repo.data.commits.len(), 2000);
+    {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo.repo_id).unwrap();
+        assert!(session.include_stale);
+        let names: Vec<&str> = session
+            .session
+            .as_ref()
+            .unwrap()
+            .seeds
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(names.contains(&"stale"), "seeds with stale on: {:?}", names);
+    }
+    let with_stale = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list on");
+    assert!(with_stale.iter().any(|b| b.name == "stale"));
+
+    // Toggle OFF: flag flips, the pagination session drops the stale seed,
+    // the branch list hides the branch, and the returned view is a fresh
+    // full-window read.
+    let rebuilt =
+        run(set_include_stale_impl(&state, repo.repo_id, false)).expect("toggle stale off");
+    assert_eq!(rebuilt.commits.len(), 2000);
+    {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo.repo_id).unwrap();
+        assert!(!session.include_stale);
+        let names: Vec<&str> = session
+            .session
+            .as_ref()
+            .unwrap()
+            .seeds
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"stale"),
+            "seeds with stale off: {:?}",
+            names
+        );
+    }
+    let without_stale = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list off");
+    assert!(without_stale.iter().all(|b| b.name != "stale"));
+
+    // Toggle back ON: the stale seed and the branch-list entry return.
+    run(set_include_stale_impl(&state, repo.repo_id, true)).expect("toggle stale on");
+    let restored = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list on again");
+    assert!(restored.iter().any(|b| b.name == "stale"));
+
+    assert_eq!(
+        run(set_include_stale_impl(&state, 9999, true)).unwrap_err(),
+        "No repository opened"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// The rebuild must not disturb the tab's terminal: the session id in the
+/// slot is unchanged across two toggles and the pty still accepts writes
+/// (the close-time kill semantics are the only path allowed to touch it).
+#[test]
+fn set_include_stale_keeps_the_terminal_alive() {
+    let dir = build_repo("staleterm", "x");
+    let state = AppState::default();
+    let repo = open(&state, &dir);
+
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (exit_tx, _exit_rx) = std::sync::mpsc::channel::<u64>();
+    let spawner = move |path: std::path::PathBuf, cols: u16, rows: u16| {
+        gtv_lib::terminal::spawn_pty(
+            "/bin/sh",
+            &[],
+            &path,
+            cols,
+            rows,
+            move |_id, bytes| {
+                let _ = out_tx.send(bytes);
+            },
+            move |id| {
+                let _ = exit_tx.send(id);
+            },
+        )
+    };
+    let info = run(spawn_terminal_in_repo(&state, repo.repo_id, 80, 24, spawner))
+        .expect("spawn terminal");
+
+    run(set_include_stale_impl(&state, repo.repo_id, false)).expect("toggle stale off");
+    run(set_include_stale_impl(&state, repo.repo_id, true)).expect("toggle stale on");
+
+    // Same live session in the slot, and it still echoes writes.
+    {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo.repo_id).unwrap();
+        assert_eq!(
+            session.terminal.as_ref().unwrap().lock().unwrap().id,
+            info.id
+        );
+    }
+    terminal_write_impl(&state, repo.repo_id, "printf stale-toggle-alive\n".to_string())
+        .expect("write after toggles");
+    let started = std::time::Instant::now();
+    let mut seen = String::new();
+    while started.elapsed() < std::time::Duration::from_secs(10) {
+        match out_rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(chunk) => {
+                seen.push_str(&String::from_utf8_lossy(&chunk));
+                if seen.contains("stale-toggle-alive") {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert!(
+        seen.contains("stale-toggle-alive"),
+        "terminal must survive the stale toggle, got: {:?}",
+        seen
+    );
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
 }

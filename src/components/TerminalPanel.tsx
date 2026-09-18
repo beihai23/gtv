@@ -10,6 +10,9 @@ import { clampTerminalHeight, loadTermHeight, saveTermHeight } from '../terminal
 import type { TerminalExit, TerminalOutput } from '../types';
 
 interface Props {
+  /** Which open repository's session this panel drives (Task 5: terminal
+   *  commands are repo_id-routed; one PTY per tab). */
+  repoId: number;
   /** Panel visibility. The xterm session stays alive while hidden. */
   open: boolean;
   onClose: () => void;
@@ -37,7 +40,7 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export default function TerminalPanel({ open, onClose, onUnavailable }: Props) {
+export default function TerminalPanel({ repoId, open, onClose, onUnavailable }: Props) {
   const { theme, t } = useSettings();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -78,10 +81,10 @@ export default function TerminalPanel({ open, onClose, onUnavailable }: Props) {
       return true;
     });
     term.onData((data) => {
-      void terminalWrite(data).catch(() => {});
+      void terminalWrite(repoId, data).catch(() => {});
     });
     term.onResize(({ cols, rows }) => {
-      if (sessionIdRef.current !== null) void terminalResize(cols, rows).catch(() => {});
+      if (sessionIdRef.current !== null) void terminalResize(repoId, cols, rows).catch(() => {});
     });
     termRef.current = term;
     fitRef.current = fit;
@@ -136,21 +139,21 @@ export default function TerminalPanel({ open, onClose, onUnavailable }: Props) {
       // at the fitted size instead of 80x24.
       fit.fit();
       try {
-        const info = await terminalSpawn(term.cols, term.rows);
+        const info = await terminalSpawn(repoId, term.cols, term.rows);
         if (!info) {
           onUnavailable();
           return;
         }
         sessionIdRef.current = info.id;
         setSessionCwd(info.cwd);
-        void terminalResize(term.cols, term.rows).catch(() => {});
+        void terminalResize(repoId, term.cols, term.rows).catch(() => {});
       } catch (err) {
         recordFrontendError(`terminal spawn failed: ${err}`);
         return;
       }
       term.focus();
     },
-    [onUnavailable],
+    [repoId, onUnavailable],
   );
 
   // Visibility sequencing: open the terminal into the (now visible)
@@ -196,7 +199,7 @@ export default function TerminalPanel({ open, onClose, onUnavailable }: Props) {
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
-    void terminalKill().catch(() => {});
+    void terminalKill(repoId).catch(() => {});
     // Drop the id first: the old session's "terminal-exit" event must not
     // flip the new session back into the exited overlay.
     sessionIdRef.current = null;
@@ -204,7 +207,7 @@ export default function TerminalPanel({ open, onClose, onUnavailable }: Props) {
     setExited(false);
     term.reset();
     await ensureSession(term, fit);
-  }, [ensureSession]);
+  }, [repoId, ensureSession]);
 
   // Drag handle: pointer capture, clamped height, persisted on release.
   const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {

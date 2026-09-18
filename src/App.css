@@ -39,6 +39,100 @@
   overflow: hidden;
 }
 
+/* --- Tab shell (multi-repo-tabs Task 5): minimal LAYOUT classes only --
+   visual polish, tokens, and i18n titles are Task 6. --- */
+.tabbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.tab.active {
+  border-color: var(--accent);
+}
+
+.tab-label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab-close {
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab-new {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.worktree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
+
+.wt-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.wt-chip.open {
+  color: var(--text);
+}
+
+.wt-chip.current {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Keep-alive wrapper: exactly one visible tab body at a time; hidden ones
+   keep their RepoView (selection, viewport, terminal) mounted. */
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-body-hidden {
+  display: none;
+}
+
 .header {
   display: flex;
   justify-content: space-between;
