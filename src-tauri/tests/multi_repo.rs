@@ -571,11 +571,11 @@ fn fetch_remotes_updates_tracking_refs_only() {
     let new_tip = advance_upstream(&seed, &upstream, "up-1", &day(7));
     assert_ne!(origin_main_before, new_tip);
 
-    let failures = GitReader::new(clone.to_str().unwrap())
+    let summary = GitReader::new(clone.to_str().unwrap())
         .expect("open clone")
         .fetch_remotes()
         .expect("fetch_remotes");
-    assert!(failures.is_empty(), "no remote fails: {:?}", failures);
+    assert!(summary.is_none(), "clean fetch reports no summary: {:?}", summary);
 
     // The tracking ref landed on the upstream's new tip...
     assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
@@ -603,18 +603,23 @@ fn one_dead_remote_does_not_abort_the_live_one() {
 
     let new_tip = advance_upstream(&seed, &upstream, "up-1", &day(7));
 
-    let failures = GitReader::new(clone.to_str().unwrap())
+    let summary = GitReader::new(clone.to_str().unwrap())
         .expect("open clone")
         .fetch_remotes()
         .expect("fetch_remotes");
-    // Exactly the dead remote failed, named as such; origin is absent from
-    // the failure list and its new commit landed anyway.
-    assert_eq!(failures.len(), 1, "failures: {:?}", failures);
+    // Empirically verified on git 2.x (report, Task 8): `git fetch --all
+    // --quiet` with one dead remote exits 1, prints the per-remote fatal
+    // on stderr ending in "error: could not fetch dead", and the LIVE
+    // remote's refs still land. Assert exactly that shape: non-zero exit
+    // captured in the summary, the dead remote named in the stderr tail,
+    // and origin's new tip fetched anyway.
+    let summary = summary.expect("one dead remote must surface a summary");
     assert!(
-        failures[0].starts_with("dead:"),
-        "failure names the dead remote: {:?}",
-        failures
+        summary.starts_with("git fetch exited 1"),
+        "non-zero exit captured: {}",
+        summary
     );
+    assert!(summary.contains("dead"), "names the dead remote: {}", summary);
     assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
 
     std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
@@ -638,7 +643,7 @@ fn busy_flag_skips_the_tick_until_cleared() {
 
     // Cleared: the next tick fetches and resets the flag on completion.
     state.fetching.store(false, Ordering::SeqCst);
-    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(None));
     assert_eq!(git_sha(&clone, "refs/remotes/origin/main"), new_tip);
     assert!(!state.fetching.load(Ordering::SeqCst));
 
@@ -664,7 +669,7 @@ fn auto_fetch_off_idles_the_tick() {
     // Flipping the setting back on resumes on the NEXT tick: the toggle
     // is read at tick top and has no immediate-trigger semantics.
     set_auto_fetch_impl(&state, true).expect("enable auto-fetch");
-    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(None));
     assert_eq!(
         git_sha(&clone, "refs/remotes/origin/main"),
         git_sha(&seed, "HEAD")
@@ -685,7 +690,7 @@ fn only_the_active_repo_is_fetched() {
     let tip_a = advance_upstream(&seed_a, &upstream_a, "up-a", &day(7));
     let tip_b = advance_upstream(&seed_b, &upstream_b, "up-b", &day(7));
 
-    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(None));
     // A (active) moved; B (background) did not: fetch targets ONLY the
     // active tab (spec 4.3).
     assert_eq!(git_sha(&clone_a, "refs/remotes/origin/main"), tip_a);
@@ -723,7 +728,7 @@ fn closed_active_id_yields_noactive_without_panic() {
 
     // Switching active to the live tab fetches that one fine.
     set_active_repository_impl(&state, b.repo_id).expect("activate b");
-    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(vec![]));
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Fetched(None));
     assert_eq!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
 
     std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");

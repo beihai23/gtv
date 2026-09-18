@@ -1,9 +1,7 @@
 use crate::layout::{self, LaneSeed, TAG_COLOR};
 use crate::models::*;
 use git2::build::CheckoutBuilder;
-use git2::{
-    BranchType, Cred, Oid, RemoteCallbacks, Repository, Sort, Status, StatusOptions,
-};
+use git2::{BranchType, Oid, Repository, Sort, Status, StatusOptions};
 use std::collections::{HashMap, HashSet};
 
 pub struct GitReader {
@@ -392,57 +390,126 @@ impl GitReader {
         })
     }
 
-    /// Fetch every configured remote of this repository, updating remote-
-    /// tracking refs and objects ONLY (.git internals; worktree, local
-    /// branches, HEAD, stash are never touched -- the second and last item
-    /// of the write whitelist). One failing remote does not abort the rest;
-    /// failures are collected into the returned Vec<String> for silent logging.
+    /// Fetch every configured remote of this repository through the SYSTEM
+    /// git: `git -C <path> fetch --all --quiet` (2026-09-18 user decision,
+    /// final-review I-2). Transport deliberately lives in a subprocess:
+    /// credential fidelity (helpers, ssh-agent, proxies, enterprise CAs
+    /// all come from the user's own git config and inherited environment,
+    /// which a libgit2 callback set cannot fully mirror) and zero
+    /// native-dependency risk (libgit2's https/ssh transports pull
+    /// openssl-sys/libssh2 -- the exact matrix that breaks
+    /// cross-compiling the universal macOS bundle). The libgit2 remote
+    /// loop and its Cred::ssh_key_from_agent callback died with the
+    /// decision.
     ///
-    /// Empty refspec slice = each remote's configured default refspecs
-    /// (`+refs/heads/*:refs/remotes/<name>/*` in .git/config, present for
-    /// any `git clone` / `git remote add` remote), and NO prune (minimum
-    /// write surface). Credentials are SSH-agent keys only: the callback
-    /// fires solely when the transport asks, so anonymous HTTPS and local
-    /// file:// remotes never call it; a private HTTPS remote with no
-    /// credentials simply fails into the failure list -- no dialog, no
-    /// panic. Nothing else happens after a successful fetch: no events, no
-    /// fingerprint writes -- the watcher's next poll sees the refs/remotes
-    /// movement on its own (the single refresh path, spec 4.3).
-    pub fn fetch_remotes(&self) -> Result<Vec<String>, String> {
-        let names = self
-            .repo
-            .remotes()
-            .map_err(|e| format!("Failed to enumerate remotes: {}", e))?;
+    /// Write surface: `fetch --all` updates tracking refs
+    /// (+auto-followed tags -- git's default tag following) & objects &
+    /// FETCH_HEAD ONLY (.git internals; worktree, local branches, HEAD,
+    /// stash are never touched -- the second and last item of the write
+    /// whitelist). --prune is deliberately absent (minimum write surface).
+    ///
+    /// Return shape: Ok(None) = clean; Ok(Some(summary)) = the fetch or
+    /// its spawn failed (git not on PATH takes the same path) -- exit
+    /// status plus the tail of stderr collapsed into one short line for
+    /// the fetcher's silent log. Environment is inherited (credential
+    /// helpers need the user env); stdout is nulled (--quiet produces
+    /// none anyway) and stderr is piped into a reader thread so a chatty
+    /// remote can never fill the pipe and block the child. The wait is
+    /// bounded: a try_wait poll loop kills the child at 120 s so a hung
+    /// network fetch cannot wedge the fetcher's busy flag forever; the
+    /// stderr reader EOFs when the child dies, and its result is joined
+    /// through a bounded recv_timeout so even a stray grandchild holding
+    /// the pipe open cannot hang this call. Nothing else happens after a
+    /// successful fetch: no events, no fingerprint writes -- the watcher's
+    /// next poll sees the refs/remotes movement on its own (the single
+    /// refresh path, spec 4.3).
+    pub fn fetch_remotes(&self) -> Result<Option<String>, String> {
+        use std::io::Read as _;
+        use std::process::{Command, Stdio};
 
-        let mut failures: Vec<String> = Vec::new();
-        for name in names.iter().flatten() {
-            let mut remote = match self.repo.find_remote(name) {
-                Ok(remote) => remote,
-                Err(e) => {
-                    failures.push(format!("{}: {}", name, e));
-                    continue;
+        const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+        let dir = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+        let mut child = match Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["fetch", "--all", "--quiet"])
+            // Inherited env: credential helpers live in the user's
+            // environment and git config.
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => return Ok(Some(format!("git fetch failed to spawn: {}", e))),
+        };
+
+        // Drain stderr continuously: a full pipe would block the child
+        // mid-fetch. The reader sends everything it saw when the pipe
+        // EOFs (child exit); the bounded recv_timeout below is the join,
+        // so a leaked fd holder cannot hang this thread.
+        let stderr_pipe = child.stderr.take();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let reader = std::thread::Builder::new()
+            .name("fetch-stderr".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut pipe) = stderr_pipe {
+                    let _ = pipe.read_to_end(&mut buf);
                 }
-            };
-
-            // SSH-agent credentials. The callback runs only when the
-            // transport actually asks for them; anonymous HTTPS and local
-            // paths never do.
-            let mut callbacks = RemoteCallbacks::new();
-            callbacks.credentials(|_url, username_from_url, _allowed| {
-                Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
+                let _ = tx.send(buf);
             });
-            let mut options = git2::FetchOptions::new();
-            options.remote_callbacks(callbacks);
-
-            // Empty refspec slice: the remote's configured default
-            // refspecs apply. No prune, no reflog message (libgit2's
-            // default), no force flags -- the least a fetch can write.
-            let refspecs: [&str; 0] = [];
-            if let Err(e) = remote.fetch(&refspecs, Some(&mut options), None) {
-                failures.push(format!("{}: {}", name, e));
-            }
+        if reader.is_err() {
+            // No safe way to drain the pipe: kill the child and report.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(Some("git fetch failed: stderr reader unavailable".to_string()));
         }
-        Ok(failures)
+
+        // Bounded wait: poll try_wait, kill at the deadline. A hung
+        // network fetch must release the fetcher's busy flag.
+        let started = std::time::Instant::now();
+        let mut timed_out = false;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if started.elapsed() >= FETCH_TIMEOUT {
+                        timed_out = true;
+                        let _ = child.kill();
+                        break child.wait().ok();
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+                Err(_) => break None,
+            }
+        };
+
+        let tail = summarize_stderr(
+            &rx.recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or_default(),
+        );
+
+        if timed_out {
+            return Ok(Some(format!(
+                "git fetch timed out after {}s (killed){}",
+                FETCH_TIMEOUT.as_secs(),
+                tail
+            )));
+        }
+        match status {
+            Some(status) if status.success() => Ok(None),
+            Some(status) => Ok(Some(format!(
+                "git fetch exited {}{}",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "by signal".to_string()),
+                tail
+            ))),
+            None => Ok(Some(format!("git fetch wait failed{}", tail))),
+        }
     }
 
     /// Walk commits from the given seed tips (TIME|TOPO, newest first),
@@ -1372,4 +1439,26 @@ impl GitReader {
             total_deletions: total_deletions as i32,
         })
     }
+}
+
+/// Collapse raw git-stderr bytes into a short single-line tail for the
+/// fetch summary: the last few non-empty lines joined with " | ",
+/// lossily decoded (git speaks UTF-8 in practice, but nothing guarantees
+/// it), length-capped keeping the END (git's decisive "error: ..." line
+/// is last). Returns "" when stderr was empty, else ": <tail>".
+fn summarize_stderr(bytes: &[u8]) -> String {
+    const MAX_LINES: usize = 3;
+    const MAX_CHARS: usize = 240;
+    let text = String::from_utf8_lossy(bytes);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = lines.len().saturating_sub(MAX_LINES);
+    let mut summary: String = lines[start..].join(" | ");
+    let len = summary.chars().count();
+    if len > MAX_CHARS {
+        summary = summary.chars().skip(len - MAX_CHARS).collect();
+    }
+    format!(": {}", summary)
 }

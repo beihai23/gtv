@@ -24,8 +24,12 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # default-features off: drops the https/ssh transports (openssl-sys,
-# libssh2). gtv only reads local repos, and the extra native deps break
-# cross-compiling the universal macOS bundle (no x86_64 OpenSSL sysroot).
+# libssh2). Repository READS stay in libgit2 with no transport layer
+# (deliberate: the native deps break cross-compiling the universal macOS
+# bundle -- no x86_64 OpenSSL sysroot). Network FETCH deliberately does
+# NOT use libgit2: it shells out to the system `git fetch` subprocess
+# (credential fidelity + zero native-dep risk on every CI target,
+# 2026-09-18 user decision; see git_reader.rs fetch_remotes).
 git2 = { version = "0.20", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"

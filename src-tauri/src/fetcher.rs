@@ -43,10 +43,11 @@ pub enum TickOutcome {
     /// A previous tick's fetch is still in flight (network-hung remote);
     /// this tick was skipped so fetches never stack.
     Busy,
-    /// The active repo's remotes were fetched. The Vec lists the remotes
-    /// that FAILED (empty = every remote updated its tracking refs);
-    /// failures are silent-log material, never fatal.
-    Fetched(Vec<String>),
+    /// The active repo's remotes were fetched. Some(summary) = the fetch
+    /// (or its spawn) failed; the string is git's exit status plus its
+    /// stderr tail collapsed to one line -- silent-log material, never
+    /// fatal. None = every remote updated its tracking refs cleanly.
+    Fetched(Option<String>),
 }
 
 pub fn spawn(app: AppHandle) {
@@ -127,15 +128,11 @@ pub async fn fetch_tick(state: &AppState) -> TickOutcome {
     match result {
         // One silent summary line for the whole failure set (offline must
         // not spam: no per-remote warnings, no dialogs, success is quiet).
-        Ok(Ok(failures)) => {
-            if !failures.is_empty() {
-                log::info!(
-                    "auto-fetch: {} remote(s) failed: {}",
-                    failures.len(),
-                    failures.join("; ")
-                );
+        Ok(Ok(summary)) => {
+            if let Some(line) = &summary {
+                log::info!("auto-fetch: {}", line);
             }
-            TickOutcome::Fetched(failures)
+            TickOutcome::Fetched(summary)
         }
         Ok(Err(e)) => {
             log::info!("auto-fetch skipped: {}", e);
