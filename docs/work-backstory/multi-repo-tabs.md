@@ -429,3 +429,91 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
 - **Nit 队列**：wt-chip current 态 hover 零反馈（与 .wt-chip:hover 同
   特异度源序落败）；拖放遮罩 z-200 盖过模态 z-80（瞬态、未裁定的层叠
   决定）；tabbar + 按钮随内容滚动（非钉右端）。
+
+### Process — Task 7：mock.html 多仓契约重建 + tab E2E
+
+mock.html 从"单仓预览夹具"重建为 **T5+ 前端契约的活文档**（单文件五层：
+夹具数据 / MOCK 控制面 / 最小事件系统 / invoke switch / localStorage 种
+子）。要点与决策：
+
+- **注册表语义镜像后端 T1**：`MOCK.repos` path→repo_id 单调分配；
+  同 path 再 open → 同 id + `already_open:true` + **现存 view 对象**（存
+  `MOCK.views`，dedup 命中返回同一引用，绝不重建）；同族不同成员 → 新
+  id（commondir 相同）；close 删条目 → 重开拿全新 id（场景 f 实测 id 4）。
+- **三固定仓**：`/mock/taskon-server`（DATA 原视图）、`-wt`（深拷贝 +
+  HEAD lane 'main'→'wt-lane' 全量改名：branches/lane_owner/branch_refs/
+  head_branch）、`/mock/other-repo`（改名 'other-main'）。**为什么要改
+  名而不只改 head_branch**：Timeline 的 current-lane chip（
+  `.lane-chip.head-lane`）是"已存在 lane 上打类"，head_branch 指向不存
+  在的 lane 名时 chip 根本不渲染——把 lane 0 改名才让 tab 身份锚点真正
+  可见可断言（lane_index 0 恒免 cull 稀疏化）。
+- **非夹具路径的语义裁定**：mock 跑不了 git，**`MOCK.openFails` 是唯一
+  开仓失败源**——不在集合里的任意路径（含 '/mock/not-a-repo'）按"泛型
+  开仓"处理（DATA 视图 + 末段名单成员家族）。这样场景 l 的字面流程
+  （排它 dialogPaths → 错误条 → 去 openFails → retry → 仓打开）才自洽。
+- **事件系统按 @tauri-apps/api 2.10 实物核对**（node_modules/mocks.js
+  是权威先例）：`plugin:event|listen` 收 `{event,target,handler=回调id}`
+  返回同 id 当 eventId；**unlisten 前还会先调
+  `window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event,id)`**
+  （漏掉它 StrictMode 卸载会留脏回调）；回调收到整包
+  `{event,id,payload}`，前端读 `e.payload`。`getCurrentWebview()` 需要
+  `__TAURI_INTERNALS__.metadata`——mock 故意**不提供**，拖放订阅在
+  App 的 try/catch 里安静退出（原生拖放本就是真机手动项 m）。
+- **terminal-output 契约实核**（TerminalPanel.tsx）：事件名
+  `terminal-output`，payload `{id, data}`，**data 是 base64**（面板
+  atob 后按字节写入 xterm）；面板按自己 spawn 返回的 session id 过滤
+  事件 → mock 的 canned 输出必须**延迟 emit**（400ms，等 invoke 解析
+  后 sessionIdRef 落位，同步 emit 会被 id 过滤丢掉）。terminal_write
+  做 PTY 回显（150ms 后仅对该 repoId 的活跃会话回显——隔离断言的双
+  侧）。terminal_spawn 返回完整 TerminalInfo（返回 null 会触发面板
+  unavailable 降级）。
+- **MOCK.calls 记双侧**：成功 `{cmd,args,ret}`、抛错 `{cmd,args,error}`
+  （ret 按引用存，视图对象不复制；500 条环形截断）——场景 e 直接断言
+  第二次 open_repository 的 `ret.already_open===true`。
+- **种子 vs 空态的互斥**：保留首访 gtv_latest_repo 种子（迁移场景 h），
+  但 MOCK.reset() 置 `gtv_mock_noseed` 一次性标志，下次 load 不再种——
+  否则场景 a 的空态会被种子重新顶出一张 tab。reset 清 storage 时该标志
+  在 clear 之后回写。
+- **顺带补齐 `switch_branch` case**（api.ts 既有 wrapper、旧 mock 缺失
+  ——缺它 lane 菜单"view from branch"会把 gitData 置 null）；返回本仓视
+  图即可。删除死 case get_current_path/get_current_branch。
+
+**E2E 发现（不修，留裁决）**：
+
+1. **terminal_spawn 重复触发**：RepoView 给 TerminalPanel 的
+   `onUnavailable={() => setTermAvailable(false)}` 是内联箭头函数，每
+   次渲染换引用 → `ensureSession` useCallback 失忆 → 面板可见性 effect
+   `[open, ensureSession]` 随宿主每次重渲染重跑 → 每次
+   开面板/切 tab/数据到达都再 spawn 一次（场景 k 实测 repo1 两次、后续
+   更多）。后端语义是"spawn 即 re-attach"（每仓一会话），故无正确性
+   问题，纯冗余 IPC；简报"terminal_spawn 按各自 repoId 各一次"在现网
+   前端上不成立。断言降级为"各 repoId 至少一次且路由正确"。
+2. **窗口 resize + 终端面板打开 → Timeline SVG 报 `<rect> NaN` 属性错
+   误**（每轮 2 rect × 4 属性）：布局高度变化瞬间 D3 读到 NaN 几何，
+   纯 console 噪音、视图不坏、复现于纯前端路径（viewport 1400x900 即
+   触发），与 mock 无关。
+3. **场景 b 尾部断言的简报偏差**：picker 开仓路径 App **不调**
+   set_active_repository（open_repository 自带激活语义，T5 设计），
+   calls 尾部只有 open_repository；点 tab 标签才出现
+   set_active_repository(1)。非 bug，简报期望写宽了。
+4. **StrictMode 恢复三连开**：场景 g 的 restore 在 dev 双挂载下
+   open_repository 调 3 次（第一效应的任务仓开 + 第二效应两仓），后端
+   dedup 吸收——恢复正确性恰好依赖 dedup，生产行为无此重放。
+
+**门禁**：npm test **101/101**（mock.html 不在单测内）；`npm run build`
+绿（chunk>500kB 警告既有）；cargo test **82 过 + 2 败**（仅
+tour_repo 既有 gitlink NotFound，无漂移）。E2E 全程 1421 端口
+（起服前 `lsof -i :1421` 探空闲，结束按 PID 杀；用户 1420 未碰）。
+
+**真机手动项（场景 m，非 E2E）**：
+
+- [ ] 拖放开仓：真仓库文件夹拖到窗口任意位置 → 全窗 drop 遮罩出现 →
+      松手开仓（tauri webview 截获原生 drag，合成事件不可达）。
+- [ ] 拖放多路径 + 非仓文件：多文件夹依次开；普通文件落
+      repoOpenFailed 错误条不崩。
+- [ ] 真实 fetch：开着终端 `git fetch` / 编辑器改文件 → repo-changed →
+      60s 内活动 tab 自动 fetch + 视图刷新链（refresh_family 的
+      open_repository(already_open) + refresh_repository）。
+- [ ] macOS 菜单：⌘W 关活动 tab（菜单 emit close-active-tab 路径），
+      ⌘Q 退出，剪贴板快捷键（repo-info/commit 面板复制）。
+- [ ] 真终端会话：面板内真实 shell 交互 + ⟳ 重启 + 关 tab 杀会话。

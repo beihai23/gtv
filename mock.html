@@ -8,13 +8,45 @@
 <body>
   <div id="root"></div>
   <script>
-    // Mock Tauri v2 internals BEFORE app code runs; data from a GitData
-    // dump (see docs/tools/gen_inactive_repo.sh; regenerate any repo via dump_json).
-    let DATA = null;
-    // M3 E2E gear (switchable live from js, no reload needed): the
-    // worktree-preflight and checkout-ack stubs below read these on every
-    // invoke. 'worktree': 'clean' | 'dirty' | 'merge'; 'checkout': 'ok' | 'err'.
-    window.MOCK = { worktree: 'clean', checkout: 'ok' };
+    // gtv browser mock (multi-repo-tabs Task 7 rebuild). This file is the
+    // LIVING CONTRACT DOCUMENT for the T5+ frontend surface: every command
+    // src/api.ts wraps has a case below with the exact argument names the
+    // wrapper sends, and open_repository mirrors the backend T1 registry
+    // semantics (same path re-open -> same repo_id + already_open: true +
+    // the EXISTING view; same-family different member -> fresh id; close
+    // then re-open -> fresh id). It replaces the pre-T5 mock, whose
+    // open_repository returned a bare GitData and whose get_current_path /
+    // get_current_branch cases are dead (no wrapper calls them anymore).
+    //
+    // Layers, top to bottom:
+    //   1. fixture data (the three fixed repos and their views)
+    //   2. window.MOCK -- the E2E control surface (registry mirror, dialog
+    //      queue, failure set, invoke journal, emit, reset)
+    //   3. minimal event system (transformCallback registry + the two
+    //      plugin:event cases; mirrors @tauri-apps/api v2.10's own mock)
+    //   4. the invoke switch itself
+    //   5. localStorage seed (legacy gtv_latest_repo for the migration E2E)
+    //
+    // E2E drives everything through window.MOCK from the browse CLI; the
+    // app code itself is untouched (zero src/ changes is a Task 7 red line).
+
+    // --- 0. mock state -------------------------------------------------------
+    let DATA = null;        // main worktree view: the mock-data.json dump
+    let WT_DATA = null;     // linked worktree member: deep copy, head lane renamed
+    let OTHER_DATA = null;  // second family: deep copy, head lane renamed
+    const FIXTURES = Object.create(null); // path -> { commondir, family, view }
+    const callbacks = new Map();  // transformCallback id -> wrapper fn
+    const listeners = new Map();  // event name -> [callback id, ...]
+    const sessions = new Map();   // terminal session id -> { repoId }
+    let cbSeq = 0, evtSeq = 0, idSeq = 0, termSeq = 0;
+
+    // --- 1. fixture data -----------------------------------------------------
+    // Base dump from a real repo (see docs/tools/gen_inactive_repo.sh;
+    // regenerate any repo via dump_json). WT/OTHER views are deep copies of
+    // DATA with the HEAD lane ('main', lane_index 0) renamed to a distinct
+    // value: the current-lane chip (.lane-chip.head-lane) then shows
+    // 'wt-lane' / 'other-main', giving E2E a per-tab identity anchor that
+    // survives the shared graph shape.
     const ready = fetch('/mock-data.json').then(r => r.json()).then(d => {
       DATA = d;
       // The dump predates the head_branch field (M3.2 backend addition):
@@ -24,7 +56,7 @@
       // Synthetic remote counterparts (M2.3 acceptance): the dump has no
       // origin/* refs at all, so the first three lanes' tip commits (by
       // lane_index, tip = largest x) get an origin/<name> copy of their
-      // local ref with is_remote: true. Purely synthetic — a fresh dump
+      // local ref with is_remote: true. Purely synthetic -- a fresh dump
       // from a real repo would carry real remote refs instead.
       for (const lane of [...d.branches].sort((a, b) => a.lane_index - b.lane_index).slice(0, 3)) {
         const cs = d.commits.filter(c => c.lane_owner === lane.name);
@@ -53,145 +85,459 @@
         merged_into: null, is_active: true,
       });
       host.branch_refs.push({ name: 'synthetic/tag', is_remote: false, is_tag: true, color: '' });
+
+      WT_DATA = deriveView(d, 'main', 'wt-lane');
+      OTHER_DATA = deriveView(d, 'main', 'other-main');
+      // The three fixed repos: two members of one worktree family sharing
+      // commondir /mock/taskon-server/.git, plus a second family. Family
+      // snapshots are FRESH arrays per open (callers may reorder/keep them).
+      FIXTURES['/mock/taskon-server'] = {
+        commondir: '/mock/taskon-server/.git',
+        view: () => DATA,
+        family: () => [
+          { name: 'taskon-server', path: '/mock/taskon-server', is_main: true },
+          { name: 'taskon-server-wt', path: '/mock/taskon-server-wt', is_main: false },
+        ],
+      };
+      FIXTURES['/mock/taskon-server-wt'] = { ...FIXTURES['/mock/taskon-server'], view: () => WT_DATA };
+      FIXTURES['/mock/other-repo'] = {
+        commondir: '/mock/other-repo/.git',
+        view: () => OTHER_DATA,
+        family: () => [{ name: 'other-repo', path: '/mock/other-repo', is_main: true }],
+      };
     });
+
+    // Deep copy of a view with one lane renamed everywhere it appears
+    // (branches, commits' lane_owner, branch_refs). Edges key on commit ids
+    // and survive unchanged; head_branch becomes the new name so the
+    // current-lane chip is the renamed lane.
+    function deriveView(source, from, to) {
+      const copy = JSON.parse(JSON.stringify(source));
+      copy.branches = copy.branches.map(b => (b.name === from ? { ...b, name: to } : b));
+      copy.commits = copy.commits.map(c => ({
+        ...c,
+        lane_owner: c.lane_owner === from ? to : c.lane_owner,
+        branch_refs: c.branch_refs.map(r => (r.name === from ? { ...r, name: to } : r)),
+      }));
+      copy.head_branch = to;
+      return copy;
+    }
+
+    // Path helpers: fixtures first; any other path opens GENERICALLY (the
+    // mock cannot run git, so MOCK.openFails is the ONLY failure source --
+    // a non-fixture path that is not failed open gets the DATA view and a
+    // synthetic single-member family named after its last segment).
+    function commondirOf(path) {
+      return FIXTURES[path]?.commondir ?? `${path}/.git`;
+    }
+    function familyOf(path) {
+      return FIXTURES[path]?.family()
+        ?? [{ name: path.split('/').pop() || path, path, is_main: true }];
+    }
+    function viewOf(path) {
+      return FIXTURES[path]?.view() ?? DATA;
+    }
+    function repoPath(repoId) {
+      for (const [p, id] of MOCK.repos) if (id === repoId) return p;
+      return null;
+    }
+    // Registry lookup by repo id: every repo-scoped command routes through
+    // this, so a stale id throws the same way the backend session registry
+    // would (a closed repo's data is gone).
+    function viewOfId(repoId) {
+      const v = MOCK.views.get(repoId);
+      if (!v) throw new Error(`mock: unknown repo_id ${repoId}`);
+      return v;
+    }
+    // PTY chunks are base64 (TerminalPanel decodes before writing to xterm);
+    // the UTF-8 fallback covers non-Latin1 input echoed back.
+    function b64(str) {
+      try { return btoa(str); } catch { return btoa(unescape(encodeURIComponent(str))); }
+    }
+
+    // --- 2. MOCK control surface (E2E drives this from the browse CLI) ------
+    window.MOCK = {
+      // M3 E2E gear (kept): get_worktree_status / checkout_branch read these
+      // on every invoke. 'worktree': 'clean' | 'dirty' | 'merge';
+      // 'checkout': 'ok' | 'err'.
+      worktree: 'clean', checkout: 'ok',
+      // Registry mirror: open path -> repo_id. Ids are monotonically
+      // allocated; close_repository deletes the entry so a re-open of the
+      // same path gets a FRESH id (backend T1 semantics).
+      repos: new Map(),
+      // repo_id -> the view that open served (dedup hits return THIS object,
+      // never a rebuild -- "already_open: view/session/baseline untouched").
+      views: new Map(),
+      // Queued picker answers, drained FIFO by plugin:dialog|open. Empty
+      // queue -> null (the cancelled-dialog contract).
+      dialogPaths: [],
+      // Paths open_repository refuses with 'mock: not a git repository'
+      // (the error-strip + retry E2E). The ONLY open failure source.
+      openFails: new Set(),
+      // Invoke journal: every case pushes { cmd, args, ret } on success or
+      // { cmd, args, error } on throw -- BOTH sides of the contract, so E2E
+      // can assert routing, dedup flags, and sync ordering. Ring-capped.
+      calls: [],
+      // Dispatch a backend event to registered listeners, exactly as the
+      // Rust emit path would (E2E fires repo-changed and close-active-tab;
+      // terminal output/exit come from the terminal cases below).
+      emit(event, payload) { dispatch(event, payload); },
+      // Wipe storage + registry + journal + queues; call right before a
+      // reload. Also arms the one-shot seed suppression so the next load
+      // starts truly empty instead of re-seeding gtv_latest_repo.
+      reset() {
+        try {
+          localStorage.clear();
+          localStorage.setItem('gtv_mock_noseed', '1');
+        } catch { /* storage unavailable: best-effort like tabs.ts */ }
+        MOCK.repos.clear();
+        MOCK.views.clear();
+        MOCK.calls.length = 0;
+        MOCK.dialogPaths.length = 0;
+        MOCK.openFails.clear();
+        for (const [id] of [...sessions]) {
+          sessions.delete(id);
+          dispatch('terminal-exit', { id });
+        }
+        idSeq = 0; termSeq = 0;
+      },
+    };
+
+    // --- 3. minimal event system --------------------------------------------
+    // Mirrors @tauri-apps/api v2.10's own mockIPC({ shouldMockEvents }):
+    // listen() invokes plugin:event|listen with { event, target, handler }
+    // where handler is a transformCallback id, expects the event id back,
+    // and unlisten() first calls __TAURI_EVENT_PLUGIN_INTERNALS__
+    // .unregisterListener(event, eventId) (dropping the callback itself)
+    // before invoking plugin:event|unlisten. Handlers receive the full
+    // event object { event, id, payload }; the app's listeners read
+    // e.payload (App.tsx, RepoView.tsx) or e.payload?.repo_id.
+    function registerCallback(cb, once = false) {
+      const id = ++cbSeq;
+      callbacks.set(id, (data) => {
+        if (once) callbacks.delete(id);
+        return cb(data);
+      });
+      return id;
+    }
+    function dispatch(event, payload) {
+      for (const id of [...(listeners.get(event) ?? [])]) {
+        const cb = callbacks.get(id);
+        if (cb) cb({ event, id: ++evtSeq, payload });
+      }
+    }
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener(_event, eventId) { callbacks.delete(eventId); },
+    };
+
+    // --- 4. the invoke switch ------------------------------------------------
+    // Every src/api.ts wrapper's command name and argument names appear
+    // here verbatim -- that file is the contract source of truth.
+    function handleInvoke(cmd, args) {
+      switch (cmd) {
+        // -- registry lifecycle (Task 5) --------------------------------------
+        case 'open_repository': {
+          const path = String(args?.path ?? '');
+          if (MOCK.openFails.has(path)) throw new Error('mock: not a git repository');
+          const existing = MOCK.repos.get(path);
+          if (existing !== undefined) {
+            // Dedup hit: same repo_id, the EXISTING view, family
+            // re-enumerated. The opened repo is the backend's ACTIVE one.
+            return {
+              repo_id: existing, already_open: true,
+              commondir: commondirOf(path), family: familyOf(path),
+              data: MOCK.views.get(existing),
+            };
+          }
+          const id = ++idSeq;
+          MOCK.repos.set(path, id);
+          MOCK.views.set(id, viewOf(path));
+          return {
+            repo_id: id, already_open: false,
+            commondir: commondirOf(path), family: familyOf(path),
+            data: MOCK.views.get(id),
+          };
+        }
+        case 'close_repository': {
+          // Drop the session (and its terminal) -- a re-open of the path
+          // allocates a fresh id because MOCK.repos no longer knows it.
+          for (const [p, id] of [...MOCK.repos]) {
+            if (id === args?.repoId) MOCK.repos.delete(p);
+          }
+          MOCK.views.delete(args?.repoId);
+          for (const [id, s] of [...sessions]) {
+            if (s.repoId === args?.repoId) {
+              sessions.delete(id);
+              dispatch('terminal-exit', { id });
+            }
+          }
+          return null;
+        }
+        case 'set_active_repository': return null; // recorded, ack only
+        case 'set_auto_fetch': return null;        // recorded, ack only
+
+        // -- view rebuilds under an existing session (Task 5) ----------------
+        case 'set_include_stale': return viewOfId(args?.repoId);
+        case 'refresh_repository': return viewOfId(args?.repoId);
+
+        // -- repo-scoped reads: route on args.repoId --------------------------
+        case 'get_branch_list': return viewOfId(args?.repoId).branches;
+        case 'get_commit_detail': { // build from the repo's view
+          const c = viewOfId(args?.repoId).commits.find(x => x.id === args?.commitId);
+          if (!c) return null;
+          return { id: c.id, short_id: c.short_id, message: c.message.split('\n')[0],
+            full_message: c.message, author_name: c.author_name, author_email: c.author_email,
+            timestamp: c.timestamp, parents: c.parents, branch_refs: c.branch_refs,
+            files: [], total_additions: c.additions ?? 0, total_deletions: c.deletions ?? 0 };
+        }
+        case 'get_patch_links': return viewOfId(args?.repoId)._patch_links ?? [];
+        case 'jump_to_commit': return viewOfId(args?.repoId);
+        case 'switch_branch': return viewOfId(args?.repoId); // same view: no re-walk in the mock
+        case 'filter_by_branches': {
+          // CONTRACT APPROXIMATION of the Rust reader (git_reader.rs
+          // filter_by_branches): the real backend re-walks the selected
+          // tips' lineage and re-runs layout (dense lane_index
+          // renumbering, x rescale). The mock cannot re-run layout, so it
+          // drops rows from the repo's precomputed view instead: commits
+          // by lane_owner membership, branches by name, edges only when
+          // both endpoints survive. Lane indices keep their dump values
+          // (deleted rows leave holes) -- enough to verify the frontend
+          // reacts to a shrunken/rehydrated view, not a pixel-faithful
+          // backend. Empty names -> empty view, matching the real
+          // zero-seeds-zero-commits semantics.
+          const view = viewOfId(args?.repoId);
+          const names = new Set(args?.branchNames ?? []);
+          const commits = view.commits.filter(c => names.has(c.lane_owner));
+          const ids = new Set(commits.map(c => c.id));
+          const edges = view.edges.filter(e => ids.has(e.from) && ids.has(e.to));
+          const branches = view.branches.filter(b => names.has(b.name));
+          return { ...view, commits, edges, branches };
+        }
+        case 'search_commits': {
+          const view = viewOfId(args?.repoId);
+          const q = String(args?.query ?? '').trim().toLowerCase();
+          const limit = args?.limit ?? 50;
+          if (q.length < 2) return [];
+          return view.commits
+            .filter(c =>
+              c.message.toLowerCase().includes(q) ||
+              c.author_name.toLowerCase().includes(q) ||
+              (/^[0-9a-f]{4,}$/.test(q) && c.id.startsWith(q)))
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, limit)
+            .map(c => ({
+              id: c.id, message: c.message, author_name: c.author_name,
+              timestamp: c.timestamp,
+              // Split at the median x: the LEFT (older) half reads as
+              // "outside the loaded window". Caveat: the frontend's local
+              // matcher still finds every view commit (the mock view is
+              // fully loaded) and mergeLocate keeps local hits, so merged
+              // hits stay in_view=true -- the jump path only fires against
+              // the real backend, where deep history is genuinely unloaded.
+              in_view: c.x >= (view.commits[Math.floor(view.commits.length / 2)]?.x ?? 0),
+            }));
+        }
+        case 'get_compare_detail': {
+          // CONTRACT APPROXIMATION of commands.rs get_compare_detail:
+          // real per-file numbers come from git2 tree diffs; the mock
+          // cannot run git, so the file list and totals are static
+          // synthesis -- added +10/0, deleted 0/-4, modified +6/-2,
+          // totals 16/6 -- asserted number by number in E2E. Only the
+          // two sides are real view commits (looked up by id), so the
+          // panel header reflects the actual pair. base === target
+          // mirrors git's honest empty diff (spec 5): zero files.
+          const view = viewOfId(args?.repoId);
+          const side = (id) => {
+            const c = view.commits.find(x => x.id === id);
+            return {
+              id,
+              short_id: c ? c.short_id : String(id).slice(0, 7),
+              subject: c ? c.message.split('\n')[0] : '',
+              author: c ? c.author_name : '',
+            };
+          };
+          if (args?.base === args?.target) {
+            return { base: side(args?.base), target: side(args?.target), files: [], total_additions: 0, total_deletions: 0 };
+          }
+          return {
+            base: side(args?.base), target: side(args?.target),
+            files: [
+              { path: 'mock/added.txt', additions: 10, deletions: 0, status: 'A' },
+              { path: 'mock/deleted.txt', additions: 0, deletions: 4, status: 'D' },
+              { path: 'mock/modified.txt', additions: 6, deletions: 2, status: 'M' },
+            ],
+            total_additions: 16, total_deletions: 6,
+          };
+        }
+        case 'get_pair_file_diff': {
+          viewOfId(args?.repoId); // routing check only
+          // CONTRACT APPROXIMATION: same static-synthesis stance -- one
+          // hand-written patch served for any file of any pair. The two
+          // '-' lines and three '+' lines are E2E substring anchors.
+          return [
+            'diff --git a/mock/modified.txt b/mock/modified.txt',
+            '--- a/mock/modified.txt',
+            '+++ b/mock/modified.txt',
+            '@@ -1,3 +1,6 @@',
+            ' kept context line',
+            '-mock removed line one',
+            '-mock removed line two',
+            '+mock added line one',
+            '+mock added line two',
+            '+mock added line three',
+            ' kept trailing line',
+          ].join('\n');
+        }
+
+        // -- checkout gears (M3, kept; now repo-scoped) ------------------------
+        case 'get_worktree_status': {
+          viewOfId(args?.repoId);
+          // CONTRACT APPROXIMATION of git_reader.rs worktree_status: the
+          // real backend counts porcelain records; the mock serves three
+          // fixed gears (window.MOCK.worktree) so E2E can drive the
+          // clean / dirty-confirm / merge-refusal lanes. The dirty counts
+          // (3 modified / 2 untracked) are fixed E2E assertion anchors.
+          if (window.MOCK.worktree === 'dirty')
+            return { modified: 3, untracked: 2, merge_in_progress: false };
+          if (window.MOCK.worktree === 'merge')
+            return { modified: 0, untracked: 0, merge_in_progress: true };
+          return { modified: 0, untracked: 0, merge_in_progress: false };
+        }
+        case 'checkout_branch': {
+          viewOfId(args?.repoId);
+          // CONTRACT APPROXIMATION of the Rust safe-checkout writer: the
+          // real ack is followed by a repo-changed watcher rebuild; the
+          // mock has no watcher, so the ack is the whole effect and the
+          // view intentionally stays put (the E2E no-rebuild assertion).
+          if (window.MOCK.checkout === 'err')
+            throw new Error('mock: uncommitted changes would be overwritten');
+          return { branch: args?.branch };
+        }
+        case 'is_valid_git_repo': {
+          return !MOCK.openFails.has(String(args?.path ?? ''));
+        }
+        case 'get_recent_logs': return ['[mock] env_logger line'];
+
+        // -- terminal (one PTY per open repo; repo_id-routed) ------------------
+        // Contract verified against src/components/TerminalPanel.tsx: the
+        // panel subscribes 'terminal-output' ({ id, data }) / 'terminal-exit'
+        // ({ id }) filtered on ITS spawn's session id, and spawns once per
+        // panel-open (terminal_spawn returns TerminalInfo; null would flip
+        // the panel into its unavailable state). Output chunks are base64.
+        case 'terminal_spawn': {
+          viewOfId(args?.repoId);
+          const id = ++termSeq;
+          sessions.set(id, { repoId: args?.repoId });
+          const info = {
+            id,
+            cwd: repoPath(args?.repoId) ?? '/mock',
+            shell: '/bin/zsh',
+            cols: args?.cols ?? 80, rows: args?.rows ?? 24,
+          };
+          // One canned banner line shortly AFTER spawn resolves: the panel
+          // only stores the session id once the invoke resolves, so a
+          // synchronous emit here would be dropped by the id filter. 400ms
+          // clears the await chain with margin and gives panels visible
+          // content (the E2E isolation anchor).
+          setTimeout(() => {
+            if (sessions.has(id)) {
+              dispatch('terminal-output', { id, data: b64(`[mock ${id}] shell ready: ${info.cwd}\r\n`) });
+            }
+          }, 400);
+          return info;
+        }
+        case 'terminal_write': {
+          viewOfId(args?.repoId);
+          const data = String(args?.data ?? '');
+          // PTY echo: written bytes come back as a terminal-output chunk on
+          // every live session of THIS repo only -- sibling tabs' sessions
+          // never see them (the routing-isolation E2E asserts both sides).
+          setTimeout(() => {
+            for (const [id, s] of [...sessions]) {
+              if (s.repoId === args?.repoId && sessions.has(id)) {
+                dispatch('terminal-output', { id, data: b64(data) });
+              }
+            }
+          }, 150);
+          return null;
+        }
+        case 'terminal_resize': {
+          viewOfId(args?.repoId);
+          return null;
+        }
+        case 'terminal_kill': {
+          viewOfId(args?.repoId);
+          for (const [id, s] of [...sessions]) {
+            if (s.repoId === args?.repoId) {
+              sessions.delete(id);
+              dispatch('terminal-exit', { id });
+            }
+          }
+          return null;
+        }
+
+        // -- plugin surfaces ---------------------------------------------------
+        case 'plugin:dialog|open': {
+          // Queued answers: E2E pre-loads MOCK.dialogPaths with picker
+          // results; an empty queue answers null (cancelled dialog).
+          return MOCK.dialogPaths.shift() ?? null;
+        }
+        case 'plugin:event|listen': {
+          const ev = String(args?.event ?? '');
+          if (!listeners.has(ev)) listeners.set(ev, []);
+          listeners.get(ev).push(args?.handler);
+          return args?.handler; // event id mirrors the handler id (api mock precedent)
+        }
+        case 'plugin:event|unlisten': {
+          const arr = listeners.get(String(args?.event ?? ''));
+          if (arr) {
+            const i = arr.indexOf(args?.eventId);
+            if (i >= 0) arr.splice(i, 1);
+          }
+          return null;
+        }
+
+        // get_file_diff / get_commit_stats / load_older_commits / anything
+        // else the frontend tolerates absent: null.
+        default: return null;
+      }
+    }
+
     window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => {
-        await ready;
-        switch (cmd) {
-          case 'open_repository': return DATA;
-          case 'get_current_path': return '/mock/taskon-server';
-          case 'get_current_branch': return 'marschain';
-          case 'get_branch_list': return DATA.branches;
-          case 'get_commit_detail': { // build from DATA — the panel needs it
-            const c = DATA.commits.find(x => x.id === args?.commitId);
-            if (!c) return null;
-            return { id: c.id, short_id: c.short_id, message: c.message.split('\n')[0],
-              full_message: c.message, author_name: c.author_name, author_email: c.author_email,
-              timestamp: c.timestamp, parents: c.parents, branch_refs: c.branch_refs,
-              files: [], total_additions: c.additions ?? 0, total_deletions: c.deletions ?? 0 };
-          }
-          case 'get_patch_links': return DATA._patch_links ?? [];
-          case 'filter_by_branches': {
-            // CONTRACT APPROXIMATION of the Rust reader (git_reader.rs
-            // filter_by_branches): the real backend re-walks the selected
-            // tips' lineage and re-runs layout (dense lane_index
-            // renumbering, x rescale). The mock cannot re-run layout, so
-            // it drops rows from the precomputed dump instead: commits by
-            // lane_owner membership, branches by name, edges only when
-            // both endpoints survive. Lane indices keep their dump values
-            // (deleted rows leave holes) — enough to verify the frontend
-            // reacts to a shrunken/rehydrated view, not a pixel-faithful
-            // backend. Empty names -> empty view, matching the real
-            // zero-seeds-zero-commits semantics.
-            const names = new Set(args?.branchNames ?? []);
-            const commits = DATA.commits.filter(c => names.has(c.lane_owner));
-            const ids = new Set(commits.map(c => c.id));
-            const edges = DATA.edges.filter(e => ids.has(e.from) && ids.has(e.to));
-            const branches = DATA.branches.filter(b => names.has(b.name));
-            return { ...DATA, commits, edges, branches };
-          }
-          case 'is_valid_git_repo': return true;
-          case 'get_recent_logs': return ['[mock] env_logger line'];
-          case 'search_commits': {
-            const q = String(args?.query ?? '').trim().toLowerCase();
-            const limit = args?.limit ?? 50;
-            if (q.length < 2) return [];
-            return DATA.commits
-              .filter(c =>
-                c.message.toLowerCase().includes(q) ||
-                c.author_name.toLowerCase().includes(q) ||
-                (/^[0-9a-f]{4,}$/.test(q) && c.id.startsWith(q)))
-              .sort((a, b) => b.timestamp - a.timestamp)
-              .slice(0, limit)
-              .map(c => ({
-                id: c.id, message: c.message, author_name: c.author_name,
-                timestamp: c.timestamp,
-                // Split at the median x: the LEFT (older) half reads as
-                // "outside the loaded window". Caveat: the frontend's local
-                // matcher still finds every DATA commit (the mock view is
-                // fully loaded) and mergeLocate keeps local hits, so merged
-                // hits stay in_view=true — the jump path only fires against
-                // the real backend, where deep history is genuinely unloaded.
-                in_view: c.x >= (DATA.commits[Math.floor(DATA.commits.length / 2)]?.x ?? 0),
-              }));
-          }
-          case 'jump_to_commit': return DATA;
-          case 'get_worktree_status': {
-            // CONTRACT APPROXIMATION of git_reader.rs worktree_status: the
-            // real backend counts porcelain records; the mock serves three
-            // fixed gears (window.MOCK.worktree) so E2E can drive the
-            // clean / dirty-confirm / merge-refusal lanes. The dirty counts
-            // (3 modified / 2 untracked) are fixed E2E assertion anchors.
-            if (window.MOCK.worktree === 'dirty')
-              return { modified: 3, untracked: 2, merge_in_progress: false };
-            if (window.MOCK.worktree === 'merge')
-              return { modified: 0, untracked: 0, merge_in_progress: true };
-            return { modified: 0, untracked: 0, merge_in_progress: false };
-          }
-          case 'checkout_branch': {
-            // CONTRACT APPROXIMATION of the Rust safe-checkout writer: the
-            // real ack is followed by a repo-changed watcher rebuild; the
-            // mock has no watcher, so the ack is the whole effect and the
-            // view intentionally stays put (the E2E no-rebuild assertion).
-            if (window.MOCK.checkout === 'err')
-              throw new Error('mock: uncommitted changes would be overwritten');
-            return { branch: args?.branch };
-          }
-          case 'get_compare_detail': {
-            // CONTRACT APPROXIMATION of commands.rs get_compare_detail:
-            // real per-file numbers come from git2 tree diffs; the mock
-            // cannot run git, so the file list and totals are static
-            // synthesis -- added +10/0, deleted 0/-4, modified +6/-2,
-            // totals 16/6 -- asserted number by number in E2E. Only the
-            // two sides are real DATA commits (looked up by id), so the
-            // panel header reflects the actual pair. base === target
-            // mirrors git's honest empty diff (spec 5): zero files.
-            const side = (id) => {
-              const c = DATA.commits.find(x => x.id === id);
-              return {
-                id,
-                short_id: c ? c.short_id : String(id).slice(0, 7),
-                subject: c ? c.message.split('\n')[0] : '',
-                author: c ? c.author_name : '',
-              };
-            };
-            if (args?.base === args?.target) {
-              return { base: side(args?.base), target: side(args?.target), files: [], total_additions: 0, total_deletions: 0 };
-            }
-            return {
-              base: side(args?.base), target: side(args?.target),
-              files: [
-                { path: 'mock/added.txt', additions: 10, deletions: 0, status: 'A' },
-                { path: 'mock/deleted.txt', additions: 0, deletions: 4, status: 'D' },
-                { path: 'mock/modified.txt', additions: 6, deletions: 2, status: 'M' },
-              ],
-              total_additions: 16, total_deletions: 6,
-            };
-          }
-          case 'get_pair_file_diff': {
-            // CONTRACT APPROXIMATION: same static-synthesis stance -- one
-            // hand-written patch served for any file of any pair. The two
-            // '-' lines and three '+' lines are E2E substring anchors.
-            return [
-              'diff --git a/mock/modified.txt b/mock/modified.txt',
-              '--- a/mock/modified.txt',
-              '+++ b/mock/modified.txt',
-              '@@ -1,3 +1,6 @@',
-              ' kept context line',
-              '-mock removed line one',
-              '-mock removed line two',
-              '+mock added line one',
-              '+mock added line two',
-              '+mock added line three',
-              ' kept trailing line',
-            ].join('\n');
-          }
-          default: return null; // plugin:dialog|open -> null (no native dialog)
+        await ready; // fixtures must exist before any data command runs
+        let ret;
+        try {
+          ret = handleInvoke(cmd, args ?? {});
+        } catch (err) {
+          pushCall(cmd, args, { error: err instanceof Error ? err.message : String(err) });
+          throw err;
         }
+        pushCall(cmd, args, { ret });
+        return ret;
       },
-      transformCallback: () => 0,
+      transformCallback: registerCallback,
     };
-    localStorage.setItem('gtv_latest_repo', '/mock/taskon-server');
+
+    // Journal push: record BOTH sides ({ ret } on success, { error } on a
+    // throw), ring-capped at 500 entries.
+    function pushCall(cmd, args, mark) {
+      MOCK.calls.push({ cmd, args, ...mark });
+      if (MOCK.calls.length > 500) MOCK.calls.splice(0, MOCK.calls.length - 500);
+    }
+
+    // --- 5. localStorage seed ------------------------------------------------
+    // Legacy restore seed (migration E2E): a first visit carries the
+    // pre-T5 "last repo" so migrateRestore's legacy branch has something to
+    // eat. MOCK.reset() arms gtv_mock_noseed so the NEXT load starts truly
+    // empty instead of re-seeding this key (the empty-state E2E).
+    try {
+      if (localStorage.getItem('gtv_mock_noseed') === '1') {
+        localStorage.removeItem('gtv_mock_noseed');
+      } else {
+        localStorage.setItem('gtv_latest_repo', '/mock/taskon-server');
+      }
+    } catch { /* storage unavailable: the app treats storage as best-effort */ }
   </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
