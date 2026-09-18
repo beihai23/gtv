@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import pkg from '../../package.json';
 import { useSettings, openExternal } from '../settings';
-import { getCurrentPath, getRecentLogs } from '../api';
+import { getRecentLogs } from '../api';
 import {
   ISSUE_URL,
   buildIssueContext,
@@ -13,6 +13,10 @@ import {
 interface IssueReportDialogProps {
   currentError: string | null;
   repoName?: string | null;
+  /** Absolute path of the open repository: the repoName fallback when the
+   *  caller does not pass one. Replaces the old getCurrentPath() call,
+   *  whose backend command was deleted in multi-repo-tabs Task 1. */
+  repoPath?: string | null;
   commitCount?: number | null;
   onClose: () => void;
 }
@@ -26,7 +30,7 @@ const COPIED_MS = 2000;
  * attached to a GitHub issue — the user can review, redact, then copy it
  * and jump straight to the issue creation page.
  */
-export function IssueReportDialog({ currentError, repoName, commitCount, onClose }: IssueReportDialogProps) {
+export function IssueReportDialog({ currentError, repoName, repoPath, commitCount, onClose }: IssueReportDialogProps) {
   const { lang, theme, t } = useSettings();
   const [text, setText] = useState('');
   const [copied, setCopied] = useState(false);
@@ -39,13 +43,8 @@ export function IssueReportDialog({ currentError, repoName, commitCount, onClose
     let cancelled = false;
     (async () => {
       let repo = repoName ?? null;
-      if (repo === null) {
-        try {
-          const path = await getCurrentPath();
-          repo = path ? path.split('/').pop() ?? null : null;
-        } catch {
-          repo = null;
-        }
+      if (repo === null && repoPath) {
+        repo = repoPath.split('/').pop() ?? null;
       }
       let backendLogs: string[] = [];
       try {

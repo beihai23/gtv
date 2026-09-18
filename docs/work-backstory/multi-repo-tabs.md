@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: in-progress
-commits: [55ca115, 58473ff, 77df2d1, ad8534d]
+commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -189,3 +189,36 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   上游前进 = seed 里提交再 push（被测仓全程不被碰）。
   门禁：cargo test 79 过 / 2 败（新增 6；2 败仍 tour_repo 既有）；npm test 81/81；
   build 过。真机网络 fetch（SSH agent、私有 HTTPS）列真机手动项，不在测试范围。
+- Task 4（前端：App.tsx 主体 -> RepoView.tsx 零行为搬移）：App.tsx 1419 行瘦成
+  62 行全局壳（showTags/compressed/showMergeLinks/showRefLabels/fitSignal 全局
+  偏好 + showSettings/showIssueReport 可见性 + Cmd+, 监听 + SettingsDialog 渲染
+  + 单个 `<RepoView/>`），其余 1357 行主体整体迁入新文件 src/RepoView.tsx。
+  **header 归属裁定**：简报验收行「<400 行：header + ...」与自己的状态分类表
+  （gitData/branchList/inlineBranches 材料/showAllTags 等全部随主体搬）+「props
+  接口保持最小」冲突——现 header 九成内容读 per-tab 态，若留在 App 则 RepoView
+  需回传/下传十余个值，分类表即被架空；且 T5 目标形态（spec 5.1）里 App 的
+  「header」是新增 tab 栏，非现 header。按分类表执行：**整个 `<header>` 随主体
+  进 RepoView**（设置齿轮按钮经 `setShowSettings` 上行 prop 回 App）。
+  **byte 等价技巧**：props 命名刻意沿用原标识符（`setCompressed`/
+  `toggleShowTags`/`setFitSignal`/`setShowIssueReport`/`setShowSettings`），
+  搬移代码里对这些名字的每一处引用零改动；fitSignal 维持 App 持有 + setter
+  下传（简报明令 T4 不动其机制，T5 改 per-tab）。
+  **IssueReportDialog path 修复选型**：三项上下文（currentError/repoName/
+  commitCount）全是 RepoView 态，若对话框留 App 需持续上提三值；按简报备选
+  「RepoView 渲染 + path prop」——可见性仍在 App（`showIssueReport`/
+  `setShowIssueReport` 下传），对话框 JSX 随主体进 RepoView，新增 `repoPath`
+  prop（=latestRepo）替换对已删命令 getCurrentPath 的调用（原 catch 兜底变纯
+  prop 推导，无 async）。SettingsDialog 内嵌的 IssueReportDialog 用法不动
+  （红线：SettingsDialog 签名）——该路径本就不传 repoName，修复前后可观察结果
+  同为 repo=null（修复前是 invoke 被拒后落 null）。
+  **明知未修**：handleOpenRepo 里 `await getCurrentPath()`（原 :336）逐字节照搬
+  ——真机上 picker 打开路径在 T1 起就断（命令已删，await 抛错跳过分支列表加载
+  并落错误横幅），属 T1-T5 契约断裂期既定状态（期间不跑真机 dev），T5 api.ts
+  改造时由 OpenedRepo 返回值取代；本任务修它会触碰 api.ts 红线。
+  欢迎页随 gitData/latestRepo 落 RepoView（「follow the data」）。DOM 层面唯一
+  结构变化：SettingsDialog 从 CheckoutDialog/IssueReportDialog 之前挪到之后
+  （三者都是 fixed + 显式 z-index 的浮层，且无可同时打开路径，视觉零差异）。
+  逐字节机械核对：以 git show HEAD:src/App.tsx 重建期望 RepoView 体并 diff 实际
+  文件，除「原 :1268-1269 两行行尾空白被剥」外零差异；App 侧留守 hunk
+  （Cmd+, 效应/showTags 块/视图偏好块/SettingsDialog 渲染）逐行比对 OK。
+  门禁：npm test 81/81；npm run build 过（chunk >500kB 警告既有）；cargo 未动。
