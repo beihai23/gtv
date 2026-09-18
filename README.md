@@ -64,8 +64,9 @@ from the commit graph itself.
   and per-file diffs
 - Settings (`⌘,`): Chinese/English UI, five preset themes (Midnight, Nord,
   Dracula, Solarized Dark, GitHub Light)
-- Multi-repo tabs: several repositories side by side in one window — every
-  tab (including its terminal and view state) is restored on the next launch,
+- Multi-repo tabs: several repositories side by side in one window — the
+  tab set and the active tab are restored on the next launch (in-tab view
+  state and the terminal panel are deliberately not auto-restored),
   worktree families group into second-level tabs, and dropping a repository
   folder anywhere on the window opens it
 
