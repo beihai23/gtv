@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import './App.css';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { SettingsDialog } from './components/SettingsDialog';
 import RepoView from './RepoView';
@@ -8,6 +9,7 @@ import {
   openRepository,
   closeRepository,
   setActiveRepository,
+  setAutoFetch,
 } from './api';
 import {
   groupTabsByCommondir,
@@ -36,7 +38,7 @@ function errText(err: unknown): string {
 // RepoViews stay mounted with display:none for inactive tabs (keep-alive:
 // selection, viewport, and terminal all survive a switch).
 function App() {
-  const { t, showStaleBranches } = useSettings();
+  const { t, showStaleBranches, autoFetch } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
   const [showIssueReport, setShowIssueReport] = useState(false);
 
@@ -75,9 +77,16 @@ function App() {
   // mount (initialData seeds its gitData state).
   const [openData, setOpenData] = useState<Record<number, GitData>>({});
   // Open-path failures surface here (restore member gone, picker picked a
-  // non-repo, ...): a raw backend-message strip above the tab bar, cleared
-  // by the next successful open. i18n keys land in Task 6.
+  // non-repo, dragged a plain file, ...): a strip above the tab bar with
+  // the raw backend message and a retry button, cleared by the next
+  // successful open.
   const [openError, setOpenError] = useState<string | null>(null);
+  // The failed path behind openError (retry target); null while the error
+  // is clear.
+  const [openErrorPath, setOpenErrorPath] = useState<string | null>(null);
+  // True while a native drag hovers the window (drag-drop opening): drives
+  // the full-window .drag-overlay.
+  const [dragOver, setDragOver] = useState(false);
 
   // Async handlers read the shell state through these refs (updated by
   // applyTabs, the single writer) instead of stale closures.
@@ -119,6 +128,7 @@ function App() {
     setOpenData(prev =>
       opened.repo_id in prev ? prev : { ...prev, [opened.repo_id]: opened.data });
     setOpenError(null);
+    setOpenErrorPath(null);
     const existing = tabsRef.current.findIndex(tb => tb.repoId === opened.repo_id);
     if (existing >= 0) {
       applyTabs(tabsRef.current, opened.repo_id);
@@ -131,8 +141,8 @@ function App() {
   }, [applyTabs]);
 
   // THE open entry (spec 5.2): every path-based source funnels here --
-  // picker, restore, second-level lazy chip, and Task 6's drag-drop. The
-  // frontend never compares paths itself; dedup is the backend's call.
+  // picker, restore, second-level lazy chip, and drag-drop. The frontend
+  // never compares paths itself; dedup is the backend's call.
   const openTab = useCallback(async (path: string) => {
     try {
       const opened = await openRepository(path, staleRef.current);
@@ -140,6 +150,7 @@ function App() {
     } catch (err) {
       recordFrontendError(errText(err));
       setOpenError(errText(err));
+      setOpenErrorPath(path);
     }
   }, [integrateOpened]);
 
@@ -340,6 +351,55 @@ function App() {
     };
   }, [refreshFamily]);
 
+  // Auto-fetch sync (spec 4.3): the backend toggle restarts as false every
+  // launch, so this effect owns BOTH the startup sync and setting changes
+  // (the 60s thread picks the new value up on its next tick, T3 semantics).
+  // Silent catch: the browser mock has no backend to sync.
+  useEffect(() => {
+    void setAutoFetch(autoFetch).catch(() => {});
+  }, [autoFetch]);
+
+  // Drag-drop opening (spec 5.2 third entrance): a native drag over the
+  // window highlights everything via .drag-overlay; dropping opens each
+  // path sequentially through the same openTab funnel (dedup and the error
+  // strip are openTab's job -- a dropped non-repo file lands in the
+  // repoOpenFailed strip, it cannot crash anything). tauri.conf.json leaves
+  // dragDropEnabled at its default (true), so the webview intercepts HTML5
+  // drag events and only this API sees native drags. try/catch for the
+  // browser mock preview (no webview API there until Task 7's stubs land).
+  useEffect(() => {
+    let dead = false;
+    let un: (() => void) | null = null;
+    try {
+      getCurrentWebview().onDragDropEvent((e) => {
+        const p = e.payload;
+        if (p.type === 'enter' || p.type === 'over') {
+          setDragOver(true);
+        } else if (p.type === 'leave') {
+          setDragOver(false);
+        } else if (p.type === 'drop') {
+          setDragOver(false);
+          void (async () => {
+            for (const path of p.paths) {
+              await openTab(path);
+            }
+          })();
+        }
+      })
+        .then(fn => {
+          if (dead) fn();
+          else un = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // browser mock preview: no webview API
+    }
+    return () => {
+      dead = true;
+      un?.();
+    };
+  }, [openTab]);
+
   // Restore (spec 5.4): open every remembered path in order through the
   // same openTab entry (repo ids are runtime-only -- restore re-opens by
   // path), then activate the recorded tab clamped to the last opened.
@@ -414,8 +474,8 @@ function App() {
                 </button>
                 <button
                   className="tab-close"
-                  aria-label="close tab"
-                  title={group[0].path}
+                  aria-label={t('closeTab')}
+                  title={t('closeTabGroup')}
                   onClick={() => closeGroup(group)}
                 >
                   ×
@@ -447,7 +507,7 @@ function App() {
               <button
                 key={m.path}
                 className={`wt-chip${open ? ' open' : ''}${current ? ' current' : ''}`}
-                title={m.path}
+                title={m.is_main ? `${t('mainWorktree')}\n${m.path}` : m.path}
                 onClick={() => void openTab(m.path)}
               >
                 {m.is_main ? '• ' : ''}{m.name}
@@ -457,9 +517,20 @@ function App() {
         </div>
       )}
 
+      {/* Open failure strip: the i18n lead-in plus the RAW backend message
+          (kept untranslated -- it is the actual error contract), and a
+          retry button that re-runs openTab on the failed path. */}
       {openError && (
         <div className="error">
-          <span className="error-msg">{openError}</span>
+          <span className="error-msg">{t('repoOpenFailed')}: {openError}</span>
+          {openErrorPath && (
+            <button
+              className="error-report-btn"
+              onClick={() => void openTab(openErrorPath)}
+            >
+              {t('retry')}
+            </button>
+          )}
         </div>
       )}
 
@@ -472,6 +543,7 @@ function App() {
             <button className="open-btn" onClick={() => void openPicker()}>
               {t('openRepo')}
             </button>
+            <p className="hint">{t('welcomeDropHint')}</p>
           </div>
         </main>
       ) : (
@@ -500,6 +572,17 @@ function App() {
             />
           </div>
         ))
+      )}
+
+      {/* Full-window drop affordance while a native drag hovers: translucent
+          veil, dashed accent frame, and the release hint. pointer-events
+          stay off -- the native drop must reach the webview, not this
+          layer. */}
+      {dragOver && (
+        <div className="drag-overlay">
+          <div className="drag-overlay-frame" />
+          <div className="drag-overlay-msg">{t('dropToOpen')}</div>
+        </div>
       )}
     </div>
   );

@@ -347,3 +347,60 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   既有）。真机手动验证项（报告列明，待 orchestrator 汇总）：⌘W 仅关激活
   tab 窗口存活、零 tab 时 ⌘W 无操作、后台组 × 保持当前视图、⌘C/⌘V/⌘Z
   在输入框可用、⌘Q 退出、菜单栏 File 显示 "Close Tab ⌘W"。
+- Task 6（纯前端：拖放开仓 + autoFetch 设置 + i18n + tab 样式 token 化 +
+  死项清理；零 Rust 改动红线遵守）：**拖放 API 前置核实**——
+  tauri.conf.json 全文无 `dragDropEnabled` 键，落 Tauri 2 默认 true：webview
+  拦截 HTML5 拖放事件、原生拖放只走 `getCurrentWebview().onDragDropEvent`
+  （@tauri-apps/api 2.10.1 webview.d.ts :413，DragDropEvent 为
+  enter/over/leave/drop 判别联合，仅 enter/drop 带 paths）。App 监听 effect：
+  enter/over 置 dragOver 态、leave/drop 清除、drop 的 paths **依序**
+  `await openTab(path)`——openTab 漏斗已统一 dedup+错误条，拖入普通文件
+  自然落 repoOpenFailed 条不崩；cleanup 照既有 try-catch 浏览器 mock 模式
+  （浏览器里 `getCurrentWebview()` 因 `window.__TAURI_INTERNALS__` 缺失同步
+  抛、Tauri 环境 promise reject，try/catch + .catch 双兜，T7 补 stub）。
+  视觉：`.drag-overlay`（fixed inset 0、z-200、rgba(var(--bg-canvas-rgb),
+  0.55)+blur(4px)、**pointer-events:none**——原生 drop 必须到达 webview 而
+  非该层）+ `.drag-overlay-frame`（inset 12px、2px dashed var(--accent)）+
+  居中 `.drag-overlay-msg` 显 dropToOpen；空态 welcome 按钮下补
+  welcomeDropHint 行（复用 .hint）。
+  **autoFetch 设置（spec §4.3）**：`AUTOFETCH_KEY='gtv_autofetch'`，默认
+  `!== '0'` 开、'1'/'0' 持久化（照 STALE_KEY 模式）。**默认开的依据**：用户
+  需求原文「当前激活的tab要实时刷新……(自动fetch)」是主打功能，默认关等于
+  藏起主打卖点；且 fetch 只写 .git 内 refs/remotes 与 objects（写面白名单
+  第二项）、静默失败不打扰。App 加 effect
+  `void setAutoFetch(autoFetch).catch(()=>{})`（api.ts 既有命令）——后端
+  每次启动都是 false，此 effect 同时负责启动同步与切换同步（≤60s 后下一
+  tick 生效，T3 语义）；catch 静默（浏览器 mock 无后端，避免污染 issue 环
+  形缓冲）。SettingsDialog 镜像 showStale :61-70 的 toggle 节。
+  **L5 裁定（记录）**：⌘W/× 关有运行中终端的 tab **不加确认**（浏览器
+  tab 语义）；T8 用户手册注明「终端随 tab 关闭而终止」。
+  **i18n**（en+zh 成对）：新增 autoFetch/autoFetchTip/repoOpenFailed/
+  retry/dropToOpen/welcomeDropHint/closeTab/closeTabGroup/mainWorktree；
+  错误条改为 `t('repoOpenFailed') + ': ' + 原始后端消息`（原始错误不翻译，
+  是错误契约本身）+ retry 按钮（App 记 openErrorPath，重试重走
+  openTab(openErrorPath)，成功开仓自清；按钮复用 .error-report-btn 类，
+  与 RepoView 错误条同款，零新 CSS）；一级 × 的 aria-label=closeTab、
+  title=closeTabGroup（组语义），路径提示仍在 tab-label 的 title 上；主
+  worktree chip 的 title=`mainWorktree\n路径`（解释 • 标记且保留路径悬停，
+  换行 title 沿 edgeTip 先例），• 前缀保留为语言中立视觉标记；**删除死键
+  openLatest**（en/zh 双侧，latest-repo 按钮已随 T5 恢复机制退役）；welcome
+  三键未动。
+  **CSS（token only，5 主题零裸色值）**：tab 激活态 = --bg-panel 提升 +
+  `box-shadow: inset 0 -2px 0 var(--accent)` 下边（边框常驻 transparent 预
+  留几何，激活切换零位移）；hover = --bg-input（沿 close-btn 惯例）；
+  tab-close 固定 20px 命中区 + 圆角 hover 底；tab-new 补 hover；tabbar
+  `overflow-x:auto`（多 tab 单行滚动，+ 永远可见）；worktree-row 加
+  flex-wrap；wt-chip open = text-faint 边 + 亮字、current = accent 边 +
+  `rgba(var(--link-rgb),0.25)`（全局活跃色，沿 .view-btn.active/.head-lane）
+  + 600 字重；.hint 补 max-width+居中（welcome 双行提示可读换行）；
+  **删除死块 .latest-repo-btn** 三规则。
+  **终端收尾 verify-only：verified, no gap**——TerminalPanel :186 的
+  ResizeObserver deps=[open]（面板 open 跨 tab 切换保持 true——RepoView
+  keep-alive，隐藏期观察器不断开）；隐藏 = display:none → RO 触发、
+  :187 clientWidth===0 早退；激活 = none→flex → RO 触发真实尺寸 → rAF →
+  fit() → onResize → terminalResize 同步 PTY。fitSignal 机制只服务
+  Timeline D3 画布（display:none 下 canvas 零尺寸重测），终端自成闭环，
+  两机制互不缺位。
+  门禁：npm test **101/101**（未提取新纯函数，不加测）；`npm run build`
+  （tsc && vite）绿（chunk >500kB 警告既有）；cargo test 82 过 + 2 败
+  （仍是 tour_repo 既有 gitlink NotFound，无漂移）。mock.html 未碰（T7）。

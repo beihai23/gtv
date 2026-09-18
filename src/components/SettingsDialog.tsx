@@ -8,7 +8,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
-  const { lang, theme, setLang, setTheme, showStaleBranches, setShowStaleBranches, inactiveDays, setInactiveDays, t } = useSettings();
+  const { lang, theme, setLang, setTheme, showStaleBranches, setShowStaleBranches, inactiveDays, setInactiveDays, autoFetch, setAutoFetch, t } = useSettings();
   const [showReport, setShowReport] = useState(false);
 
   return (
@@ -66,6 +66,19 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                 onChange={e => setShowStaleBranches(e.target.checked)}
               />
               <span>{t('showStale')}</span>
+            </label>
+          </div>
+
+          {/* Auto-fetch (spec 4.3): same toggle shape as showStale; App's
+              effect mirrors the value into the backend thread. */}
+          <div className="settings-section">
+            <label className="settings-toggle" title={t('autoFetchTip')}>
+              <input
+                type="checkbox"
+                checked={autoFetch}
+                onChange={e => setAutoFetch(e.target.checked)}
+              />
+              <span>{t('autoFetch')}</span>
             </label>
           </div>
 

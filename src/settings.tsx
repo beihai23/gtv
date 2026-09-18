@@ -14,9 +14,12 @@ const THEME_KEY = 'gtv_theme';
 const STALE_KEY = 'gtv_show_stale';
 const HIDE_REMOTES_KEY = 'gtv_hide_remotes';
 const INACTIVE_DAYS_KEY = 'gtv_inactive_days';
+const AUTOFETCH_KEY = 'gtv_autofetch';
 
 const en: Record<string, string> = {
   openRepo: 'Open Repository',
+  repoOpenFailed: 'Failed to open repository',
+  retry: 'Retry',
   loading: 'Loading...',
   commitCount: '{n} commits',
   commitCountMore: '{n}+ commits',
@@ -53,6 +56,9 @@ const en: Record<string, string> = {
   all: 'All',
   none: 'None',
   close: 'Close',
+  closeTab: 'Close tab',
+  closeTabGroup: 'Close all worktree tabs of this repository',
+  mainWorktree: 'Main worktree',
   cancel: 'Cancel',
   enabled: 'Enabled ({n})',
   disabled: 'Disabled ({n})',
@@ -60,7 +66,8 @@ const en: Record<string, string> = {
   welcomeTitle: 'Welcome to Git Timeline Viewer',
   welcomeSubtitle: 'Click "Open Repository" to select a Git repository',
   welcomeHint: 'Only reads data - no modifications will be made',
-  openLatest: 'Open Latest: {name}',
+  welcomeDropHint: 'Or drop a repository folder anywhere in the window',
+  dropToOpen: 'Release to open repository',
   chipTip: 'Click: toggle · Double-click: only this one',
   focusLane: 'Focus this lane',
   unfocusLane: 'Unfocus lane',
@@ -108,6 +115,8 @@ const en: Record<string, string> = {
   copyFailed: 'Copy failed — select the text and copy manually.',
   showStale: 'Show stale branches',
   showStaleTip: 'Process and show branches whose tip lies outside the loaded history window. Turn off to reduce work on huge repos.',
+  autoFetch: 'Auto-fetch active tab',
+  autoFetchTip: 'Fetch the active tab\'s remotes every 60s in the background (writes refs/remotes and objects only)',
   collapseInactive: 'Collapse inactive lanes',
   collapseInactiveTip: 'Lanes with no activity for this long collapse out of the graph into sediment rows: merged ones under "Archived", never-merged ones under "Dormant". Base branches like main/dev/uat and ancestors of active lanes always stay.',
   inactiveOff: 'Off',
@@ -139,6 +148,8 @@ const en: Record<string, string> = {
 
 const zh: Record<string, string> = {
   openRepo: '打开仓库',
+  repoOpenFailed: '打开仓库失败',
+  retry: '重试',
   loading: '加载中…',
   commitCount: '{n} 个提交',
   commitCountMore: '已加载 {n}+ 个提交',
@@ -175,6 +186,9 @@ const zh: Record<string, string> = {
   all: '全选',
   none: '全不选',
   close: '关闭',
+  closeTab: '关闭标签页',
+  closeTabGroup: '关闭该仓库的全部工作区标签页',
+  mainWorktree: '主工作区',
   cancel: '取消',
   enabled: '已启用 ({n})',
   disabled: '未启用 ({n})',
@@ -182,7 +196,8 @@ const zh: Record<string, string> = {
   welcomeTitle: '欢迎使用 Git Timeline Viewer',
   welcomeSubtitle: '点击"打开仓库"选择一个 Git 仓库',
   welcomeHint: '只读取数据，不会做任何修改',
-  openLatest: '打开最近：{name}',
+  welcomeDropHint: '也可以将仓库文件夹拖到窗口任意位置打开',
+  dropToOpen: '松开鼠标以打开仓库',
   chipTip: '单击：切换 · 双击：只看这一个',
   focusLane: '聚焦此泳道',
   unfocusLane: '取消聚焦',
@@ -230,6 +245,8 @@ const zh: Record<string, string> = {
   copyFailed: '复制失败，请手动全选复制',
   showStale: '显示窗口外分支',
   showStaleTip: '处理并显示 tip 在已加载历史窗口之外的分支。超大仓库可关闭以减少加载量。',
+  autoFetch: '自动获取活动标签页',
+  autoFetchTip: '每 60 秒在后台获取活动标签页的远端更新（仅写入 refs/remotes 与 objects）',
   collapseInactive: '收拢不活跃泳道',
   collapseInactiveTip: '超过该时长无活动的泳道默认收拢出画布，沉入痕迹行：已合并的进「已归档」，未合并的进「休眠」。main/dev/uat 等基座分支和活跃分支的祖先泳道始终保留。',
   inactiveOff: '不收拢',
@@ -381,6 +398,11 @@ interface SettingsCtx {
    *  Persisted as gtv_inactive_days. */
   inactiveDays: number;
   setInactiveDays: (d: number) => void;
+  /** Background 60s fetch of the active tab's remotes (spec 4.3); persisted
+   *  as gtv_autofetch. App mirrors this into the backend toggle -- the
+   *  backend restarts as false every launch. */
+  autoFetch: boolean;
+  setAutoFetch: (v: boolean) => void;
   setLang: (l: Lang) => void;
   setTheme: (t: string) => void;
   setShowStaleBranches: (v: boolean) => void;
@@ -447,6 +469,18 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setInactiveDaysState(d);
   };
 
+  // Default on (spec 4.3): "the active tab refreshes live" is the headline
+  // feature of the request -- shipping it behind an opt-in would hide it.
+  // A fetch only writes refs/remotes and objects (whitelist item 2) and
+  // fails silently, so on-by-default disturbs nobody.
+  const [autoFetch, setAutoFetchState] = useState(
+    () => localStorage.getItem(AUTOFETCH_KEY) !== '0',
+  );
+  const setAutoFetch = (v: boolean) => {
+    localStorage.setItem(AUTOFETCH_KEY, v ? '1' : '0');
+    setAutoFetchState(v);
+  };
+
   const t = (key: string, vars?: Record<string, string | number>): string => {
     let s = DICTS[lang][key] ?? DICTS.en[key] ?? key;
     if (vars) {
@@ -455,7 +489,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return s;
   };
 
-  return <Ctx.Provider value={{ lang, theme, showStaleBranches, hideRemotes, inactiveDays, setLang, setTheme, setShowStaleBranches, setHideRemotes, setInactiveDays, t }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ lang, theme, showStaleBranches, hideRemotes, inactiveDays, autoFetch, setLang, setTheme, setShowStaleBranches, setHideRemotes, setInactiveDays, setAutoFetch, t }}>{children}</Ctx.Provider>;
 }
 
 export function useSettings(): SettingsCtx {

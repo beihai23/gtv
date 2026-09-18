@@ -39,8 +39,11 @@
   overflow: hidden;
 }
 
-/* --- Tab shell (multi-repo-tabs Task 5): minimal LAYOUT classes only --
-   visual polish, tokens, and i18n titles are Task 6. --- */
+/* --- Tab shell (multi-repo-tabs Task 5 layout + Task 6 polish): browser
+   tab semantics, all theme tokens (no raw colors -- 5 presets must all
+   work). Inactive tabs sit on the header, hover lifts them onto
+   --bg-input, the active tab rises to a panel fill plus an inset accent
+   underline. --- */
 .tabbar {
   display: flex;
   align-items: center;
@@ -48,17 +51,30 @@
   padding: 4px 8px;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border);
+  /* Many tabs scroll in one row instead of wrapping or pushing + away. */
+  overflow-x: auto;
 }
 
 .tab {
   display: flex;
   align-items: center;
-  border: 1px solid var(--border);
+  flex-shrink: 0;
+  /* Transparent border reserves the active geometry so tabs never shift
+     when the active state toggles. */
+  border: 1px solid transparent;
   border-radius: 4px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.tab:hover {
+  background: var(--bg-input);
 }
 
 .tab.active {
-  border-color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg-panel);
+  /* Accent underline drawn inside the border box: no layout shift. */
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tab-label {
@@ -66,35 +82,67 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 2px 8px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.tab-close {
-  padding: 2px 6px;
+  padding: 3px 2px 3px 8px;
   border: none;
   background: transparent;
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
+  transition: color 0.15s;
+}
+
+.tab-label:hover {
+  color: var(--text);
+}
+
+.tab.active .tab-label {
+  color: var(--text);
+}
+
+.tab-close {
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-close:hover {
+  background: var(--bg-input);
+  color: var(--text);
 }
 
 .tab-new {
+  flex-shrink: 0;
   padding: 2px 8px;
   border: none;
+  border-radius: 4px;
   background: transparent;
-  color: var(--text);
+  color: var(--text-dim);
   font-size: 14px;
+  line-height: 20px;
   cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab-new:hover {
+  background: var(--bg-input);
+  color: var(--text);
 }
 
 .worktree-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 2px 8px;
   background: var(--bg-header);
@@ -109,15 +157,27 @@
   color: var(--text-dim);
   font-size: 11px;
   cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 
+.wt-chip:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+/* Second-level states: open = the member has a tab (bright text, visible
+   border); current = that tab is THE active one (accent border plus the
+   app-wide link tint used by .view-btn.active / .head-lane). */
 .wt-chip.open {
+  border-color: var(--text-faint);
   color: var(--text);
 }
 
 .wt-chip.current {
   border-color: var(--accent);
+  background: rgba(var(--link-rgb), 0.25);
   color: var(--text);
+  font-weight: 600;
 }
 
 /* Keep-alive wrapper: exactly one visible tab body at a time; hidden ones
@@ -258,7 +318,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  gap: 12px;
   color: var(--text-dim);
 }
 
@@ -267,30 +327,49 @@
   color: var(--text);
 }
 
+/* Empty-state hint lines (welcomeHint + the Task 6 drag hint below the
+   button): quiet, centered, wrapped at a readable measure. */
 .hint {
   font-size: 12px;
   color: var(--text-faint);
+  max-width: 460px;
+  text-align: center;
 }
 
-.latest-repo-btn {
-  margin-top: 24px;
-  padding: 10px 20px;
-  background: var(--bg-input);
+/* --- Drag-drop overlay (Task 6): full-window affordance while a native
+   drag hovers. The veil + blur keep the content readable underneath; the
+   dashed frame is inset so it reads as "drop anywhere in the window".
+   pointer-events stay off -- the native drop must reach the webview, not
+   this layer. --- */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(var(--bg-canvas-rgb), 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+.drag-overlay-frame {
+  position: absolute;
+  inset: 12px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+}
+
+.drag-overlay-msg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 28px;
+  background: rgba(var(--bg-canvas-rgb), 0.9);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   color: var(--text);
-  border: 1px solid var(--link);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.latest-repo-btn:hover:not(:disabled) {
-  background: var(--bg);
-}
-
-.latest-repo-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .timeline-container {
