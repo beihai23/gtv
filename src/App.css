@@ -180,6 +180,14 @@
   font-weight: 600;
 }
 
+/* Current chip hover (T6 N1): .wt-chip.current ties .wt-chip:hover on
+   specificity and wins by source order, so the current chip showed zero
+   hover feedback. A dedicated :hover rule outranks both and deepens the
+   active tint instead of resetting it. */
+.wt-chip.current:hover {
+  background: rgba(var(--link-rgb), 0.4);
+}
+
 /* Keep-alive wrapper: exactly one visible tab body at a time; hidden ones
    keep their RepoView (selection, viewport, terminal) mounted. */
 .tab-body {
@@ -298,6 +306,26 @@
   border-color: white;
 }
 
+/* Dismiss x for the open-failure strip (T6 L3'): tab-close semantics -- a
+   fixed small hit target -- in the strip's own white-on-red palette. */
+.error-dismiss {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.error-dismiss:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 /* Checkout success: the error banner's structure with a green fill
    (hardcoded like the red it mirrors -- the theme system has no green
    token; auto-dismissed by the App timer effect). */
@@ -344,6 +372,11 @@
 .drag-overlay {
   position: fixed;
   inset: 0;
+  /* z-200 sitting over the z-80 modals is a deliberate, transient stacking
+     decision (T6 N2 adjudication): the overlay lives only while a native
+     drag hovers the window, and during those seconds the drop-anywhere
+     highlight takes precedence over any modal underneath; pointer-events
+     stays none, so the modal remains fully interactive. */
   z-index: 200;
   background: rgba(var(--bg-canvas-rgb), 0.55);
   backdrop-filter: blur(4px);

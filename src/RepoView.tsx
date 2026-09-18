@@ -136,6 +136,13 @@ export default function RepoView({
   // every launch — a terminal should be an explicit user action.
   const [termOpen, setTermOpen] = useState(false);
   const [termAvailable, setTermAvailable] = useState(true);
+  // Stable identity so TerminalPanel's ensureSession memoization holds
+  // (final-review F1): an inline arrow here changed on every render, which
+  // un-memoed ensureSession and re-ran the panel's visibility effect on
+  // every host render -- one redundant terminal_spawn per keystroke in the
+  // locate box, and its term.focus() call stole focus from whatever the
+  // user was typing into.
+  const handleTermUnavailable = useCallback(() => setTermAvailable(false), []);
 
   // Fit signal is internal to the tab (Task 5): the Fit button bumps it,
   // and so does activation -- a tab re-shown from display:none must have
@@ -1391,7 +1398,7 @@ export default function RepoView({
         repoId={repoId}
         open={termOpen}
         onClose={() => setTermOpen(false)}
-        onUnavailable={() => setTermAvailable(false)}
+        onUnavailable={handleTermUnavailable}
       />
 
       {checkoutDialog && (

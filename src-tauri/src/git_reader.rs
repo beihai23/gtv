@@ -143,8 +143,10 @@ impl GitReader {
     /// Shorthand of the branch HEAD sits on, or None while detached (or on
     /// an unborn HEAD). head() resolves the symbolic ref to refs/heads/<b>
     /// when on a branch; detached, it returns a direct ref named HEAD, so
-    /// is_branch() is the discriminator.
-    fn head_branch(&self) -> Option<String> {
+    /// is_branch() is the discriminator. pub: the cross-worktree checkout
+    /// guard reads sibling members' HEAD branches through short-lived
+    /// readers (checkout_branch below).
+    pub fn head_branch(&self) -> Option<String> {
         let head = self.repo.head().ok()?;
         if !head.is_branch() {
             return None;
@@ -342,6 +344,9 @@ impl GitReader {
     /// is deliberately no force option and no way around a merge,
     /// cherry-pick, or revert in progress. Tags and remote-tracking names
     /// (origin/x) do not resolve as local branches and are rejected.
+    /// A branch already checked out by a sibling worktree of the same
+    /// family is refused up front (the guard below mirrors git's own
+    /// occupancy refusal).
     ///
     /// Returns an ack only, never GitData: rebuilding the view is the
     /// watcher repo-changed chain's job, so two rebuilds can never race.
@@ -351,6 +356,35 @@ impl GitReader {
             || self.repo.find_reference("REVERT_HEAD").is_ok()
         {
             return Err("merge, cherry-pick, or revert in progress".to_string());
+        }
+
+        // Cross-worktree occupancy guard (spec 6-6, final-review FR-I1):
+        // the git CLI refuses to checkout a branch another worktree of the
+        // same family holds, but libgit2's checkout_tree has no such
+        // refusal -- without this check, two members of one family (a
+        // normal state now that the second-level tabs encourage opening
+        // them both) could silently sit on the same branch and race each
+        // other's commits. Every NON-self member's HEAD branch is read
+        // through a short-lived reader; a match refuses with git's own
+        // wording through the normal checkout error channel. A
+        // single-worktree family is the self-only case and skips at zero
+        // cost (the loop never runs).
+        {
+            let self_path = self.canonical_path()?;
+            let family = self.worktree_family()?;
+            for member in &family {
+                if member.path == self_path {
+                    continue;
+                }
+                if let Ok(sibling) = GitReader::new(&member.path) {
+                    if sibling.head_branch().as_deref() == Some(name) {
+                        return Err(format!(
+                            "branch '{}' is already checked out at '{}'",
+                            name, member.path
+                        ));
+                    }
+                }
+            }
         }
 
         let branch = self

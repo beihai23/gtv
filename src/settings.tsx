@@ -399,8 +399,11 @@ interface SettingsCtx {
   inactiveDays: number;
   setInactiveDays: (d: number) => void;
   /** Background 60s fetch of the active tab's remotes (spec 4.3); persisted
-   *  as gtv_autofetch. App mirrors this into the backend toggle -- the
-   *  backend restarts as false every launch. */
+   *  as gtv_autofetch. App mirrors this into the backend toggle at startup
+   *  AND on every change: the backend AppState defaults to TRUE
+   *  (commands.rs), so the sync effect's startup job is the OFF direction
+   *  -- a user who disabled auto-fetch must not be silently re-enabled on
+   *  relaunch (fc39526 wording; final-review FR-L3). */
   autoFetch: boolean;
   setAutoFetch: (v: boolean) => void;
   setLang: (l: Lang) => void;

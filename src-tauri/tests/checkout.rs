@@ -372,3 +372,54 @@ fn tags_remote_and_unknown_names_are_rejected() {
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
+
+/// Cross-worktree occupancy guard (spec 6-6, final-review FR-I1): the git
+/// CLI refuses a checkout whose branch a sibling worktree already holds;
+/// libgit2's checkout_tree alone would silently put two members of one
+/// family on the same branch. The guard must refuse with git's wording
+/// through the normal checkout error channel, and a checkout of any OTHER
+/// branch in the same family must keep succeeding.
+#[test]
+fn branch_checked_out_by_a_sibling_worktree_is_refused() {
+    let dir = temp_repo("family");
+    let wt = std::env::temp_dir().join(format!(
+        "gtv-checkout-family-wt-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&wt);
+    write(&dir, "x.txt", "base");
+    add_and_commit(&dir, "c1");
+    // feat forks here; the linked worktree is created ON feat (it holds it).
+    git(&dir, &["checkout", "-b", "feat"]);
+    write(&dir, "x.txt", "feat-version");
+    add_and_commit(&dir, "feat change");
+    git(&dir, &["checkout", "main"]);
+    git(&dir, &["worktree", "add", wt.to_str().unwrap(), "feat"]);
+
+    // Member A (the linked worktree) holds feat; member B (main repo, the
+    // reader under test) must be refused with git's own wording.
+    let reader_b = GitReader::new(dir.to_str().unwrap()).expect("open main repo");
+    let err = reader_b
+        .checkout_branch("feat")
+        .expect_err("sibling worktree holds feat");
+    assert_eq!(
+        err,
+        format!(
+            "branch 'feat' is already checked out at '{}'",
+            fs::canonicalize(&wt).unwrap().to_string_lossy()
+        )
+    );
+    // Refused BEFORE any write: B is still on main with its file intact.
+    assert_eq!(head_branch(&dir), "main");
+    assert_eq!(read(&dir, "x.txt"), "base");
+
+    // Any branch the sibling does NOT hold still checks out normally.
+    git(&dir, &["branch", "other"]);
+    reader_b
+        .checkout_branch("other")
+        .expect("free branch checks out fine in the same family");
+    assert_eq!(head_branch(&dir), "other");
+
+    fs::remove_dir_all(&wt).expect("clean up worktree");
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}

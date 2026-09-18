@@ -383,25 +383,22 @@ pub fn set_auto_fetch(enabled: bool, state: tauri::State<AppState>) -> Result<()
     set_auto_fetch_impl(&state, enabled)
 }
 
-/// Rebuild one repo's view under a new include-stale setting WITHOUT
-/// touching its terminal or pagination identity: the dedup semantics
-/// forbid re-open (already_open never resets a session), so the settings
-/// toggle needs its own path. The flag flips under a short lock FIRST (a
-/// racing get_branch_list must not answer with the stale policy), then
-/// the view + pagination session are rebuilt from a fresh full read --
-/// open's snapshot pattern for those two fields alone. watch_baseline,
-/// terminal, and family are deliberately left exactly as they were.
-pub async fn set_include_stale_impl(
-    state: &AppState,
-    repo_id: u64,
-    enabled: bool,
-) -> Result<GitData, String> {
+/// Rebuild one repo's view + pagination session from a fresh full read,
+/// honoring the session's CURRENT include_stale value -- and never writing
+/// that flag (final-review L4): the flag has exactly one writer
+/// (set_include_stale_impl below), so a refresh racing a toggle can no
+/// longer resurrect an old value over the user's last choice. Reads the
+/// flag at rebuild start; a racing toggle's own rebuild then lands after
+/// this one and converges the view on the new value.
+async fn rebuild_view(state: &AppState, repo_id: u64) -> Result<GitData, String> {
     let path = session_path(state, repo_id)?;
-    {
-        let mut repos = state.repos.lock().unwrap();
-        let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
-        session.include_stale = enabled;
-    }
+    let include_stale = {
+        let repos = state.repos.lock().unwrap();
+        repos
+            .get(&repo_id)
+            .ok_or("No repository opened")?
+            .include_stale
+    };
 
     let result = task::spawn_blocking(move || {
         let mut reader = GitReader::new(&path)?;
@@ -410,13 +407,35 @@ pub async fn set_include_stale_impl(
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
-    let data = update_view_session(state, repo_id, &result, enabled)?;
+    let data = update_view_session(state, repo_id, &result, include_stale)?;
     log::info!(
         "Rebuilt view with include_stale={} ({} commits)",
-        enabled,
+        include_stale,
         data.commits.len()
     );
     Ok(data)
+}
+
+/// The include-stale settings toggle: flips the flag under a short lock
+/// FIRST (a racing get_branch_list must not answer with the stale policy),
+/// then rebuilds through the shared path -- WITHOUT touching the terminal
+/// or pagination identity: the dedup semantics forbid re-open
+/// (already_open never resets a session), so the settings toggle needs
+/// its own path. watch_baseline, terminal, and family are deliberately
+/// left exactly as they were.
+pub async fn set_include_stale_impl(
+    state: &AppState,
+    repo_id: u64,
+    enabled: bool,
+) -> Result<GitData, String> {
+    {
+        let mut repos = state.repos.lock().unwrap();
+        let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
+        if session.include_stale != enabled {
+            session.include_stale = enabled;
+        }
+    }
+    rebuild_view(state, repo_id).await
 }
 
 #[tauri::command]
@@ -432,18 +451,13 @@ pub async fn set_include_stale(
 /// in the app) deserves its own name instead of riding the include-stale
 /// toggle; freezing the abuse into T7's mocks would make every future
 /// change to set_include_stale semantics silently alter refresh behavior.
-/// Delegates to the same rebuild with the session's CURRENT include_stale
-/// value, so the refreshed view honors the user's stale-branches setting
-/// without this command ever pretending to change it.
+/// Final-review L4 reshaped it: refresh is now the shared rebuild_view
+/// ONLY -- it never touches include_stale (the old delegation wrote the
+/// flag back with the same value it read, and that write racing a toggle
+/// could resurrect the pre-toggle value). The rebuilt view honors the
+/// session's CURRENT setting without this command ever writing it.
 pub async fn refresh_repository_impl(state: &AppState, repo_id: u64) -> Result<GitData, String> {
-    let enabled = {
-        let repos = state.repos.lock().unwrap();
-        repos
-            .get(&repo_id)
-            .map(|s| s.include_stale)
-            .ok_or("No repository opened")?
-    };
-    set_include_stale_impl(state, repo_id, enabled).await
+    rebuild_view(state, repo_id).await
 }
 
 #[tauri::command]

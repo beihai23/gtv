@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::commands::AppState;
+use crate::commands::{AppState, RepoSession};
 use crate::git_reader::GitReader;
 use crate::models::RepoChanged;
 
@@ -42,6 +42,45 @@ pub fn diff_fingerprints(prev: &HashMap<u64, String>, next: &HashMap<u64, String
         .filter(|(id, fp)| prev.get(id).map_or(false, |p| p != *fp))
         .map(|(id, _)| *id)
         .collect()
+}
+
+/// One poll's compare-and-set write-back (final-review FR-L6 test seam,
+/// extracted from poll_loop): for each session still registered, write
+/// the freshly computed fingerprint -- and report a RepoChanged event --
+/// ONLY when the session's baseline still equals the baseline the
+/// snapshot carried. That CAS keeps a poll racing open_repository honest:
+/// open resets the baseline precisely so the freshly-opened state is
+/// never reported as a change, and a stale snapshot (taken before the
+/// reset) must neither resurrect its old baseline over the reset value
+/// nor emit. Sessions closed mid-poll (id gone from the map) and repos
+/// whose fingerprint could not be computed (absent from `next`) are
+/// skipped. Pure over its arguments so the race is unit-testable without
+/// a Tauri app.
+pub fn apply_fingerprints(
+    repos: &mut HashMap<u64, RepoSession>,
+    snapshot: &[(u64, String, Option<String>)],
+    next: &HashMap<u64, String>,
+    changed: &[u64],
+) -> Vec<RepoChanged> {
+    let mut emits: Vec<RepoChanged> = Vec::new();
+    for (id, path, snapshot_baseline) in snapshot {
+        let Some(fingerprint) = next.get(id) else {
+            continue;
+        };
+        let Some(session) = repos.get_mut(id) else {
+            continue;
+        };
+        if session.watch_baseline == *snapshot_baseline {
+            if changed.contains(id) {
+                emits.push(RepoChanged {
+                    repo_id: *id,
+                    path: path.clone(),
+                });
+            }
+            session.watch_baseline = Some(fingerprint.clone());
+        }
+    }
+    emits
 }
 
 fn poll_loop(app: AppHandle) {
@@ -75,33 +114,12 @@ fn poll_loop(app: AppHandle) {
             .collect();
         let changed = diff_fingerprints(&prev, &next);
 
-        // Write the baselines back compare-and-set: open_repository resets
-        // a session's baseline precisely so a poll racing the open never
-        // reports the freshly-opened state, and this write-back must not
-        // resurrect the pre-open fingerprint over that reset. Sessions
-        // closed mid-poll are skipped (the id is gone). Emits happen after
-        // the lock is dropped; first sights only record their baseline.
-        let mut emits: Vec<RepoChanged> = Vec::new();
-        {
+        // Write the baselines back through the CAS seam (see
+        // apply_fingerprints); emits happen after the lock is dropped.
+        let emits = {
             let mut repos = state.repos.lock().unwrap();
-            for (id, path, snapshot_baseline) in &snapshot {
-                let Some(fingerprint) = next.get(id) else {
-                    continue;
-                };
-                let Some(session) = repos.get_mut(id) else {
-                    continue;
-                };
-                if session.watch_baseline == *snapshot_baseline {
-                    if changed.contains(id) {
-                        emits.push(RepoChanged {
-                            repo_id: *id,
-                            path: path.clone(),
-                        });
-                    }
-                    session.watch_baseline = Some(fingerprint.clone());
-                }
-            }
-        }
+            apply_fingerprints(&mut repos, &snapshot, &next, &changed)
+        };
 
         for event in emits {
             log::info!("Repository changed externally: {}", event.path);

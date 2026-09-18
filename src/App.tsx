@@ -182,6 +182,16 @@ function App() {
   const closeTab = useCallback((repoId: number) => {
     const idx = tabsRef.current.findIndex(tb => tb.repoId === repoId);
     if (idx < 0) return;
+    // Cancel this repo's pending family-refresh debounce (final-review L5):
+    // a repo-changed burst shortly before the close leaves a 500ms timer
+    // armed; if it fires after a close+reopen of the same path, its
+    // refreshFamily rollback ("a fresh id no tab owns") would close the
+    // user's just-reopened tab.
+    const pending = familyTimers.current.get(repoId);
+    if (pending !== undefined) {
+      window.clearTimeout(pending);
+      familyTimers.current.delete(repoId);
+    }
     void closeRepository(repoId).catch(err => {
       recordFrontendError(errText(err));
     });
@@ -520,8 +530,10 @@ function App() {
       )}
 
       {/* Open failure strip: the i18n lead-in plus the RAW backend message
-          (kept untranslated -- it is the actual error contract), and a
-          retry button that re-runs openTab on the failed path. */}
+          (kept untranslated -- it is the actual error contract), a retry
+          button that re-runs openTab on the failed path, and a dismiss x
+          (T6 L3': before it the strip could only be displaced by the next
+          successful open). */}
       {openError && (
         <div className="error">
           <span className="error-msg">{t('repoOpenFailed')}: {openError}</span>
@@ -533,6 +545,17 @@ function App() {
               {t('retry')}
             </button>
           )}
+          <button
+            className="error-dismiss"
+            aria-label={t('close')}
+            title={t('close')}
+            onClick={() => {
+              setOpenError(null);
+              setOpenErrorPath(null);
+            }}
+          >
+            ×
+          </button>
         </div>
       )}
 

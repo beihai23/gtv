@@ -29,11 +29,14 @@ const FETCH_INTERVAL: Duration = Duration::from_secs(60);
 /// exactly which early-exit fired.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TickOutcome {
-    /// The tick dispatched but the target repo could not even be opened
-    /// (e.g. its directory was deleted while the tab stayed open), or the
-    /// blocking task itself died. Nothing was fetched; the failure was
-    /// logged.
-    Skip,
+    /// The tick dispatched but the fetch FAILED before any git work
+    /// produced refs: the target repo could not even be opened (e.g. its
+    /// directory was deleted while the tab stayed open), or the blocking
+    /// task itself died. Nothing was fetched; the failure was logged.
+    /// (Renamed from Skip in the final-review wave: empirically this
+    /// branch is always a failure, never a benign skip -- AutoOff /
+    /// NoActive / Busy are the benign exits.)
+    Failed,
     /// auto_fetch is off: the tick idled before looking at the registry.
     AutoOff,
     /// No fetch target: no active tab, or the active id is no longer
@@ -135,12 +138,12 @@ pub async fn fetch_tick(state: &AppState) -> TickOutcome {
             TickOutcome::Fetched(summary)
         }
         Ok(Err(e)) => {
-            log::info!("auto-fetch skipped: {}", e);
-            TickOutcome::Skip
+            log::info!("auto-fetch failed: {}", e);
+            TickOutcome::Failed
         }
         Err(e) => {
             log::info!("auto-fetch task failed: {}", e);
-            TickOutcome::Skip
+            TickOutcome::Failed
         }
     }
 }

@@ -40,6 +40,14 @@ export function minimapMap(sceneW: number, sceneH: number, boxW: number, boxH: n
  * uses one uniform scale — the property the per-axis map broke.
  */
 export function viewportRect(k: number, tx: number, ty: number, windowW: number, windowH: number, m: MinimapMap): { x: number; y: number; w: number; h: number } {
+  // Zero/NaN window guard (final-review F2). The real trigger: a keep-alive
+  // Timeline hidden via display:none while the window resizes -- the
+  // container reports clientWidth 0, so Timeline's minimapViewport calls
+  // this with windowW 0. Without the guard vw collapses to 0,
+  // f = 6 / Math.min(vw, vh) = Infinity, and w = vw * f = NaN -- which d3
+  // writes onto the minimap <rect> attributes. A non-positive or
+  // non-finite window means there is no viewport to draw: zero rect.
+  if (!(windowW > 0) || !(windowH > 0)) return { x: 0, y: 0, w: 0, h: 0 };
   const vw = (windowW / k) * m.s;
   const vh = (windowH / k) * m.s;
   const x = (-tx / k - m.x0) * m.s;

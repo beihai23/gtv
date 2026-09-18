@@ -37,7 +37,7 @@
     const FIXTURES = Object.create(null); // path -> { commondir, family, view }
     const callbacks = new Map();  // transformCallback id -> wrapper fn
     const listeners = new Map();  // event name -> [callback id, ...]
-    const sessions = new Map();   // terminal session id -> { repoId }
+    const sessions = new Map();   // terminal session id -> { repoId, info }
     let cbSeq = 0, evtSeq = 0, idSeq = 0, termSeq = 0;
 
     // --- 1. fixture data -----------------------------------------------------
@@ -164,6 +164,10 @@
       // Registry mirror: open path -> repo_id. Ids are monotonically
       // allocated; close_repository deletes the entry so a re-open of the
       // same path gets a FRESH id (backend T1 semantics).
+      // Approximation: the keys are RAW path strings, while the backend
+      // dedupes on the canonical realpath -- a symlink or alias spelling
+      // that the backend would collapse into one session stays a second
+      // mock entry (no fixture or E2E path exercises aliased spellings).
       repos: new Map(),
       // repo_id -> the view that open served (dedup hits return THIS object,
       // never a rebuild -- "already_open: view/session/baseline untouched").
@@ -183,12 +187,13 @@
       // terminal output/exit come from the terminal cases below).
       emit(event, payload) { dispatch(event, payload); },
       // Wipe storage + registry + journal + queues; call right before a
-      // reload. Also arms the one-shot seed suppression so the next load
-      // starts truly empty instead of re-seeding gtv_latest_repo.
+      // reload. Also re-arms the persistent seed suppression so the next
+      // load -- and every one after it -- starts truly empty instead of
+      // re-seeding gtv_latest_repo (final-review FR-N7).
       reset() {
         try {
           localStorage.clear();
-          localStorage.setItem('gtv_mock_noseed', '1');
+          localStorage.setItem('gtv_mock_seeded', '1');
         } catch { /* storage unavailable: best-effort like tabs.ts */ }
         MOCK.repos.clear();
         MOCK.views.clear();
@@ -426,14 +431,24 @@
         // the panel into its unavailable state). Output chunks are base64.
         case 'terminal_spawn': {
           viewOfId(args?.repoId);
+          // Idempotent, mirroring the backend re-attach (commands.rs
+          // spawn_terminal_in_repo returns the repo's LIVE session
+          // as-is): a repo with a live session gets the SAME id back --
+          // no second session, no second banner. The stored info carries
+          // the spawn-time size (the real backend reports the pty's
+          // current size; the mock resize is a no-op, so this is
+          // indistinguishable here).
+          for (const [id, s] of [...sessions]) {
+            if (s.repoId === args?.repoId) return s.info;
+          }
           const id = ++termSeq;
-          sessions.set(id, { repoId: args?.repoId });
           const info = {
             id,
             cwd: repoPath(args?.repoId) ?? '/mock',
             shell: '/bin/zsh',
             cols: args?.cols ?? 80, rows: args?.rows ?? 24,
           };
+          sessions.set(id, { repoId: args?.repoId, info });
           // One canned banner line shortly AFTER spawn resolves: the panel
           // only stores the session id once the invoke resolves, so a
           // synchronous emit here would be dropped by the id filter. 400ms
@@ -527,15 +542,18 @@
     }
 
     // --- 5. localStorage seed ------------------------------------------------
-    // Legacy restore seed (migration E2E): a first visit carries the
+    // Legacy restore seed (migration E2E): a FIRST visit carries the
     // pre-T5 "last repo" so migrateRestore's legacy branch has something to
-    // eat. MOCK.reset() arms gtv_mock_noseed so the NEXT load starts truly
-    // empty instead of re-seeding this key (the empty-state E2E).
+    // eat. The persistent gtv_mock_seeded flag makes the seed truly
+    // first-visit (final-review FR-N7): without it, closing every tab and
+    // reloading re-seeded the key and resurrected a tab, making the
+    // welcome state unreachable after the first visit. MOCK.reset() re-arms
+    // the flag right after clearing storage, so the empty-state E2E starts
+    // clean too.
     try {
-      if (localStorage.getItem('gtv_mock_noseed') === '1') {
-        localStorage.removeItem('gtv_mock_noseed');
-      } else {
+      if (localStorage.getItem('gtv_mock_seeded') !== '1') {
         localStorage.setItem('gtv_latest_repo', '/mock/taskon-server');
+        localStorage.setItem('gtv_mock_seeded', '1');
       }
     } catch { /* storage unavailable: the app treats storage as best-effort */ }
   </script>

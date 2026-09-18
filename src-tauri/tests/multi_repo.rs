@@ -13,7 +13,7 @@ use gtv_lib::commands::{
 };
 use gtv_lib::fetcher::{fetch_tick, TickOutcome};
 use gtv_lib::git_reader::GitReader;
-use gtv_lib::watcher::diff_fingerprints;
+use gtv_lib::watcher::{apply_fingerprints, diff_fingerprints};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
@@ -1013,6 +1013,145 @@ fn refresh_repository_rebuilds_view_keeps_policy_and_terminal() {
         run(refresh_repository_impl(&state, 9999)).unwrap_err(),
         "No repository opened"
     );
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// Final-review L4 pin: refresh_repository NEVER writes include_stale (the
+/// old implementation delegated to set_include_stale_impl with the value it
+/// had just read, and that same-value writeback racing a user toggle could
+/// resurrect the pre-toggle value -- the sticky divergence). The flag is
+/// planted DIRECTLY under the lock here so the only possible writer in
+/// this test is the refresh under test; it must come back untouched in
+/// both directions while the view still rebuilds.
+#[test]
+fn refresh_repository_never_writes_the_include_stale_flag() {
+    let dir = build_repo("l4flag", "x");
+    let state = AppState::default();
+    let repo = open(&state, &dir);
+
+    // Plant OFF directly (no set_include_stale_impl call -- that path IS
+    // the sanctioned writer and would muddy the pin).
+    {
+        let mut repos = state.repos.lock().unwrap();
+        repos.get_mut(&repo.repo_id).unwrap().include_stale = false;
+    }
+
+    let refreshed = run(refresh_repository_impl(&state, repo.repo_id)).expect("refresh");
+    assert_eq!(refreshed.commits.len(), 4, "view still rebuilds");
+    {
+        let repos = state.repos.lock().unwrap();
+        assert_eq!(
+            repos.get(&repo.repo_id).unwrap().include_stale,
+            false,
+            "refresh must not write the flag (planted false stays false)"
+        );
+    }
+
+    // And the ON direction: plant true over it, refresh, still untouched.
+    {
+        let mut repos = state.repos.lock().unwrap();
+        repos.get_mut(&repo.repo_id).unwrap().include_stale = true;
+    }
+    run(refresh_repository_impl(&state, repo.repo_id)).expect("refresh again");
+    {
+        let repos = state.repos.lock().unwrap();
+        assert!(
+            repos.get(&repo.repo_id).unwrap().include_stale,
+            "refresh must not write the flag (planted true stays true)"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// Final-review L-3: the Failed branch (renamed from Skip -- empirically
+/// this path is always a failure, never a benign skip). Construction: the
+/// repo stays REGISTERED (a close would take the NoActive exit instead)
+/// while its clone directory is deleted underneath -- the tick dispatches,
+/// GitReader::new fails, nothing panics, and the busy flag is reset so
+/// the next tick is dispatchable again.
+#[test]
+fn deleted_clone_directory_fails_the_tick_and_resets_busy() {
+    let (seed, _upstream, clone) = build_fetch_fixture("failed");
+    let state = AppState::default();
+    open(&state, &clone); // active target
+
+    // Delete the clone's directory WITHOUT closing the tab (the registered
+    // session names a path that no longer opens).
+    std::fs::remove_dir_all(&clone).expect("delete clone dir");
+
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Failed);
+    // The busy flag was swapped true on dispatch and MUST be cleared on
+    // the failure exit -- a leaked true would Busy-skip forever.
+    assert!(!state.fetching.load(Ordering::SeqCst));
+
+    // Recovery: the next tick against the same dead target fails the same
+    // bounded way (no wedge, no panic).
+    assert_eq!(run(fetch_tick(&state)), TickOutcome::Failed);
+    assert!(!state.fetching.load(Ordering::SeqCst));
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+/// Final-review FR-L6: the watcher's CAS write-back, extracted as the
+/// apply_fingerprints seam. The pinned race: open_repository resets a
+/// session's baseline so the freshly-opened state is never reported as a
+/// change; a poll whose snapshot predates that reset must neither
+/// resurrect its stale baseline over the reset value nor emit.
+#[test]
+fn watcher_cas_writeback_never_resurrects_a_reset_baseline() {
+    let dir = build_repo("caspoll", "x");
+    let state = AppState::default();
+    let repo = open(&state, &dir);
+    let path = dir.to_str().unwrap().to_string();
+
+    // Simulate open's reset: the live baseline is the fresh value...
+    {
+        let mut repos = state.repos.lock().unwrap();
+        repos.get_mut(&repo.repo_id).unwrap().watch_baseline =
+            Some("post-open-reset".to_string());
+    }
+    // ...while a poll that snapshotted BEFORE the reset still carries the
+    // stale baseline, has computed a new fingerprint, and its diff marked
+    // the repo changed. A naive (non-CAS) write-back would overwrite the
+    // reset baseline with fp-new AND emit a bogus repo-changed.
+    let stale_snapshot = vec![(repo.repo_id, path.clone(), Some("pre-open-stale".to_string()))];
+    let mut next = HashMap::new();
+    next.insert(repo.repo_id, "fp-new".to_string());
+    let changed = vec![repo.repo_id];
+
+    let emits = {
+        let mut repos = state.repos.lock().unwrap();
+        apply_fingerprints(&mut repos, &stale_snapshot, &next, &changed)
+    };
+    assert!(emits.is_empty(), "a stale snapshot must not emit");
+    {
+        let repos = state.repos.lock().unwrap();
+        assert_eq!(
+            repos.get(&repo.repo_id).unwrap().watch_baseline.as_deref(),
+            Some("post-open-reset"),
+            "CAS must not resurrect the pre-open baseline"
+        );
+    }
+
+    // Control: a snapshot that still MATCHES the live baseline writes the
+    // new fingerprint and emits exactly one event.
+    let fresh_snapshot = vec![(repo.repo_id, path, Some("post-open-reset".to_string()))];
+    let emits = {
+        let mut repos = state.repos.lock().unwrap();
+        apply_fingerprints(&mut repos, &fresh_snapshot, &next, &changed)
+    };
+    assert_eq!(emits.len(), 1);
+    assert_eq!(emits[0].repo_id, repo.repo_id);
+    assert_eq!(emits[0].path, dir.to_str().unwrap());
+    {
+        let repos = state.repos.lock().unwrap();
+        assert_eq!(
+            repos.get(&repo.repo_id).unwrap().watch_baseline.as_deref(),
+            Some("fp-new")
+        );
+    }
 
     std::fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
