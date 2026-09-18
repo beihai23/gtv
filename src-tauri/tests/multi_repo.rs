@@ -14,6 +14,7 @@ use gtv_lib::watcher::diff_fingerprints;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 /// Run git in `dir`. Identity/gpg overrides are passed inline so the test
 /// works on machines with no global git config (or with commit.gpgsign on).
@@ -116,10 +117,14 @@ fn two_repos_open_independently_and_route_by_id() {
         .expect("HEAD commit in a")
         .id
         .clone();
-    let detail = get_commit_detail_impl(&state, a.repo_id, head_a.clone()).expect("detail in a");
+    let detail = run(get_commit_detail_impl(&state, a.repo_id, head_a.clone())).expect("detail in a");
     assert_eq!(detail.message, "m3-a");
+    // Routing must succeed and B's object store must answer the NotFound:
+    // the git-layer error, not a "No repository opened" routing failure.
     assert!(
-        get_commit_detail_impl(&state, b.repo_id, head_a).is_err(),
+        run(get_commit_detail_impl(&state, b.repo_id, head_a))
+            .unwrap_err()
+            .contains("Failed to find commit"),
         "B is a different repository: A's commit must not resolve there"
     );
 
@@ -187,14 +192,15 @@ fn close_repository_invalidates_only_that_id() {
 
     close_repository_impl(&state, a.repo_id).expect("close a");
     assert_eq!(
-        get_commit_detail_impl(&state, a.repo_id, head_b.clone()).unwrap_err(),
+        run(get_commit_detail_impl(&state, a.repo_id, head_b.clone())).unwrap_err(),
         "No repository opened"
     );
     assert_eq!(
         close_repository_impl(&state, a.repo_id).unwrap_err(),
         "No repository opened"
     );
-    get_commit_detail_impl(&state, b.repo_id, head_b).expect("b still works after a's close");
+    run(get_commit_detail_impl(&state, b.repo_id, head_b))
+        .expect("b still works after a's close");
 
     std::fs::remove_dir_all(&dir_a).expect("clean up temp dir");
     std::fs::remove_dir_all(&dir_b).expect("clean up temp dir");
@@ -238,6 +244,49 @@ fn already_open_reuses_id_and_preserves_session() {
     let seeds = &session.session.as_ref().unwrap().seeds;
     assert_eq!(seeds.len(), 1);
     assert_eq!(seeds[0].name, "main");
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// Spec 4.2 under concurrency: two opens of the same canonical path that
+/// overlap (both pass the dedup lookup before either registers) must still
+/// yield ONE session. The insert re-checks under the repos lock, so the
+/// race loser degrades to the winner: same repo_id, already_open: true.
+/// The assertions hold whichever way the interleaving lands (full race on
+/// the insert re-check, or a staggered second-open dedup hit).
+#[test]
+fn concurrent_opens_of_the_same_path_yield_one_session() {
+    let dir = build_repo("race", "x");
+    let state = Arc::new(AppState::default());
+    let path = dir
+        .to_str()
+        .expect("temp dir must be valid UTF-8")
+        .to_string();
+
+    // Two tasks over the impl function on one shared registry, driven in
+    // parallel on a multi-thread runtime (join! semantics).
+    let (first, second) = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let a = {
+            let state = Arc::clone(&state);
+            let path = path.clone();
+            tokio::spawn(async move { open_repository_impl(&state, path, true).await })
+        };
+        let b = {
+            let state = Arc::clone(&state);
+            let path = path.clone();
+            tokio::spawn(async move { open_repository_impl(&state, path, true).await })
+        };
+        (a.await.expect("join first"), b.await.expect("join second"))
+    });
+
+    let first = first.expect("first open");
+    let second = second.expect("second open");
+
+    // Exactly one registered session, and both callers hold its id.
+    assert_eq!(first.repo_id, second.repo_id);
+    assert_eq!(state.repos.lock().unwrap().len(), 1);
+    // One fresh insert, one already_open degradation (order unknown).
+    assert_ne!(first.already_open, second.already_open);
 
     std::fs::remove_dir_all(&dir).expect("clean up temp dir");
 }

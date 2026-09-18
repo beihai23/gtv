@@ -126,7 +126,11 @@ fn update_view_session(
 /// - A fresh path builds the view, the watcher baseline, and the family
 ///   snapshot from ONE blocking snapshot (so a poll racing the open never
 ///   sees a "change" for the state it produced), inserts a new
-///   RepoSession, and returns `already_open: false`.
+///   RepoSession, and returns `already_open: false`. The final
+///   check+insert is atomic under the repos lock: when two opens of the
+///   same path race, the one that registers first wins and the loser
+///   discards its own snapshot and answers with the winner's id and view
+///   (`already_open: true`) -- exactly one session per canonical path.
 /// - Any error (not a repo, IO) leaves the registry untouched.
 pub async fn open_repository_impl(
     state: &AppState,
@@ -227,20 +231,56 @@ pub async fn open_repository_impl(
     let session = build_session(&result, include_stale);
     let data = result.data;
     let repo_id = state.next_repo_id.fetch_add(1, Ordering::Relaxed);
-    {
+    // Atomic check+insert: the dedup lookup above and this insert straddle a
+    // seconds-scale await, so a concurrent open of the same canonical path
+    // may have registered in between. Re-check under the same lock the
+    // insert takes; the loser drops its freshly built session and degrades
+    // to the winner with already_open semantics (spec 4.2) instead of
+    // registering a duplicate path under a second id.
+    let lost_race: Option<(u64, Option<GitData>)> = {
         let mut repos = state.repos.lock().unwrap();
-        repos.insert(
-            repo_id,
-            RepoSession {
-                reader,
-                path: canonical,
-                view: Some(data.clone()),
-                session: Some(session),
-                include_stale,
-                watch_baseline: Some(fingerprint),
-                family: family.clone(),
-            },
+        let winner = repos
+            .iter_mut()
+            .find(|(_, s)| s.path == canonical)
+            .map(|(id, s)| {
+                let won = (*id, s.view.clone());
+                // Refresh the family snapshot like the dedup path does;
+                // never touch the winner's view/session/settings/baseline.
+                s.family = family.clone();
+                won
+            });
+        if winner.is_none() {
+            repos.insert(
+                repo_id,
+                RepoSession {
+                    reader,
+                    path: canonical,
+                    view: Some(data.clone()),
+                    session: Some(session),
+                    include_stale,
+                    watch_baseline: Some(fingerprint),
+                    family: family.clone(),
+                },
+            );
+        }
+        winner
+    };
+    if let Some((winner_id, view)) = lost_race {
+        // The winner's CURRENT view is authoritative; our own fresh read of
+        // the same path is the fallback for the impossible view-None case.
+        let data = view.unwrap_or(data);
+        *state.active.lock().unwrap() = winner_id;
+        log::info!(
+            "Concurrent open lost the race; repository already open as tab {}",
+            winner_id
         );
+        return Ok(OpenedRepo {
+            repo_id: winner_id,
+            already_open: true,
+            commondir,
+            family,
+            data,
+        });
     }
     *state.active.lock().unwrap() = repo_id;
 
@@ -300,93 +340,113 @@ pub fn set_active_repository(repo_id: u64, state: tauri::State<AppState>) -> Res
     set_active_repository_impl(&state, repo_id)
 }
 
-pub fn get_commit_detail_impl(
+pub async fn get_commit_detail_impl(
     state: &AppState,
     repo_id: u64,
     commit_id: String,
 ) -> Result<CommitDetail, String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session.reader.get_commit_detail(&commit_id)
+    let path = session_path(state, repo_id)?;
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.get_commit_detail(&commit_id)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_commit_detail(
+pub async fn get_commit_detail(
     repo_id: u64,
     commit_id: String,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<CommitDetail, String> {
-    get_commit_detail_impl(&state, repo_id, commit_id)
+    get_commit_detail_impl(&state, repo_id, commit_id).await
 }
 
-pub fn get_file_diff_impl(
+pub async fn get_file_diff_impl(
     state: &AppState,
     repo_id: u64,
     commit_id: String,
     path: String,
 ) -> Result<String, String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session.reader.get_file_diff(&commit_id, &path)
+    let repo_path = session_path(state, repo_id)?;
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&repo_path)?;
+        reader.get_file_diff(&commit_id, &path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_file_diff(
+pub async fn get_file_diff(
     repo_id: u64,
     commit_id: String,
     path: String,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    get_file_diff_impl(&state, repo_id, commit_id, path)
+    get_file_diff_impl(&state, repo_id, commit_id, path).await
 }
 
 /// Two-commit compare (base -> target): file list with real per-file
 /// +/- numbers, running totals, and both-side commit summaries. Read-only.
-pub fn get_compare_detail_impl(
+pub async fn get_compare_detail_impl(
     state: &AppState,
     repo_id: u64,
     base: String,
     target: String,
 ) -> Result<CompareDetail, String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session.reader.compare_detail(&base, &target)
+    let path = session_path(state, repo_id)?;
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.compare_detail(&base, &target)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_compare_detail(
+pub async fn get_compare_detail(
     repo_id: u64,
     base: String,
     target: String,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<CompareDetail, String> {
-    get_compare_detail_impl(&state, repo_id, base, target)
+    get_compare_detail_impl(&state, repo_id, base, target).await
 }
 
 /// Unified diff patch text for one file between two commits (base ->
 /// target). Read-only; same truncation and binary handling as
 /// get_file_diff.
-pub fn get_pair_file_diff_impl(
+pub async fn get_pair_file_diff_impl(
     state: &AppState,
     repo_id: u64,
     base: String,
     target: String,
     path: String,
 ) -> Result<String, String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    session.reader.pair_file_diff(&base, &target, &path)
+    let repo_path = session_path(state, repo_id)?;
+
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&repo_path)?;
+        reader.pair_file_diff(&base, &target, &path)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
-pub fn get_pair_file_diff(
+pub async fn get_pair_file_diff(
     repo_id: u64,
     base: String,
     target: String,
     path: String,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    get_pair_file_diff_impl(&state, repo_id, base, target, path)
+    get_pair_file_diff_impl(&state, repo_id, base, target, path).await
 }
 
 #[tauri::command]
@@ -435,31 +495,46 @@ pub fn get_recent_logs() -> Vec<String> {
     crate::log_buffer::global().snapshot()
 }
 
-pub fn get_branch_list_impl(state: &AppState, repo_id: u64) -> Result<Vec<BranchLane>, String> {
-    let repos = state.repos.lock().unwrap();
-    let session = repos.get(&repo_id).ok_or("No repository opened")?;
-    // Reuse the view built by open_repository / switch_branch / filter so
-    // this stays cheap (no second revwalk + layout on every repo open).
-    let view = session.view.as_ref().ok_or("No repository opened")?;
-    let mut list = session.reader.get_branch_list(view)?;
-
-    if !session.include_stale {
+pub async fn get_branch_list_impl(
+    state: &AppState,
+    repo_id: u64,
+) -> Result<Vec<BranchLane>, String> {
+    // Short lock: clone the inputs (path, the view the lanes are laid out
+    // against, the stale-filter settings), then enumerate on a fresh reader
+    // outside the lock.
+    let (path, view, include_stale, stale) = {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo_id).ok_or("No repository opened")?;
+        // Reuse the view built by open_repository / switch_branch / filter so
+        // this stays cheap (no second revwalk + layout on every repo open).
+        let view = session.view.as_ref().ok_or("No repository opened")?.clone();
         let stale: HashSet<String> = session
             .session
             .as_ref()
             .map(|s| s.stale_names.iter().cloned().collect())
             .unwrap_or_default();
+        (session.path.clone(), view, session.include_stale, stale)
+    };
+
+    let mut list = task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.get_branch_list(&view)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
+
+    if !include_stale {
         list.retain(|b| b.is_tag || !stale.contains(&b.name));
     }
     Ok(list)
 }
 
 #[tauri::command]
-pub fn get_branch_list(
+pub async fn get_branch_list(
     repo_id: u64,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Vec<BranchLane>, String> {
-    get_branch_list_impl(&state, repo_id)
+    get_branch_list_impl(&state, repo_id).await
 }
 
 pub async fn switch_branch_impl(

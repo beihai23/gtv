@@ -81,3 +81,19 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   过（chunk >500kB 警告既有）。types.ts 纯增量（WorktreeMember/OpenedRepo/
   RepoChanged）；types.ts 里 repo-changed "plain string path" 旧注释因纯增量
   红线未同步改写，留 T5 清；mock.html 未碰。
+- Task 1 修复波（评审 Important-1/2 + Nit-1，见 tabs-task-1-review.md）：
+  五个 sync 读命令（get_commit_detail/get_file_diff/get_compare_detail/
+  get_pair_file_diff/get_branch_list）改为 `session_path` 短锁 + 锁外
+  spawn_blocking 短命 reader（照 get_commit_stats_impl 既有主流模式）——多
+  tab 后一次大 diff 不再持全局 repos 锁阻塞他仓全部命令；get_branch_list
+  连同 view/include_stale/stale 集合一并短锁内 clone，行为等价。至此
+  RepoSession.reader 零读方，按简报接口块保留字段本体留给 T2（评审两可，
+  勿留解释注释）。open 的去重检查与 insert 隔着秒级 await 的 TOCTOU：insert
+  前在同一把锁内复查同 canonical path，竞争败者丢弃刚建快照、按 already_open
+  语义返回赢家 id + 现状 view（family 照 dedup 路径回写刷新；败者预领的 id
+  号烧掉，序号留缝无害）。新增并发测试：多线程 runtime 上两个 tokio::spawn
+  任务并行 open 同一路径，断言注册表恰一条 session、两 repo_id 相同、
+  already_open 一真一假——对交错落点不敏感，连跑 8 次稳定。测试 1 跨仓断言
+  收紧为 contains("Failed to find commit")，钉住「路由成功、对象库 NotFound」
+  的偏差 3 语义。门禁：cargo test 65 过 / 2 败（multi_repo 12；2 败仍 tour_repo
+  既有）；npm test 81/81；build 过。
