@@ -163,3 +163,30 @@ export interface TerminalOutput {
 export interface TerminalExit {
   id: number;
 }
+
+// --- Multi-repo tabs (mirrors models.rs) ---
+
+/** One member of a worktree family (main repo or linked worktree sharing
+ *  the same common dir); metadata only, members open lazily. */
+export interface WorktreeMember {
+  name: string;
+  path: string;
+  is_main: boolean;
+}
+
+/** openRepository's return: the view data plus the registry identity the
+ *  frontend needs for tab grouping; mirrors models.rs. */
+export interface OpenedRepo {
+  repo_id: number;
+  already_open: boolean;
+  /** Canonical family key shared by every member of one worktree family. */
+  commondir: string;
+  family: WorktreeMember[];
+  data: GitData;
+}
+
+/** "repo-changed" payload: which registered repository moved. */
+export interface RepoChanged {
+  repo_id: number;
+  path: string;
+}

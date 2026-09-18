@@ -1,10 +1,10 @@
-mod commands;
+pub mod commands;
 pub mod git_reader;
 pub mod layout;
 pub mod log_buffer;
 pub mod models;
 pub mod terminal;
-mod watcher;
+pub mod watcher;
 
 use commands::AppState;
 use log::LevelFilter;
@@ -35,12 +35,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_repository,
+            commands::close_repository,
+            commands::set_active_repository,
             commands::get_commit_detail,
             commands::get_file_diff,
             commands::get_compare_detail,
             commands::get_pair_file_diff,
-            commands::get_current_path,
-            commands::get_current_branch,
             commands::is_valid_git_repo,
             commands::get_branch_list,
             commands::switch_branch,

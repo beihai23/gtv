@@ -232,10 +232,41 @@ pub struct CheckoutAck {
     pub branch: String,
 }
 
+/// One member of a worktree family: the main repository (is_main) or one
+/// linked worktree sharing the same common dir. Metadata only — members
+/// are opened lazily by the frontend's second-level tabs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeMember {
+    pub name: String,
+    pub path: String,
+    pub is_main: bool,
+}
+
+/// open_repository's return: the view data plus the registry identity the
+/// frontend needs — which tab this is (repo_id), whether the open was a
+/// dedup hit on an already-open session, and the family metadata for the
+/// second-level tabs (commondir = canonical family key, shared by every
+/// member of one worktree family).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenedRepo {
+    pub repo_id: u64,
+    pub already_open: bool,
+    pub commondir: String,
+    pub family: Vec<WorktreeMember>,
+    pub data: GitData,
+}
+
+/// "repo-changed" payload: which registered repository moved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoChanged {
+    pub repo_id: u64,
+    pub path: String,
+}
+
 // --- Integrated terminal (bottom panel) ---
 // Event names used with `emit`/`listen`: "terminal-output" (TerminalOutput),
-// "terminal-exit" (TerminalExit), "repo-changed" (plain String path, emitted
-// by the watcher poller in watcher.rs).
+// "terminal-exit" (TerminalExit), "repo-changed" (RepoChanged, emitted by
+// the watcher poller in watcher.rs).
 
 /// Live terminal session handle returned by terminal_spawn.
 #[derive(Debug, Clone, Serialize, Deserialize)]

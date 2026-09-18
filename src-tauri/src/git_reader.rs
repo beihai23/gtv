@@ -190,6 +190,101 @@ impl GitReader {
         Ok(format!("{}|{}", head, refs.join(";")))
     }
 
+    /// Canonical (symlink-resolved) absolute form of this repository's
+    /// working directory. open_repository compares these to dedupe
+    /// spellings of the same directory (alias, symlink) into one session.
+    /// Bare repos (never openable here in practice) fall back to the
+    /// gitdir itself.
+    pub fn canonical_path(&self) -> Result<String, String> {
+        let dir = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+        std::fs::canonicalize(dir)
+            .map_err(|e| format!("Failed to canonicalize repository path: {}", e))
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// Canonical common directory of the worktree family (`<main>/.git`).
+    /// The main repository and every linked worktree report the same
+    /// value, so it is the family key the frontend groups sub-tabs by.
+    pub fn commondir(&self) -> Result<String, String> {
+        std::fs::canonicalize(self.repo.commondir())
+            .map_err(|e| format!("Failed to canonicalize common dir: {}", e))
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// The worktree family this repository belongs to: the main repository
+    /// (is_main) plus every linked worktree registered under the common
+    /// dir. Enumerated through the common dir, so opening any member
+    /// yields the same family. Members whose path is gone or that fail
+    /// libgit2's worktree validation (stale registration, removed
+    /// directory) are skipped with a warning instead of failing the open.
+    /// Sorted main-first, then by name, for a stable presentation.
+    pub fn worktree_family(&self) -> Result<Vec<WorktreeMember>, String> {
+        let mut family: Vec<WorktreeMember> = Vec::new();
+
+        // The main member is derived from the common dir, NOT from
+        // workdir(): opening a linked worktree must still report the MAIN
+        // repository as the family head. The parent of a canonical path is
+        // itself canonical.
+        let common = std::fs::canonicalize(self.repo.commondir())
+            .map_err(|e| format!("Failed to canonicalize common dir: {}", e))?;
+        if let Some(main_dir) = common.parent() {
+            let main_path = std::fs::canonicalize(main_dir)
+                .map_err(|e| format!("Failed to canonicalize main worktree: {}", e))?;
+            let name = main_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            family.push(WorktreeMember {
+                name,
+                path: main_path.to_string_lossy().into_owned(),
+                is_main: true,
+            });
+        }
+
+        let names = self
+            .repo
+            .worktrees()
+            .map_err(|e| format!("Failed to enumerate worktrees: {}", e))?;
+        for name in names.iter().flatten() {
+            let worktree = match self.repo.find_worktree(name) {
+                Ok(worktree) => worktree,
+                Err(e) => {
+                    log::warn!("Worktree {} not found ({}); skipping", name, e);
+                    continue;
+                }
+            };
+            // validate() checks the registered path still exists with the
+            // metadata libgit2 expects; a worktree removed elsewhere is a
+            // skip, not an open failure.
+            if let Err(e) = worktree.validate() {
+                log::warn!("Worktree {} failed validation ({}); skipping", name, e);
+                continue;
+            }
+            let path = match std::fs::canonicalize(worktree.path()) {
+                Ok(path) => path,
+                Err(e) => {
+                    log::warn!(
+                        "Worktree {} path {} failed to canonicalize ({}); skipping",
+                        name,
+                        worktree.path().display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+            family.push(WorktreeMember {
+                name: name.to_string(),
+                path: path.to_string_lossy().into_owned(),
+                is_main: false,
+            });
+        }
+
+        // false sorts before true, so comparing b.is_main against a.is_main
+        // puts the main repo first.
+        family.sort_by(|a, b| b.is_main.cmp(&a.is_main).then_with(|| a.name.cmp(&b.name)));
+        Ok(family)
+    }
+
     /// Preflight snapshot for the checkout confirm dialog (spec 4.1):
     /// uncommitted-change counts plus whether a merge, cherry-pick, or
     /// revert is in progress. Bucketed by git-status-porcelain semantics:
