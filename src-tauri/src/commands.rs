@@ -21,8 +21,8 @@ pub struct ViewSession {
 }
 
 /// One open repository: its reader, its last built view, its pagination
-/// session, and the watcher baseline. Every command routes through a
-/// repo_id into exactly one of these; sessions never share state.
+/// session, its terminal, and the watcher baseline. Every command routes
+/// through a repo_id into exactly one of these; sessions never share state.
 pub struct RepoSession {
     pub reader: GitReader,
     /// Canonical (realpath-resolved) path — the dedup key open_repository
@@ -39,6 +39,11 @@ pub struct RepoSession {
     /// Worktree-family snapshot (git_reader::worktree_family): metadata for
     /// the frontend's second-level tabs, refreshed on repo-changed.
     pub family: Vec<WorktreeMember>,
+    /// This tab's integrated terminal (spec 4.2); None until the panel
+    /// first spawns a shell. No inner Mutex — the repos lock guards it like
+    /// every other field. Dropping the PtySession kills the child (master
+    /// fd closes -> SIGHUP -> the reader reaps and emits "terminal-exit").
+    pub terminal: Option<PtySession>,
 }
 
 pub struct AppState {
@@ -53,10 +58,6 @@ pub struct AppState {
     pub active: Mutex<u64>,
     /// Settings toggle consumed by the fetcher thread (Task 3); default on.
     pub auto_fetch: Mutex<bool>,
-    /// Integrated terminal: still a single global session — Task 2 moves
-    /// it into RepoSession. The terminal commands below take repo_id
-    /// already but only validate it for now (placeholder routing).
-    pub terminal: Mutex<Option<PtySession>>,
 }
 
 impl Default for AppState {
@@ -66,7 +67,6 @@ impl Default for AppState {
             next_repo_id: AtomicU64::new(1),
             active: Mutex::new(0),
             auto_fetch: Mutex::new(true),
-            terminal: Mutex::new(None),
         }
     }
 }
@@ -260,6 +260,7 @@ pub async fn open_repository_impl(
                     include_stale,
                     watch_baseline: Some(fingerprint),
                     family: family.clone(),
+                    terminal: None,
                 },
             );
         }
@@ -305,14 +306,21 @@ pub async fn open_repository(
 }
 
 /// Remove a repository's session (tab close). Unknown ids error like every
-/// other repo-routed command. If the closed repo was the active one,
-/// active goes back to "none" (0) — the frontend names the new active
-/// explicitly. PTY kill-on-close lands with the per-repo terminal (Task 2).
+/// other repo-routed command. The removed RepoSession is bound (NOT
+/// discarded at the remove statement) so its drop — including the tab's
+/// PtySession, whose Drop kills the child: master fd closes -> SIGHUP ->
+/// the reader EOFs, reaps and emits "terminal-exit" — runs after the repos
+/// lock is released. If the closed repo was the active one, active goes
+/// back to "none" (0) — the frontend names the new active explicitly.
 pub fn close_repository_impl(state: &AppState, repo_id: u64) -> Result<(), String> {
-    {
+    let removed = {
         let mut repos = state.repos.lock().unwrap();
-        repos.remove(&repo_id).ok_or("No repository opened")?;
-    }
+        repos.remove(&repo_id).ok_or("No repository opened")?
+    };
+    // Explicit drop: kills the closed tab's terminal; never blocks (Drop
+    // only try_locks the child and closes fds — the reap happens on the
+    // reader thread).
+    drop(removed);
     let mut active = state.active.lock().unwrap();
     if *active == repo_id {
         *active = 0;
@@ -817,8 +825,8 @@ pub async fn get_patch_links(
 }
 
 // --- Integrated terminal (bottom panel) ---
-// repo_id routing is validated but the session itself is still the single
-// global one below; Task 2 moves it into RepoSession (spec 4.2).
+// One session per open repository (spec 4.2): every command routes through
+// repo_id into that repo's RepoSession.terminal, guarded by the repos lock.
 
 /// Spawn (or return the existing) shell session in the given open
 /// repository. Idempotent: a live session is returned as-is, so the
@@ -831,35 +839,55 @@ pub async fn terminal_spawn_impl(
     rows: u16,
     app: &tauri::AppHandle,
 ) -> Result<TerminalInfo, String> {
-    {
-        let repos = state.repos.lock().unwrap();
-        repos.get(&repo_id).ok_or("No repository opened")?;
-    }
+    let app = app.clone();
+    spawn_terminal_in_repo(state, repo_id, cols, rows, move |path, cols, rows| {
+        crate::terminal::spawn_for_app(&app, &path, cols, rows)
+    })
+    .await
+}
+
+/// Per-repo spawn routing shared by the command above and the tests: the
+/// session lands in RepoSession.terminal under the repos lock. `spawner`
+/// builds the PtySession so tests can drive this with plain callbacks
+/// (terminal_pty.rs pattern) instead of a Tauri app handle.
+pub async fn spawn_terminal_in_repo<S>(
+    state: &AppState,
+    repo_id: u64,
+    cols: u16,
+    rows: u16,
+    spawner: S,
+) -> Result<TerminalInfo, String>
+where
+    S: FnOnce(std::path::PathBuf, u16, u16) -> Result<PtySession, String> + Send + 'static,
+{
     // Fast path under a short lock; the guard must be dropped before the
     // await below, or the future stops being Send.
     {
-        let terminal = state.terminal.lock().unwrap();
-        if let Some(session) = terminal.as_ref() {
-            return Ok(session.info());
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo_id).ok_or("No repository opened")?;
+        if let Some(terminal) = session.terminal.as_ref() {
+            return Ok(terminal.info());
         }
     }
-    let path = session_path(state, repo_id)?;
+    let path = std::path::PathBuf::from(session_path(state, repo_id)?);
     // openpty + fork is millisecond-scale, but it still has no business on
     // the main thread — same reasoning as the git commands above.
-    let session = task::spawn_blocking({
-        let app = app.clone();
-        move || crate::terminal::spawn_for_app(&app, std::path::Path::new(&path), cols, rows)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))??;
-    let mut terminal = state.terminal.lock().unwrap();
-    // A racing second spawn can't come from the single frontend caller, but
-    // if it ever does: first session wins, the loser is dropped (killed).
-    if let Some(existing) = terminal.as_ref() {
+    let session = task::spawn_blocking(move || spawner(path, cols, rows))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))??;
+    let mut repos = state.repos.lock().unwrap();
+    // Repo closed while we were spawning: the fresh session drops with this
+    // early return (Drop kills the child) and the caller hears the same
+    // unknown-id error as everywhere else.
+    let repo = repos.get_mut(&repo_id).ok_or("No repository opened")?;
+    // A racing second spawn for the SAME repo can't come from the single
+    // frontend caller, but if it ever does: first session wins, the loser
+    // is dropped (killed).
+    if let Some(existing) = repo.terminal.as_ref() {
         return Ok(existing.info());
     }
     let info = session.info();
-    *terminal = Some(session);
+    repo.terminal = Some(session);
     Ok(info)
 }
 
@@ -874,14 +902,14 @@ pub async fn terminal_spawn(
     terminal_spawn_impl(&state, repo_id, cols, rows, &app).await
 }
 
-/// Forward keystrokes/paste from xterm.js to the PTY.
+/// Forward keystrokes/paste from xterm.js to the repo's PTY. Fast path:
+/// route under the repos lock and forward the bytes right there (the pty
+/// write never blocks meaningfully).
 pub fn terminal_write_impl(state: &AppState, repo_id: u64, data: String) -> Result<(), String> {
-    {
-        let repos = state.repos.lock().unwrap();
-        repos.get(&repo_id).ok_or("No repository opened")?;
-    }
-    let terminal = state.terminal.lock().unwrap();
-    terminal
+    let repos = state.repos.lock().unwrap();
+    let session = repos.get(&repo_id).ok_or("No repository opened")?;
+    session
+        .terminal
         .as_ref()
         .ok_or("No terminal session")?
         .write_all(&data)
@@ -896,14 +924,13 @@ pub fn terminal_write(
     terminal_write_impl(&state, repo_id, data)
 }
 
-/// Sync the PTY size after a frontend fit().
+/// Sync the repo's PTY size after a frontend fit(). Fast path like write:
+/// route under the repos lock and resize right there.
 pub fn terminal_resize_impl(state: &AppState, repo_id: u64, cols: u16, rows: u16) -> Result<(), String> {
-    {
-        let repos = state.repos.lock().unwrap();
-        repos.get(&repo_id).ok_or("No repository opened")?;
-    }
-    let terminal = state.terminal.lock().unwrap();
-    terminal
+    let repos = state.repos.lock().unwrap();
+    let session = repos.get(&repo_id).ok_or("No repository opened")?;
+    session
+        .terminal
         .as_ref()
         .ok_or("No terminal session")?
         .resize(cols, rows)
@@ -919,15 +946,13 @@ pub fn terminal_resize(
     terminal_resize_impl(&state, repo_id, cols, rows)
 }
 
-/// Kill the session (restart button). Dropping the PtySession closes the
-/// master fd → SIGHUP → the reader thread EOFs, reaps and emits
-/// "terminal-exit".
+/// Kill the repo's session (restart button). Setting the slot to None
+/// drops the PtySession, which closes the master fd → SIGHUP → the reader
+/// thread EOFs, reaps and emits "terminal-exit".
 pub fn terminal_kill_impl(state: &AppState, repo_id: u64) -> Result<(), String> {
-    {
-        let repos = state.repos.lock().unwrap();
-        repos.get(&repo_id).ok_or("No repository opened")?;
-    }
-    *state.terminal.lock().unwrap() = None;
+    let mut repos = state.repos.lock().unwrap();
+    let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
+    session.terminal = None;
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: in-progress
-commits: []
+commits: [55ca115, 58473ff]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -97,3 +97,31 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   收紧为 contains("Failed to find commit")，钉住「路由成功、对象库 NotFound」
   的偏差 3 语义。门禁：cargo test 65 过 / 2 败（multi_repo 12；2 败仍 tour_repo
   既有）；npm test 81/81；build 过。
+- Task 2（Rust：终端四命令 per-repo + close 联动 kill）：过渡态
+  AppState.terminal 全局字段删除，PtySession 落 `RepoSession.terminal`（裸
+  Option，无内层 Mutex——repos 锁即其保护，构造点唯一：open insert 处
+  terminal: None）。spawn 路由拆出 pub `spawn_terminal_in_repo<S>`：spawner
+  闭包注入（`FnOnce(PathBuf, u16, u16) -> Result<PtySession, String> + Send +
+  'static`），生产 terminal_spawn_impl 委托时注入 spawn_for_app 闭包（签名
+  不动，对 Wry 调用者 byte 等价），测试注入裸 spawn_pty + mpsc 回调——动因：
+  terminal_spawn_impl 要 &AppHandle 而集成测试造不出真 Wry handle，注入法让
+  全部路由语义（幂等/first-wins/close 竞态/未知 id）可测且 terminal.rs 本体
+  零改动。语义注释逐条照搬：快路径短锁（guard 必须在 await 前落下，否则
+  future 不 Send）；spawn 完成重锁 get_mut 后 first-wins（同仓竞争 spawn 先到
+  者赢，败者随 drop 被 kill）。**spawn 期间仓被 close** 是 per-repo 存储逼出
+  的语义精化：旧全局存储会把新 session 照样塞进全局（任何仓复用），现在
+  无处可存 → 随 `?` 早退当场 drop（kill）+ 统一 "No repository opened"。
+  write/resize 快路径：单次 repos 锁内路由转发（原「repo 校验 + terminal
+  锁」两段合一，错误优先级不变：先 No repository opened 后 No terminal
+  session）。kill：slot 置 None（drop=kill 注释保留）。close_repository 的
+  kill 验证：HashMap::remove 返回值显式绑定到块外 drop——`?;` 丢弃其实也
+  当场 drop，但绑定把「kill 发生在 repos 锁释放之后」写死成代码事实；Drop
+  只 try_lock child + 关 master fd（不阻塞、无线程 join），reap 与 exit 事件
+  在 reader 线程异步完成。测试独立成 tests/terminal_multi.rs（5 例，简报二
+  选一取独立文件，multi_repo.rs 保持 git 注册表专注）：两仓 spawn id 异且
+  单调 + 各落各 slot；输出隔离（各 printf marker，断言只出现在自己回调流，
+  对向 1.5s 静默窗反证）；close(A) → A 子进程 5s 内死（exit 回调收 id）+
+  write/resize Err + B 存活 write Ok；同仓二次 spawn 同 id（注入必败 spawner
+  反证不再 spawn），kill 后 respawn 新 id；未知 repo_id 四命令 Err。门禁：
+  cargo test 70 过 / 2 败（新增 5；2 败仍 tour_repo 既有）；npm test 81/81；
+  build 过。
