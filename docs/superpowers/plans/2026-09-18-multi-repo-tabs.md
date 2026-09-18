@@ -17,7 +17,7 @@
 - App.tsx TDZ 地雷（M1.3）：新 memo/handler 声明先于使用。
 - i18n en/zh 双侧同步；插值走 `t(key, vars)`。
 - E2E：mock.html，dev server **1421**（先探测；用户 1420 绝不碰）；gstack browse CLI `$HOME/.claude/skills/gstack/browse/dist/browse`；`fill` 不是 `type`。
-- commit trailer：`Backstory: docs/work-backstory/multi-repo-tabs.md` 紧贴 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`（无空行，最后）。backstory Task 1 建档（frontmatter：arc/started/status/commits:[]，sha 由后续 docs commit 回填）。
+- commit trailer：`Backstory: docs/work-backstory/multi-repo-tabs.md` 紧贴 `Co-Authored-By: Claude Code <noreply@anthropic.com>`（无空行，最后）。backstory Task 1 建档（frontmatter：arc/started/status/commits:[]，sha 由后续 docs commit 回填）。
 - 断言计数落笔前重数；E2E 期望值回查 fixture 真态（M2/M3 双教训）。
 
 ---

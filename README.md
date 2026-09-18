@@ -64,14 +64,25 @@ from the commit graph itself.
   and per-file diffs
 - Settings (`⌘,`): Chinese/English UI, five preset themes (Midnight, Nord,
   Dracula, Solarized Dark, GitHub Light)
-- Remembers your last repository
+- Multi-repo tabs: several repositories side by side in one window — every
+  tab (including its terminal and view state) is restored on the next launch,
+  worktree families group into second-level tabs, and dropping a repository
+  folder anywhere on the window opens it
 
-**Read-only, one deliberate exception.** gtv does not modify your repository —
-the only write it ever performs is a branch switch you explicitly confirm:
-compatible uncommitted changes are carried over safely, and if they conflict
-with the target branch the switch fails cleanly, before writing anything.
-Nothing is discarded or force-overwritten. The integrated terminal is a plain
-shell where you type your own commands; that is you working, not gtv writing.
+**Read-only, two deliberate exceptions.** gtv does not modify your
+repository — the only writes it ever performs are a branch switch you
+explicitly confirm (compatible uncommitted changes are carried over safely,
+and if they conflict with the target branch the switch fails cleanly,
+before writing anything; a branch already checked out by another worktree
+of the same family is refused up front) and a background auto-fetch of the
+active tab's remotes every 60 s, which updates tracking refs
+(+auto-followed tags) & objects & FETCH_HEAD only — never your worktree,
+local branches, HEAD, or stash. Nothing is discarded or force-overwritten.
+The fetch shells out to your system `git`, so your credential helpers,
+ssh-agent, and proxy settings apply as-is; when it fails (offline, private
+HTTPS without credentials) it stays silent and tries again on the next
+tick. The integrated terminal is a plain shell where you type your own
+commands; that is you working, not gtv writing.
 
 ## Download
 

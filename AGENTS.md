@@ -8,11 +8,15 @@ fork point, and folds back into its parent at a merge. It reconstructs branch li
 from pure git data — no server, no metadata store, no account. Inspired by gmaster's
 Branch Explorer, but an independent codebase.
 
-gtv is **read-only by design, with exactly one sanctioned write**: a branch
+gtv is **read-only by design, with exactly two sanctioned writes**: a branch
 switch the user explicitly confirms (`checkout_branch` — SAFE mode: compatible
 uncommitted changes are carried over, never forced; a merge/cherry-pick/revert
-in progress is refused). That single exception is the entire write surface.
-Do not add any other path that mutates the repository.
+in progress is refused; a branch already checked out by a sibling worktree of
+the same family is refused up front) and a background auto-fetch of the active
+tab's remotes (`fetch_remotes` — updates tracking refs (+auto-followed tags)
+& objects & FETCH_HEAD only, never the worktree/local branches/HEAD/stash).
+Those two exceptions are the entire write surface. Do not add any other path
+that mutates the repository.
 
 ## Tech stack
 
@@ -42,32 +46,54 @@ src-tauri/src/
                   on models so it is unit-testable with hand-built graphs
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
                   (walk_commits + load_more pagination), lazy diff stats,
-                  worktree status + SAFE branch checkout (the one sanctioned
-                  write) and two-commit compare; feeds layout::compute_layout
-                  and returns GitData; change_fingerprint powers the
-                  repo-change poller
-  commands.rs     #[tauri::command] handlers + AppState (Mutex-guarded current
-                  repo/path/branch/view + pagination ViewSession + the live
-                  PtySession)
+                  worktree status + SAFE branch checkout (the first
+                  sanctioned write; refuses branches held by sibling
+                  worktrees) and two-commit compare; the second sanctioned
+                  write, auto-fetch, runs the SYSTEM git subprocess
+                  `git -C <path> fetch --all --quiet` (2026-09-18 user
+                  decision: credential fidelity + zero native-dep risk;
+                  libgit2 stays default-features = off) and returns a
+                  one-line failure summary; change_fingerprint powers the
+                  repo-change poller; feeds layout::compute_layout and
+                  returns GitData
+  commands.rs     #[tauri::command] handlers + AppState (repos registry:
+                  repo_id -> RepoSession with view + pagination
+                  ViewSession + terminal, plus active/auto_fetch);
+                  rebuild_view is the shared refresh path and never writes
+                  include_stale
   terminal.rs     integrated-terminal engine: portable-pty spawn/write/resize,
                   reader + flusher threads (8ms output coalescing), login-shell
                   resolution; spawn_pty takes plain callbacks so tests run
                   without a Tauri app
-  watcher.rs      repo-change poller thread: fingerprints the open repo every
-                  1.5s and emits "repo-changed" so the frontend reloads
+  watcher.rs      repo-change poller thread: fingerprints EVERY open
+                  repository every 1.5s (multi-repo) and emits
+                  "repo-changed" per repo so the frontend reloads; the CAS
+                  write-back lives in the pure apply_fingerprints seam
+  fetcher.rs      auto-fetch thread: 60s tick fetching the ACTIVE tab's
+                  remotes (busy-skip, auto_fetch gate, silent failure log)
 src-tauri/tests/
   layout_pure.rs  10 pure-graph algorithm tests (no git repo involved)
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
+                  (pre-existing failures in fresh clones: the fixture is a
+                  contentless gitlink)
   relative_worktrees_ext.rs  regression: repos created by git >= 2.48
                   `worktree add --relative-paths` must open (libgit2 >= 1.9.4)
+  multi_repo.rs   the multi-repo registry: repo_id routing isolation,
+                  canonical-path dedup (symlink, races), worktree families,
+                  close/active semantics, auto-fetch ticks over file://
+                  remotes (write-surface whitelist acceptance), the
+                  include_stale single-writer pin, and the watcher CAS race
+  terminal_multi.rs  per-repo terminals: spawn routing/idempotency, output
+                  isolation, close-linked kill, unknown ids
   pagination.rs   builds a temp repo via the git CLI and pages through it in
                   small chunks: paged result must equal the full walk, the
                   loaded set must stay downward-closed, and excluded stale
                   seeds must never be loaded
   checkout.rs     the M3.1 write path (temp repos via the git CLI): SAFE branch
                   checkout — clean switch, dirty carry-over, conflict refusal
-                  with zero side effects, merge/revert-in-progress refusal —
-                  plus worktree-status bucket counts (staged/untracked/MM)
+                  with zero side effects, merge/revert-in-progress refusal,
+                  cross-worktree occupancy guard — plus worktree-status
+                  bucket counts (staged/untracked/MM)
   compare.rs      two-commit compare (file list with per-file +/−, line-level
                   patches, empty diff, unknown oids) + head_branch branch/
                   detached states + regression pins for the parent-vs-commit
@@ -90,13 +116,21 @@ src/
   settings.tsx    Settings context: zh/en i18n dictionaries + preset theme
                   palettes (CSS custom properties applied to :root; App.css
                   consumes them via var(--x)), persisted in localStorage
-                  (gtv_lang / gtv_theme / gtv_show_stale)
+                  (gtv_lang / gtv_theme / gtv_show_stale / gtv_hide_remotes /
+                  gtv_inactive_days / gtv_autofetch)
+  tabs.ts         pure tab-shell state: commondir grouping, next-active
+                  after close, gtv_tabs persist/restore (legacy
+                  gtv_latest_repo migration, read-once)
   terminalSize.ts bottom-terminal height clamp + persistence (gtv_term_height)
   compare.ts      compare-pairing pure functions: nextPair (Ctrl+click
                   base/target state machine) + headToLaneTip (pair for the
                   lane-menu "compare with HEAD" item)
-  App.tsx         top-level state: repo opening, branch panel, view options,
-                  terminal toggle (Ctrl+`) + repo-changed refresh
+  App.tsx         tab shell: open funnel (picker/Cmd+T/drag-drop/restore all
+                  through openTab with backend dedup), two-level tab bar,
+                  family snapshots + repo-changed refresh, restore, error strip
+  RepoView.tsx    per-repo view body (one instance per tab, kept alive via
+                  display:none): data state, display pipeline, handlers,
+                  header/toolbar, panels, per-tab terminal
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel
@@ -111,9 +145,11 @@ src/
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
                                 session alive while hidden (VSCode-style),
                                 drag-resize handle, restart/exited states
-mock.html         browser-only preview harness: mocks window.__TAURI_INTERNALS__
-                  and feeds public/mock-data.json, so the frontend can be debugged
-                  in a plain browser without the Rust backend
+mock.html         browser-only preview harness + living contract document for
+                  the multi-repo frontend surface: mocks window.__TAURI_INTERNALS__
+                  (registry semantics, events, terminals, per-repo views) and
+                  feeds public/mock-data.json, so the frontend can be debugged
+                  and E2E-driven in a plain browser without the Rust backend
 docs/
   roadmap.md / design-v2.md / gmaster-research.md   design docs (written in Chinese)
   reference/gmaster-tour    archived real git repo used as the test fixture
@@ -140,10 +176,11 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 81 cases: `src/inactive.test.ts`, `src/locate.test.ts`,
-`src/related.test.ts`, `src/daterange.test.ts`, `src/refs.test.ts`,
-`src/persist.test.ts`, `src/terminalSize.test.ts`, `src/compare.test.ts`);
-all other automated testing lives in Rust.
+(`npm test`, 105 cases across 10 files: `src/inactive.test.ts`,
+`src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
+`src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
+`src/compare.test.ts`, `src/tabs.test.ts`,
+`src/components/minimap.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy
 
@@ -191,24 +228,33 @@ all other automated testing lives in Rust.
   decoded to bytes on the frontend, never treated as a lossy string.
 - Lane colors come from one place: `layout::lane_color` (lane 0 = main blue,
   others rotate through `LANE_PALETTE`). Don't invent colors elsewhere.
-- The frontend persists the last opened repo path in `localStorage`
-  (key `gtv_latest_repo`).
+- The frontend persists the open tab list in `localStorage` (key `gtv_tabs`,
+  `{ members: [{path, commondir}], active }`); a legacy `gtv_latest_repo`
+  single value migrates into a one-member restore, read-once.
 - Language: code comments, README, and this file are English; the design docs in
   `docs/` (roadmap.md, design-v2.md, gmaster-research.md) are written in Chinese.
   Match the language of the file you are editing.
 
 ## Security considerations
 
-- The app is **read-only by design, with exactly one sanctioned write**:
+- The app is **read-only by design, with exactly two sanctioned writes**:
   `checkout_branch` — a branch switch the user explicitly confirms after a
   dirty-worktree preflight dialog. It is SAFE-mode only (compatible uncommitted
   changes are carried over; a conflict aborts cleanly before anything is
-  written; `force` appears nowhere in the codebase) and it refuses while a
-  merge/cherry-pick/revert is in progress. Outside that single command,
-  `GitReader` only opens repos and walks history/diffs; there is intentionally
-  no other write path. Do not add commands that mutate the user's repository —
-  that red line is unchanged and absolute. All of gtv's own git access stays
-  inside git2 (no shelling out to `git`).
+  written; `force` appears nowhere in the codebase), it refuses while a
+  merge/cherry-pick/revert is in progress, and it refuses a branch already
+  checked out by a sibling worktree (git's own occupancy rule, mirrored). The
+  second write is the fetcher's auto-fetch of the active tab's remotes:
+  `git -C <path> fetch --all --quiet` as a subprocess with the inherited
+  environment — the ONE place gtv shells out to `git` (2026-09-18 user
+  decision: the user's credential helpers/ssh-agent/proxy apply verbatim,
+  and libgit2's transports would add openssl-sys/libssh2 native deps). Its
+  write surface is tracking refs (+auto-followed tags) & objects &
+  FETCH_HEAD only; `--prune` is deliberately absent, and failures are one
+  silent log line. Outside those two paths, `GitReader` only opens repos
+  and walks history/diffs; there is intentionally no other write path. Do
+  not add commands that mutate the user's repository — that red line is
+  unchanged and absolute. All other git access stays inside git2.
 - The integrated terminal (`terminal.rs` + `TerminalPanel.tsx`) is the other
   deliberate exception: a **user-driven login shell** in a PTY. The user typing
   write commands there is the feature itself — gtv never feeds commands into it

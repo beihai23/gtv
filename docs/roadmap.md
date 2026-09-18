@@ -51,7 +51,12 @@
 **定位决策（2026-08-29，历史记录）**：gtv 保持只读，仅开两个例外——切换
 当前分支（3.1，须带脏工作区确认）与分支/提交对比（3.2，纯读）。其余实质
 性写操作（从节点建分支、merge、cherry-pick、rename/delete 等，原 3.3）
-**不做**。多仓库标签页：先不做，等真实使用场景出现再立项。落地 3.1 时需
+**不做**。多仓库标签页：~~先不做，等真实使用场景出现再立项~~ 已于
+2026-09 立项落地（multi-repo-tabs arc：多仓多 tab + worktree 二级 tab +
+统一去重 + 激活 tab 自动 fetch + 全量恢复；spec
+`docs/superpowers/specs/2026-09-18-multi-repo-tabs.md`，backstory
+`docs/work-backstory/multi-repo-tabs.md`；只读边界随之放宽为 checkout +
+后台 fetch 两个例外）。落地 3.1 时需
 同步放宽 README / AGENTS.md 只读承诺措辞的待办，已随本 arc 收尾完成
 （"除显式确认的 checkout 外不修改仓库"级语义；集成终端里用户自敲命令
 照旧不算 gtv 写仓库）。

@@ -1,8 +1,8 @@
 ---
 arc: multi-repo-tabs
 started: 3fdcc4e
-status: in-progress
-commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3, b3143a8, 5dfa328, 597320e]
+status: resolved
+commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3, b3143a8, 5dfa328, 597320e, fc39526, 8596902, e303868, f73cf3c]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -517,3 +517,130 @@ tour_repo 既有 gitlink NotFound，无漂移）。E2E 全程 1421 端口
 - [ ] macOS 菜单：⌘W 关活动 tab（菜单 emit close-active-tab 路径），
       ⌘Q 退出，剪贴板快捷键（repo-info/commit 面板复制）。
 - [ ] 真终端会话：面板内真实 shell 交互 + ⟳ 重启 + 关 tab 杀会话。
+
+### Process — Task 8：终波（transport 落地 + 修复波 + 文档收口，三 commit）
+
+opus 终审 **READY-WITH-WAVE**（零 Critical，缝合点全过：open->watcher->
+refresh 单路径、close->kill->resync、锁纪律、契约测试）；I-1 transport 经
+AskUserQuestion 交用户裁决 → **subprocess**（2026-09-18）。
+
+- **Commit 1（e303868）fetch 传输层落地**：fetch_remotes 重写为
+  `git -C <path> fetch --all --quiet` 子进程——环境继承（credential
+  helper 依赖用户 env）、stdout null、stderr 由 reader 线程持续吸干
+  （管道满不阻塞子进程）、try_wait 轮询 120s 超时 kill（挂死 fetch 不能
+  永久占住 fetcher busy 标志）、结果 join 经 recv_timeout 有界（孙进程
+  持 fd 也不能挂死调用线程）；返回 `Result<Option<String>, String>`
+  （Ok(None)=干净；Ok(Some)=exit code + stderr 尾部三行折叠的单行摘要，
+  spawn 失败同路径）；**删除** Cred::ssh_key_from_agent 与 libgit2
+  remote 循环；Cargo.toml 注释块改记决策（git2 依赖行不动）。
+  fetcher `Fetched(Vec<String>)` → `Fetched(Option<String>)`。
+  **`git fetch --all` 坏 remote 实证记录**（git 2.x 本机）：单 remote
+  坏 → exit 1、stdout 空、stderr 尾行 "error: could not fetch dead"、
+  好 remote 照常落地（测试按此断言：exit 1 进摘要 + tail 含 dead 名 +
+  origin 新 tip 落地）；干净 fetch → exit 0 双流空、写 FETCH_HEAD。
+  写面断言（HEAD/本地分支/worktree 字节不变）逐字节保留——白名单验收
+  本身。**超时路径测试 skip**：造挂死 fetch 需在 PATH 放假 git，而
+  fetch_remotes 继承进程 env，注入即污染并行测试的全局状态（无 env
+  注入缝）；120s kill 逻辑走代码评审而非测试。
+- **Commit 2（f73cf3c）修复波 11 项**（每项独立 hunk）：
+  1. F1 焦点窃取：onUnavailable 提 useCallback，恢复 ensureSession
+     memo 化（E2E：locate 六键 0 次 terminal_spawn、焦点留在输入框）。
+  2. F2 minimap NaN：viewportRect 零/非有限宽守卫（真触发 = 隐藏
+     keep-alive Timeline 的 clientWidth 0 → f=6/0=Inf → NaN rect）；
+     新开 src/components/minimap.test.ts（触发复现 + 宽高比/6px 下限
+     sanity 四例）。
+  3. FR-I1 worktree 占用守卫（spec 6-6 落实）：checkout_branch 前枚举
+     家族非自身成员读其 HEAD 分支，目标命中 → Err 措辞镜像 git
+     （"branch '<name>' is already checked out at '<path>'"）走既有
+     错误通道；单 worktree 家族零成本跳过；checkout.rs 新测试（A 开
+     feat 后 B checkout feat → Err 写前零变化；checkout other → Ok）。
+  4. FR-L4 粘性背离：commands.rs 拆 `rebuild_view(state, repo_id)`
+     （**永不写** include_stale）；set = 短锁写 flag（值不同才写）+
+     rebuild；refresh = 纯 rebuild。flag 从此单写者，交错窗口无法复活
+     旧值。测试 planted flag 双向钉死（refresh 后 flag 原值不动）。
+  5. FR-L5 回滚误伤：closeTab 清该 repo 的 familyTimers 挂起项
+     （delete + clearTimeout），防 500ms 防抖的 refreshFamily 回滚杀掉
+     刚重开的 tab。
+  6. FR-L3：settings.tsx "restarts as false" 假注释改为真实语义
+     （后端默认 TRUE，同步 effect 启动职责是 OFF 方向，fc39526 同款）。
+  7. fetcher：Skip → **Failed** 改名（实证语义：该分支恒为失败非良性
+     跳过）；新测试（仓仍注册但 clone 目录被删 → tick=Failed 且 busy
+     复位，二次 tick 有界同败）；N-6 非 UTF-8 remote 名随子进程重写自然
+     消解（stderr 摘要走 from_utf8_lossy）。
+  8. FR-N7 mock：terminal_spawn 幂等（同仓存活会话返回同 id，不叠横幅，
+     镜像后端 re-attach）；种子真 first-visit（持久 gtv_mock_seeded
+     标志取代一次性 noseed：关光 tab + reload 回 welcome；reset 重置
+     标志保空态场景）；注册表键加"裸 path 字符串 vs 后端 canonical
+     realpath"近似注释。
+  9. T6 清尾：错误条 dismiss ×（清 openError/openErrorPath，E2E 验证）；
+     `.wt-chip.current:hover` 特异度压制（current 原与 :hover 同特异度
+     源序落败、悬停零反馈）；drag-overlay z-200 盖模态处一行裁定注释
+     （拖放进行时的全窗高亮优先于模态，瞬时决定）。
+  10. FR-L6 watcher CAS：回写段抽为纯函数 `apply_fingerprints(repos,
+      snapshot, next, changed) -> Vec<RepoChanged>`；新测试钉死 open
+      重置基线后陈旧快照的回写不得复活基线/不得 emit（含匹配快照的
+      对照侧：写新基线 + 恰一事件）。
+  11. **明确不修（裁定记录）**：T5-L1 组关闭孤儿（概率极低 + 无回收
+      面，接受）；T6-L2 多拖错误单槽（接受：retry 取最后失败 + issue
+      缓冲留痕）；N3 + 按钮随滚（接受）；N-4/N-7（跳过）。
+  门禁：cargo **86 过 + 2 败**（2 败仍 tour_repo contentless gitlink
+  既有，零漂移；新增 4 = checkout 守卫 1 + multi_repo 3）；npm
+  **105/105**（101 + minimap 4）；build 绿。E2E 冒烟（1421 纪律：
+  探测先行、strictPort、用毕按 PID 杀净、1420 全程未碰）：场景 a
+  空态、FR-N7 种子闭环（首访种子→关光 tab→reload→welcome）、场景 k
+  终端（每仓恰一 spawn、关/开后重开 re-attach 同 id 不叠横幅、写按
+  repoId 路由隔离、无 console error）、错误条 retry + dismiss。
+- **Commit 3（本 commit，hash 自引用不录）**：README 写白名单第二例外
+  （措辞 "tracking refs (+auto-followed tags) & objects & FETCH_HEAD
+  only"）+ "Remembers your last repository" → 多 tab 全恢复/二级 worktree
+  tab/拖放；AGENTS 同例外 + watcher 多仓描述 + tests 清单补
+  multi_repo.rs/terminal_multi.rs + src 清单补 tabs.ts/RepoView.tsx +
+  settings 键三枚 + 测试计数 105/10 文件 + gtv_latest_repo 陈述更正为
+  gtv_tabs + "从不 shell out" 陈旧声明更正；roadmap 54 行立项注记；
+  spec 文末 Amendments 节（5.1 偏差、5.3 键对齐、6-6 守卫确认、fetch
+  决策记录）；真机清单收口汇总（下节）；plan 文档 trailer 行更正
+  （"Claude Fable 5" → Claude Code）。
+
+## 真机用户手册清单（Task 8 收口汇总；取代上面 Task 7 的散列清单）
+
+- [ ] 拖放开仓：真仓库文件夹拖到窗口任意位置 → 全窗 drop 遮罩出现 →
+      松手开仓；多文件夹依次开；非仓普通文件落 repoOpenFailed 错误条
+      不崩；错误条可 retry、可 × 关闭。
+- [ ] 真实网络 fetch（激活 tab 每 60s 自动）：SSH agent 仓、公有 HTTPS
+      仓的新提交在 ≤60s 内落进 refs/remotes 并触发视图刷新链。
+- [ ] **离线启动**：fetch 静默失败（单行 log），本地功能完全不受影响。
+- [ ] auto-fetch 生效延迟：开关切换/换激活 tab 后 ≤60s（下一 tick）
+      生效；后端默认开，设置里关掉后重启不会被重新打开。
+- [ ] **私有 HTTPS 无凭证**：静默不刷新、不弹窗（如实行为，非 bug）。
+- [ ] mac 菜单：⌘W 只关激活 tab（close-active-tab emit 路径，窗口
+      存活）；零 tab 时 ⌘W 无操作；⌘Q 退出；⌘C/⌘V/⌘Z 在输入框可用
+      （Edit 菜单保留）。
+- [ ] **worktree 跨成员 checkout 冲突：现在会报错拒绝**——成员 A 开着
+      feat，成员 B 尝试 checkout feat → 错误条
+      "branch 'feat' is already checked out at '<A 路径>'"（gtv 前置
+      守卫，镜像 git CLI 措辞，任何写入之前）；B checkout 其他分支
+      照常成功。
+- [ ] 终端随 tab 关闭终止：关 tab 杀该 tab 的 PTY 会话；⟳ 重启换新
+      会话；面板隐藏（保活）期间会话与回滚存活。
+- [ ] restore 中途崩溃截断：恢复循环中强退，下次启动只恢复崩溃前已
+      成功打开并持久化的部分（失败成员走错误条，不阻塞其他）。
+- [ ] 窗口 resize + 终端开着：minimap 视口框不再报 `<rect>` NaN 属性
+      错误（F2 修复后）。
+
+## Lessons
+
+- **简报的事实性前提同样要实证**。T6 简报把 auto_fetch 后端默认值写反
+  （实际 true 写成 false）、终审材料写错 git2 当年关 default features
+  的原因——两处都是实现者照抄未核实。简报不是事实来源，是待核实的
+  主张；对每条"现状"前提先 grep 代码再落笔，核实责任在实现者。
+- **对抗评审的再定性价值**。T7 的 F1/F2（内联回调失忆、隐藏 keep-alive
+  零宽）与终审的 L4（refresh 同值回写可复活旧 flag）都不是"发现新
+  事实"，而是对既有代码的**再定性**：同样的事实换一个视角（每次渲染
+  的引用稳定性、display:none 下的测量值、同值写也是写）就是缺陷。
+  评审最有价值的产出常常不是新事实，而是推翻旧定性。
+- **原生依赖决策用 scratch 交叉编译实验定案，不凭记忆**。
+  openssl-sys/libssh2 矩阵是否破坏 macOS universal 交叉编译，凭记忆
+  转述的都是传闻级证据；本次 transport 裁决最终以"fetch 走系统 git
+  子进程、读仓保持 default-features=false"绕开整个矩阵，但支撑裁决的
+  证据链来自此前真做过的 scratch 交叉编译实验——决策记录里写的是
+  实验结论，不是回忆。

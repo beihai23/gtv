@@ -142,3 +142,38 @@ models.rs ↔ types.ts 同 commit 镜像（repo_id 字段、RepoChanged payload�
 6. 前端：拖放 + per-tab 终端收尾 + autoFetch 设置开关 + i18n + CSS。
 7. mock 多仓/worktree 桩 + E2E。
 8. opus 终审 + 修复波 + 文档收尾（README/AGENTS 只读措辞二次放宽：checkout + 后台 fetch 两例外；roadmap 多 tab 立项落地）。
+
+## Amendments（2026-09-18，Task 8 收口时追加；原文不改）
+
+- **§5.1 恢复失败呈现（已裁定的偏差）**：原设计"成员 open 失败 → 该成员
+  呈错误态（重选/关闭），不阻塞其他"。实际落地为 **App 级错误条**
+  （repoOpenFailed 前缀 + 原始后端消息 + retry 按钮；其余成员照常打开）。
+  恢复成员是数据（路径）而非 UI 态，为它引入 per-tab 错误态需要 App 与
+  RepoView 之间新的契约面；App 级错误条已被 T6 i18n 与 T7 E2E 场景 l 钉成
+  契约。接受该偏差。
+- **§5.3 键名清单与实际对齐**：设计列出的 `newTab` / `welcomeOpen` 由
+  `openRepo` 等价覆盖——空态入口是欢迎页大按钮（welcomeTitle /
+  welcomeSubtitle / welcomeHint / welcomeDropHint 均已落地），新 tab 入口
+  是 tab 栏 `+` 按钮（title 用 openRepo）与 Cmd/Ctrl+T。清单其余键
+  （closeTab / closeTabGroup / mainWorktree / repoOpenFailed / retry /
+  dropToOpen / autoFetch 等）全部按清单实现，另有 close-active-tab 菜单
+  项（macOS 菜单路径）不占 i18n 键。
+- **§6-6 措辞确认（实现强于设计）**：设计预期"分支被兄弟 worktree
+  checkout：本成员 checkout 该分支 → git 拒绝 → 错误通道呈现（无预防
+  UI）"。libgit2 的 `checkout_tree` 实际**没有** git CLI 的占用拒绝
+  （终审 FR-I1 发现：同族两成员可静默双开同一分支），gtv 在
+  `checkout_branch` 里前置了同语义守卫：枚举家族非自身成员、目标分支名
+  命中其 HEAD 即 Err，措辞镜像 git（"branch '<name>' is already checked
+  out at '<path>'"），走既有 checkout 错误通道呈现——仍然无预防 UI，
+  约束保持，拒绝时机提前到任何写入之前。
+- **fetch 传输层决策记录（终审 I-2，用户 2026-09-18 裁决：subprocess）**：
+  §4.3 的"默认 credential callback"（libgit2 传输）改为**系统 git 子进程**
+  `git -C <path> fetch --all --quiet`。理由：凭证保真（credential
+  helper / ssh-agent / 代理 / 企业 CA 全部继承用户 git 环境与配置）；
+  四平台 CI 零原生依赖风险（libgit2 的 https/ssh 传输会拉
+  openssl-sys / libssh2，正是破坏 macOS universal 交叉编译的矩阵——以
+  scratch 交叉编译实验定案）。写面语义不变：tracking refs
+  （+auto-followed tags，git 默认跟随）& objects & FETCH_HEAD only，
+  `--prune` 禁用；有界等待（120s 超时 kill，防网络挂死占住 fetcher
+  busy 标志）；失败呈单行静默摘要（exit code + stderr 尾部）。git2
+  依赖保持 `default-features = false`（读仓无传输层，刻意）。
