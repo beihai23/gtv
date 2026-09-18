@@ -351,9 +351,11 @@ function App() {
     };
   }, [refreshFamily]);
 
-  // Auto-fetch sync (spec 4.3): the backend toggle restarts as false every
-  // launch, so this effect owns BOTH the startup sync and setting changes
-  // (the 60s thread picks the new value up on its next tick, T3 semantics).
+  // Auto-fetch sync (spec 4.3). The backend AppState defaults auto_fetch
+  // to TRUE (commands.rs), so this effect's startup job is the OFF
+  // direction: a user who disabled auto-fetch must not be silently
+  // re-enabled on relaunch. It also propagates setting changes (the 60s
+  // thread picks the new value up on its next tick, T3 semantics).
   // Silent catch: the browser mock has no backend to sync.
   useEffect(() => {
     void setAutoFetch(autoFetch).catch(() => {});

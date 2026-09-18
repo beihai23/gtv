@@ -2,7 +2,7 @@
 arc: multi-repo-tabs
 started: 3fdcc4e
 status: in-progress
-commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3]
+commits: [55ca115, 58473ff, 77df2d1, ad8534d, c4ab95a, b979e12, b6325d3, b3143a8, 5dfa328, 597320e]
 ---
 
 # 多仓库标签页（multi-repo-tabs）
@@ -404,3 +404,28 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   门禁：npm test **101/101**（未提取新纯函数，不加测）；`npm run build`
   （tsc && vite）绿（chunk >500kB 警告既有）；cargo test 82 过 + 2 败
   （仍是 tour_repo 既有 gitlink NotFound，无漂移）。mock.html 未碰（T7）。
+
+### Process — Task 6 评审与裁决
+
+独立评审结论 **APPROVE_WITH_NITS**：行为在全部 8 项核查点站得住（拖放
+订阅清理/顺序处理/遮罩穿透、autoFetch 双向同步、retry 状态清理、i18n
+完整性、CSS token 纪律与零位移几何、终端 verify-only 复核成立、门禁与
+零 Rust 红线）。裁决落地：
+
+- **Important-1（已修，orchestrator 直接落）**：App 的 auto-fetch 同步
+  effect 注释（连同 Task 6 commit message 与报告）声称"后端每次启动都
+  是 false"——**假事实**：commands.rs AppState 的 auto_fetch 默认
+  `Mutex::new(true)`（Task 1 起如此）。错误源头是 orchestrator 简报
+  写错、实现者照抄未核实；行为侥幸正确（effect 无条件双向同步），但
+  注释把挂载同步的存在理由写反——真实职责是**为关掉 autoFetch 的用户
+  在启动时把后端同步回关**（后端默认开）。注释已改正（新 commit），
+  本段即为报告级更正；教训记 Lessons：简报里的"事实性前提"同样要
+  实证，实现者对简报事实负核实责任。
+- **L3（同 commit 顺手修）**：frontmatter commits 清单补记 b3143a8/
+  5dfa328/ 597320e（鸡生蛋只适用于 commit 自身 hash，前序 hash 可补）。
+- **Low 队列（进 T8 波再验再修）**：L2 多路径拖放中"后开的成功抹掉
+  先前失败条 + openErrorPath 只留最后一个失败"；L3' 错误条不可关闭
+  （无 X，只能被下次成功顶掉）。
+- **Nit 队列**：wt-chip current 态 hover 零反馈（与 .wt-chip:hover 同
+  特异度源序落败）；拖放遮罩 z-200 盖过模态 z-80（瞬态、未裁定的层叠
+  决定）；tabbar + 按钮随内容滚动（非钉右端）。
