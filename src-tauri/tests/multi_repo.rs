@@ -8,8 +8,8 @@
 use gtv_lib::commands::{
     close_repository_impl, filter_by_branches_impl, get_branch_list_impl, get_commit_detail_impl,
     jump_to_commit_impl, load_older_commits_impl, open_repository_impl,
-    set_active_repository_impl, set_auto_fetch_impl, set_include_stale_impl,
-    spawn_terminal_in_repo, terminal_write_impl, AppState,
+    refresh_repository_impl, set_active_repository_impl, set_auto_fetch_impl,
+    set_include_stale_impl, spawn_terminal_in_repo, terminal_write_impl, AppState,
 };
 use gtv_lib::fetcher::{fetch_tick, TickOutcome};
 use gtv_lib::git_reader::GitReader;
@@ -924,6 +924,89 @@ fn set_include_stale_keeps_the_terminal_alive() {
         seen.contains("stale-toggle-alive"),
         "terminal must survive the stale toggle, got: {:?}",
         seen
+    );
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+// --- refresh_repository (Task-5 review 3c): the repo-changed refresh path ---
+
+/// The refresh delegates to the set_include_stale rebuild under the
+/// session's CURRENT include_stale value: the flag does not move (pinned
+/// here in the non-default OFF direction -- a hardcoded true or the open
+/// default would flip it), the returned view is the fresh full read, and
+/// the tab's terminal survives with its session id intact and still
+/// echoing. Unknown ids error like every repo-routed command.
+#[test]
+fn refresh_repository_rebuilds_view_keeps_policy_and_terminal() {
+    let dir = build_repo("refresh", "x");
+    let state = AppState::default();
+    let repo = open(&state, &dir); // include_stale: true
+
+    // Flip the policy OFF first: the refresh must keep it OFF, proving the
+    // delegation reads the session's current value (not the default).
+    run(set_include_stale_impl(&state, repo.repo_id, false)).expect("toggle stale off");
+
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (exit_tx, _exit_rx) = std::sync::mpsc::channel::<u64>();
+    let spawner = move |path: std::path::PathBuf, cols: u16, rows: u16| {
+        gtv_lib::terminal::spawn_pty(
+            "/bin/sh",
+            &[],
+            &path,
+            cols,
+            rows,
+            move |_id, bytes| {
+                let _ = out_tx.send(bytes);
+            },
+            move |id| {
+                let _ = exit_tx.send(id);
+            },
+        )
+    };
+    let info = run(spawn_terminal_in_repo(&state, repo.repo_id, 80, 24, spawner))
+        .expect("spawn terminal");
+
+    let refreshed = run(refresh_repository_impl(&state, repo.repo_id)).expect("refresh");
+    // Fresh full-window read of the 4-commit fixture.
+    assert_eq!(refreshed.commits.len(), 4);
+
+    {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo.repo_id).unwrap();
+        assert!(!session.include_stale, "refresh must not flip the policy");
+        assert_eq!(
+            session.terminal.as_ref().unwrap().lock().unwrap().id,
+            info.id,
+            "terminal slot untouched"
+        );
+    }
+
+    terminal_write_impl(&state, repo.repo_id, "printf refresh-alive\n".to_string())
+        .expect("write after refresh");
+    let started = std::time::Instant::now();
+    let mut seen = String::new();
+    while started.elapsed() < std::time::Duration::from_secs(10) {
+        match out_rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(chunk) => {
+                seen.push_str(&String::from_utf8_lossy(&chunk));
+                if seen.contains("refresh-alive") {
+                    break;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert!(
+        seen.contains("refresh-alive"),
+        "terminal must survive the refresh, got: {:?}",
+        seen
+    );
+
+    assert_eq!(
+        run(refresh_repository_impl(&state, 9999)).unwrap_err(),
+        "No repository opened"
     );
 
     std::fs::remove_dir_all(&dir).expect("clean up temp dir");

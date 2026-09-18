@@ -28,6 +28,95 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
+            // macOS owns Cmd+W via a rebuilt menu (Task-5 review Fix-1,
+            // Critical). Fact chain, verified against vendored sources:
+            // tauri 2.10.3 menu/menu.rs:171 and :217 -- the default menu's
+            // Window and File submenus each carry a PredefinedMenuItem::
+            // close_window; muda 0.17.1 items/predefined.rs:336-338 -- on
+            // macOS that item's default accelerator is CMD_OR_CTRL+KeyW
+            // (Alt+F4 elsewhere, so Windows/Linux are unaffected and the
+            // page's keydown handler stays sufficient there). macOS NSMenu
+            // key equivalents fire BEFORE the responder chain reaches the
+            // WKWebView, so the page never sees the keydown and the JS
+            // preventDefault is dead code -- Cmd+W ran performClose: on
+            // the single window (= quit, every PTY dead). gtv configured
+            // no menu, so the default menu was installed. Fix: rebuild the
+            // default menu's makeup WITHOUT any close_window predefined
+            // item and hand Cmd+W to a custom item that emits to the
+            // webview instead. The Edit submenu must survive (undo/redo/
+            // cut/copy/paste/select_all) or macOS has no clipboard key
+            // equivalents inside the webview at all.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{AboutMetadata, Menu, MenuItem, SubmenuBuilder};
+                use tauri::{Emitter, Manager};
+
+                let handle = app.handle();
+                let pkg_info = handle.package_info();
+                let about_metadata = AboutMetadata {
+                    name: Some(pkg_info.name.clone()),
+                    version: Some(pkg_info.version.to_string()),
+                    ..Default::default()
+                };
+
+                let app_submenu = SubmenuBuilder::new(handle, pkg_info.name.clone())
+                    .about(Some(about_metadata))
+                    .separator()
+                    .services()
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+
+                let close_tab =
+                    MenuItem::with_id(handle, "gtv-close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
+                let file_submenu = SubmenuBuilder::new(handle, "File")
+                    .item(&close_tab)
+                    .build()?;
+
+                let edit_submenu = SubmenuBuilder::new(handle, "Edit")
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+
+                let view_submenu = SubmenuBuilder::new(handle, "View")
+                    .fullscreen()
+                    .build()?;
+
+                let window_submenu = SubmenuBuilder::new(handle, "Window")
+                    .minimize()
+                    .maximize()
+                    .build()?;
+
+                let menu = Menu::with_items(handle, &[
+                    &app_submenu,
+                    &file_submenu,
+                    &edit_submenu,
+                    &view_submenu,
+                    &window_submenu,
+                ])?;
+                app.set_menu(menu)?;
+
+                // Main window label: tauri.conf.json declares no label, so
+                // it defaults to "main" (tauri-utils config.rs
+                // default_window_label).
+                app.on_menu_event(|app, event| {
+                    if event.id().0 == "gtv-close-tab" {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.emit("close-active-tab", ());
+                        }
+                    }
+                });
+            }
+
             // Repo-change poller (watcher.rs): plain std thread, no
             // filesystem watcher, so no extra deps and no events on
             // transient index files.
@@ -45,6 +134,7 @@ pub fn run() {
             commands::set_active_repository,
             commands::set_auto_fetch,
             commands::set_include_stale,
+            commands::refresh_repository,
             commands::get_commit_detail,
             commands::get_file_diff,
             commands::get_compare_detail,

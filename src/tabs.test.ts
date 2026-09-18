@@ -3,6 +3,7 @@ import {
   groupTabsByCommondir,
   migrateRestore,
   nextActiveAfterClose,
+  nextActiveRepoId,
   persistTabs,
   TABS_KEY,
   LEGACY_LATEST_KEY,
@@ -79,6 +80,35 @@ describe('nextActiveAfterClose', () => {
   it('an out-of-range index is inert (-1)', () => {
     expect(nextActiveAfterClose(tabs, 7)).toBe(-1);
     expect(nextActiveAfterClose(tabs, -1)).toBe(-1);
+  });
+});
+
+// --- nextActiveRepoId -------------------------------------------------------
+
+describe('nextActiveRepoId', () => {
+  const tabs = [tab(1, '/a', 'A'), tab(2, '/b', 'B'), tab(3, '/c', 'C')];
+
+  it('closing a BACKGROUND tab keeps the current active (no view jump)', () => {
+    // I2: the x on a background tab (group) must not yank the activated
+    // view to the closed tab's neighbor.
+    expect(nextActiveRepoId(tabs, 2, 1)).toBe(2);
+    expect(nextActiveRepoId(tabs, 1, 3)).toBe(1);
+    expect(nextActiveRepoId(tabs, 3, 1)).toBe(3);
+  });
+
+  it('closing the ACTIVE tab picks the right-then-left neighbor (pre-close ids)', () => {
+    expect(nextActiveRepoId(tabs, 1, 1)).toBe(2);
+    expect(nextActiveRepoId(tabs, 2, 2)).toBe(3);
+    expect(nextActiveRepoId(tabs, 3, 3)).toBe(2);
+  });
+
+  it('closing the ONLY tab empties the shell (null)', () => {
+    expect(nextActiveRepoId([tab(7, '/w', 'W')], 7, 7)).toBe(null);
+  });
+
+  it('a null active stays null whichever tab closes', () => {
+    expect(nextActiveRepoId(tabs, null, 2)).toBe(null);
+    expect(nextActiveRepoId(tabs, null, 1)).toBe(null);
   });
 });
 

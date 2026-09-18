@@ -50,6 +50,23 @@ export function nextActiveAfterClose(tabs: TabInfo[], closedIdx: number): number
   return closedIdx - 1;
 }
 
+/** Next active repo id after closing `closedRepoId`: closing the ACTIVE tab
+ *  picks the right-then-left neighbor (pre-close indices); closing a
+ *  background tab keeps the current active. null = the shell empties.
+ *  (Task-5 review Fix-2: closeTab used to apply the neighbor rule
+ *  unconditionally, so the x on a background tab's group jumped the
+ *  activated view to the closed tab's neighbor instead of staying put.) */
+export function nextActiveRepoId(
+  tabs: TabInfo[],
+  activeRepoId: number | null,
+  closedRepoId: number,
+): number | null {
+  if (closedRepoId !== activeRepoId) return activeRepoId;
+  const closedIdx = tabs.findIndex(tb => tb.repoId === closedRepoId);
+  const nextIdx = nextActiveAfterClose(tabs, closedIdx);
+  return nextIdx >= 0 ? tabs[nextIdx].repoId : null;
+}
+
 interface RestoredTabs {
   paths: string[];
   activeIdx: number;

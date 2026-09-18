@@ -59,10 +59,17 @@ export async function setAutoFetch(enabled: boolean): Promise<void> {
 
 /// Rebuild one repo's view under a new include-stale setting WITHOUT
 /// touching its terminal, watcher baseline, or family snapshot: the dedup
-/// semantics forbid re-open, so the settings toggle -- and any same-policy
-/// full rebuild, e.g. the repo-changed refresh -- goes through here.
+/// semantics forbid re-open, so the settings toggle goes through here.
 export async function setIncludeStale(repoId: number, enabled: boolean): Promise<GitData> {
   return invoke<GitData>('set_include_stale', { repoId, enabled });
+}
+
+/// Full-view rebuild for the repo-changed refresh path (Task-5 review 3c):
+/// same rebuild as setIncludeStale but under the session's CURRENT policy,
+/// under its own name. The refresh is the hottest read path in the app and
+/// must not ride the include-stale toggle's name (or contract).
+export async function refreshRepository(repoId: number): Promise<GitData> {
+  return invoke<GitData>('refresh_repository', { repoId });
 }
 
 export async function getCommitDetail(repoId: number, commitId: string): Promise<CommitDetail> {

@@ -307,3 +307,43 @@ Cmd+T、拖放、二级 chip）统一按 canonical path 去重；激活 tab 60s 
   门禁：cargo test 81 过 / 2 败（multi_repo 18→20；2 败仍 tour_repo 既有
   gitlink）；npm test 97 过（81 既有 + tabs.test.ts 16 新增）；npm run
   build 过（chunk >500kB 警告既有）。mock.html 未碰（T7 桩）。
+- Task 5 修复波（评审 CHANGES_REQUESTED：1 Critical + 1 Important + 3c 建议；
+  orchestrator 复核追加 I2）：**虚假声明更正（必记）**——原 T5 报告第三节
+  「macOS Cmd+W……tab 壳显式接管」为虚假声明：JS 层 preventDefault 在 macOS
+  上根本不执行（NSMenu 键等效先于响应链到达 WKWebView，页面 keydown 不发
+  生），⌘W 实走 performClose: 关掉整个单窗应用；本波以菜单重建修复，非
+  「加固既有接管」。事实链（vendored 源亲核）：tauri 2.10.3 menu/menu.rs
+  :171/:217 默认菜单 Window/File 两个子菜单各含一个 close_window 预置项；
+  muda 0.17.1 items/predefined.rs:336-338 macOS 上其默认加速键 =
+  CMD_OR_CTRL+KeyW（非 macOS 是 Alt+F4，Windows/Linux 不受影响，JS 路径
+  已够）。Fix-1（Critical）：lib.rs setup 内 `#[cfg(target_os = "macos")]`
+  自建菜单替换默认（App 子菜单 about/services/hide/hide_others/show_all/
+  quit 依默认构成复刻，**不含任何 close_window 预置项**；File 放自定义
+  MenuItem id="gtv-close-tab" 文本 "Close Tab" 加速键 CmdOrCtrl+W；Edit
+  子菜单 undo/redo/cut/copy/paste/select_all 必须保留——无 Edit 项则
+  webview 内 ⌘C/⌘V/⌘Z 全失效；View fullscreen；Window minimize/maximize），
+  `app.set_menu(menu)?` + `on_menu_event` 命中即对主窗口 emit
+  "close-active-tab"（label="main"：tauri.conf.json 无 label 字段，落
+  tauri-utils default_window_label 默认值）；App.tsx 新增对应 listen
+  effect（try-catch 浏览器 mock 模式），keydown ⌘W 保留为 Windows/Linux
+  与兜底路径——菜单吃掉键后 macOS 上 keydown 不可达，两者不会双发。
+  Fix-2（I1+I2 合并）：tabs.ts 新增纯函数 nextActiveRepoId(tabs,
+  activeRepoId, closedRepoId)（关后台 tab 保当前激活、关激活 tab 走右后左
+  邻位、清空归 null；先写测试后实现）；closeTab 改用之且 nextRepoId 非空
+  时补 setActiveRepository（后端 active 是 fetch 目标，close_repository 会
+  把它归零致 auto-fetch 停摆到下次手点；与 closeRepository 并发乱序两序都
+  收敛）；恢复 effect 的 applyTabs 后同样补 setActiveRepository（恢复循环
+  的最后一次 open 把后端 active 指到最后打开的仓，与 UI 记录的激活 tab 脱
+  钩）。Fix-3（3c 采纳）：refresh_repository 正名——repo-changed 刷新是
+  全应用最热读路径，永久骑在 stale 开关名上会被 T7 mock 冻结成契约；
+  commands.rs 加 refresh_repository_impl（短锁读 session 当前 include_stale
+  → 委托 set_include_stale_impl 同值重建）+ 一行命令壳，lib.rs 注册，
+  api.ts 加 refreshRepository(repoId)，RepoView 的 handleRepoRefresh 改调
+  之（setIncludeStale 回归只服务设置开关，其 deps 数组随之去掉
+  showStaleBranches）。零新仓库写路径（菜单是应用级 chrome）；未动
+  watcher/fetcher/mock.html/CSS/i18n（T6）。门禁：cargo test 82 过 / 2 败
+  （multi_repo 20→21；2 败仍 tour_repo 既有 gitlink）；npm test 101 过
+  （97 既有 + tabs.test.ts 4 新增）；npm run build 过（chunk >500kB 警告
+  既有）。真机手动验证项（报告列明，待 orchestrator 汇总）：⌘W 仅关激活
+  tab 窗口存活、零 tab 时 ⌘W 无操作、后台组 × 保持当前视图、⌘C/⌘V/⌘Z
+  在输入框可用、⌘Q 退出、菜单栏 File 显示 "Close Tab ⌘W"。

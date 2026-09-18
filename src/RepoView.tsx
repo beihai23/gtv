@@ -8,7 +8,7 @@ import { CheckoutDialog } from './components/CheckoutDialog';
 import TerminalPanel from './components/TerminalPanel';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
-import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
+import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -425,10 +425,12 @@ export default function RepoView({
   // bump), keep expanded lanes and filters. Loaded-older pagination state
   // is rebuilt from scratch — accepted v1 limitation. Rebased/amended
   // commits get new oids, so stale selections drop naturally.
-  // The rebuild rides setIncludeStale with the CURRENT policy: it is the
-  // one command that re-reads the view from HEAD without touching the
-  // terminal or the watcher baseline (a re-open is forbidden by the dedup
-  // semantics and would just return the stale session view).
+  // The rebuild goes through refreshRepository (Task-5 review 3c): the
+  // one command that re-reads the view from HEAD under the session's
+  // current policy without touching the terminal or the watcher baseline
+  // (a re-open is forbidden by the dedup semantics and would just return
+  // the stale session view). setIncludeStale went back to serving only
+  // the settings toggle.
   const refreshingRef = useRef(false);
   const handleRepoRefresh = useCallback(async () => {
     if (refreshingRef.current) return;
@@ -440,7 +442,7 @@ export default function RepoView({
     setCheckoutDialog(null);
     try {
       const keepId = selectedCommit?.id ?? null;
-      const data = await setIncludeStale(repoId, showStaleBranches);
+      const data = await refreshRepository(repoId);
       setGitData(data);
       loadDiffStats(data);
       if (keepId && data.commits.some(c => c.id === keepId)) {
@@ -466,7 +468,7 @@ export default function RepoView({
     } finally {
       refreshingRef.current = false;
     }
-  }, [repoId, showStaleBranches, selectedCommit, loadDiffStats]);
+  }, [repoId, selectedCommit, loadDiffStats]);
 
   // Debounce "repo-changed" bursts (rebase/fetch fire several) into one
   // refresh. Events are filtered on payload.repo_id (T1 review Low-2):

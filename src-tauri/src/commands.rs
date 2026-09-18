@@ -428,6 +428,32 @@ pub async fn set_include_stale(
     set_include_stale_impl(&state, repo_id, enabled).await
 }
 
+/// Task-5 review 3c: the repo-changed refresh path (the hottest read path
+/// in the app) deserves its own name instead of riding the include-stale
+/// toggle; freezing the abuse into T7's mocks would make every future
+/// change to set_include_stale semantics silently alter refresh behavior.
+/// Delegates to the same rebuild with the session's CURRENT include_stale
+/// value, so the refreshed view honors the user's stale-branches setting
+/// without this command ever pretending to change it.
+pub async fn refresh_repository_impl(state: &AppState, repo_id: u64) -> Result<GitData, String> {
+    let enabled = {
+        let repos = state.repos.lock().unwrap();
+        repos
+            .get(&repo_id)
+            .map(|s| s.include_stale)
+            .ok_or("No repository opened")?
+    };
+    set_include_stale_impl(state, repo_id, enabled).await
+}
+
+#[tauri::command]
+pub async fn refresh_repository(
+    repo_id: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<GitData, String> {
+    refresh_repository_impl(&state, repo_id).await
+}
+
 pub async fn get_commit_detail_impl(
     state: &AppState,
     repo_id: u64,

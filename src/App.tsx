@@ -12,7 +12,7 @@ import {
 import {
   groupTabsByCommondir,
   migrateRestore,
-  nextActiveAfterClose,
+  nextActiveRepoId,
   persistTabs,
 } from './tabs';
 import type { TabInfo } from './tabs';
@@ -161,19 +161,29 @@ function App() {
   }, [openTab]);
 
   // Close one tab: the backend removes the session (killing that tab's
-  // terminal, Task 2) and the neighbor rule picks the next active tab.
-  // The next-active index refers to the PRE-close list, so it resolves to
-  // a repoId BEFORE the filter (ids, unlike indices, survive the close).
-  // The per-repo family/open-data entries go with the tab (a re-open of
-  // the same path gets a fresh repo_id and repopulates them).
+  // terminal, Task 2) and the neighbor rule picks the next active tab --
+  // but ONLY when the closed tab is the active one; closing a background
+  // tab (group x) keeps the current view (nextActiveRepoId, Fix-2 I2).
+  // The next-active repo id resolves against the PRE-close list (ids,
+  // unlike indices, survive the close). The per-repo family/open-data
+  // entries go with the tab (a re-open of the same path gets a fresh
+  // repo_id and repopulates them).
   const closeTab = useCallback((repoId: number) => {
     const idx = tabsRef.current.findIndex(tb => tb.repoId === repoId);
     if (idx < 0) return;
     void closeRepository(repoId).catch(err => {
       recordFrontendError(errText(err));
     });
-    const nextIdx = nextActiveAfterClose(tabsRef.current, idx);
-    const nextRepoId = nextIdx >= 0 ? tabsRef.current[nextIdx].repoId : null;
+    const nextRepoId = nextActiveRepoId(tabsRef.current, activeRepoIdRef.current, repoId);
+    // Fix-2 I1: the backend `active` is the auto-fetch target, and
+    // close_repository zeroes it when the closed tab was the active one --
+    // without this re-assert the fetcher idles on NoTarget until the next
+    // manual tab click. Racing closeRepository is harmless in both orders:
+    // a background close re-asserts the unchanged value; an active close
+    // converges on the neighbor either way.
+    if (nextRepoId != null) {
+      void setActiveRepository(nextRepoId).catch(() => {});
+    }
     setFamilies(prev => {
       if (!(repoId in prev)) return prev;
       const next = { ...prev };
@@ -248,9 +258,14 @@ function App() {
     }
   }, []);
 
-  // Cmd+T opens the picker; Cmd+W closes the ACTIVE TAB and MUST
-  // preventDefault -- on macOS the webview's default for Cmd+W closes the
-  // whole window, which the tab shell takes over (Task 5 brief).
+  // Cmd+T opens the picker; Cmd+W closes the ACTIVE TAB. On Windows/Linux
+  // the keydown reaches the page and preventDefault is enough. On macOS the
+  // native menu (rebuilt in lib.rs, Fix-1) owns Cmd+W: NSMenu key
+  // equivalents fire BEFORE the webview sees the key, so this handler never
+  // runs there and the menu's "close-active-tab" emit (listener below) is
+  // the only path -- the two can never double-fire. The original Task 5
+  // report's claim that this preventDefault "takes over" Cmd+W on macOS was
+  // false: it is dead code on that platform.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 't' || e.key === 'T')) {
@@ -264,6 +279,33 @@ function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [openPicker, closeTab]);
+
+  // macOS menu path for Cmd+W (Fix-1): the custom File > Close Tab item in
+  // the rebuilt native menu (lib.rs) emits "close-active-tab" on the main
+  // window instead of performClose: killing the whole window. Same shape as
+  // the repo-changed listener: try/catch for the browser mock preview (no
+  // event API there until Task 7's stubs land).
+  useEffect(() => {
+    let dead = false;
+    let un: (() => void) | null = null;
+    try {
+      listen('close-active-tab', () => {
+        const id = activeRepoIdRef.current;
+        if (id != null) closeTab(id);
+      })
+        .then(fn => {
+          if (dead) fn();
+          else un = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // browser mock preview: no event API
+    }
+    return () => {
+      dead = true;
+      un?.();
+    };
+  }, [closeTab]);
 
   // The repo-changed listener feeding refreshFamily. Per-repo timers, one
   // burst per repo id; try/catch for the browser mock preview (no event
@@ -318,6 +360,12 @@ function App() {
       if (current.length === 0) return;
       const idx = Math.min(restored.activeIdx, current.length - 1);
       applyTabs(current, current[idx].repoId);
+      // Fix-2 I1: the restore loop's LAST open left the backend `active`
+      // (the fetch target) on the last-opened repo while the UI activates
+      // the recorded tab -- point the backend at what the user actually
+      // had active, or the fetcher polls the wrong repo until the first
+      // manual tab click.
+      void setActiveRepository(current[idx].repoId).catch(() => {});
     })();
     return () => { cancelled = true; };
   }, [openTab, applyTabs]);
