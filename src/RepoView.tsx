@@ -196,6 +196,9 @@ export default function RepoView({
   const [showPatchLinks, setShowPatchLinks] = useState(false);
   const [patchLinks, setPatchLinks] = useState<PatchLink[]>([]);
   const [patchLinksLoading, setPatchLinksLoading] = useState(false);
+  // Branch name while the header position pill is hovered; Timeline turns
+  // it into a transient focus of the "you are here" lane.
+  const [headLaneHover, setHeadLaneHover] = useState<string | null>(null);
 
   // Inactive-lane collapse: which dead lanes the user has restored.
   const [expandedDead, setExpandedDead] = useState<Set<string>>(new Set());
@@ -1066,6 +1069,8 @@ export default function RepoView({
                   className="head-chip"
                   title={t('jumpToHead')}
                   onClick={jumpToHead}
+                  onMouseEnter={() => setHeadLaneHover(gitData.head_branch)}
+                  onMouseLeave={() => setHeadLaneHover(null)}
                 >
                   <span className="head-chip-dot" aria-hidden="true" />
                   {gitData.head_branch ?? gitData.main_branch}
@@ -1395,6 +1400,7 @@ export default function RepoView({
               onExpandTraceGroup={expandTraceGroup}
               traceGroupLabel={traceGroupLabel}
               headBranch={gitData?.head_branch ?? null}
+              headLaneHover={headLaneHover}
               onCheckoutBranch={handleCheckoutBranch}
               onCompareClick={handleCompareClick}
               compareBaseId={compareBaseId}

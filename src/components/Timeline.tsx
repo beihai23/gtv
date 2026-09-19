@@ -55,6 +55,9 @@ interface TimelineProps {
   /** Shorthand of the branch HEAD is on; null while detached. Drives the
    *  current-branch lane chip marker (spec 4.3). */
   headBranch: string | null;
+  /** Branch name while the header position pill is hovered (RepoView):
+   *  transiently focuses the "you are here" lane. Null when not hovered. */
+  headLaneHover: string | null;
   /** "Check out this branch" (lane context menu, M3.1): switch the actual
    *  worktree HEAD (App owns the dirty-confirm state machine). */
   onCheckoutBranch: (branchName: string) => void;
@@ -98,7 +101,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -133,6 +136,23 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     setLaneMenu(null);
     setEdgeHighlight(null);
   }, [resetKey]);
+
+  // Header-pill hover reaches into the lane-focus machinery: hovering the
+  // position pill flashes the checked-out lane (dims all others) with no
+  // click -- the pill IS the "you are here" control, so its hover is the
+  // zero-discovery-cost way to pick that lane out of 35. On leave, only a
+  // focus WE set is cleared; a chip-clicked focus survives.
+  const pillFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (headLaneHover) {
+      pillFocusRef.current = headLaneHover;
+      setFocusedLane(headLaneHover);
+    } else {
+      const was = pillFocusRef.current;
+      pillFocusRef.current = null;
+      setFocusedLane(prev => (prev === was ? null : prev));
+    }
+  }, [headLaneHover]);
 
   const visibleCommits = useMemo(() => {
     const alive = data.commits.filter(c => !hiddenIds.has(c.id));
@@ -177,6 +197,39 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     svg.attr('width', width).attr('height', height);
     svg.selectAll('*').remove();
 
+    // --- current-lane band ----------------------------------------------------
+    // "You are here" extended from a point (the HEAD node's green ring) to
+    // a REGION: a translucent band behind the whole checked-out swimlane.
+    // Appended BEFORE .timeline-content so nodes/edges paint on top, and
+    // pinned to the VIEWPORT's width rather than the scene's, so the band
+    // never scrolls out from under the eye on a wide canvas (the sticky
+    // ruler's opaque backdrop covers it at the top). The lane comes from
+    // the HEAD COMMIT, not the branch name -- detached HEAD and filtered
+    // views still land on the row the user is actually on; name matching
+    // is only the fallback. Skipped when the lane has no loaded commits.
+    const headCommit = data.commits.find(c => c.is_head && !hiddenIds.has(c.id));
+    const headLaneIndex = headCommit?.lane
+      ?? (headBranch != null ? data.branches.find(b => b.name === headBranch)?.lane_index : undefined)
+      ?? null;
+    let updateLaneBand: (() => void) | null = null;
+    if (headLaneIndex != null && data.commits.some(c => c.lane === headLaneIndex)) {
+      const laneIdx = headLaneIndex;
+      const band = svg.append('rect')
+        .attr('class', 'head-lane-band')
+        .attr('pointer-events', 'none')
+        .attr('fill', cssVar('--head-lane-band', 'rgba(76, 175, 80, 0.08)'))
+        .attr('rx', 4);
+      updateLaneBand = () => {
+        const t = transformRef.current;
+        band
+          .attr('x', 0)
+          .attr('width', width)
+          .attr('y', t.applyY(laneIdx * LANE_HEIGHT) - (LANE_HEIGHT / 2) * t.k)
+          .attr('height', LANE_HEIGHT * t.k);
+      };
+      updateLaneBand();
+    }
+
     const g = svg.append('g').attr('class', 'timeline-content');
     const dimOthers = (name: string) => focusedLane !== null && focusedLane !== name;
     const laneOpacity = (name: string) => (dimOthers(name) ? 0.12 : 1);
@@ -213,6 +266,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         g.attr('transform', event.transform.toString());
         cull();
         minimapViewport();
+        updateLaneBand?.();
         updateRuler?.();
         maybeLoadOlder(event.transform);
       });
@@ -424,9 +478,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('y1', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
       .attr('y2', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
       .attr('stroke', (d: BranchLane) => d.color)
-      .attr('stroke-width', 4)
+      // Hue already encodes branch identity, so the checked-out lane's
+      // emphasis is WEIGHT: a heavier, brighter spine riding the band.
+      .attr('stroke-width', (d: BranchLane) => (d.lane_index === headLaneIndex ? 7 : 4))
       .attr('stroke-linecap', 'round')
-      .attr('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.12 : 0.55)
+      .attr('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.12 : (d.lane_index === headLaneIndex ? 0.9 : 0.55))
       .style('cursor', 'context-menu')
       .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
         event.preventDefault();
@@ -1119,15 +1175,19 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       for (const b of data.branches) {
         const span = laneSpan.get(b.lane_index);
         if (!span) continue;
+        // The checked-out lane reads in the same "you are here" green as
+        // the mm-head dot and the in-graph band -- one color, one meaning,
+        // every surface.
+        const isHeadLane = b.lane_index === headLaneIndex;
         const y = my(b.lane_index * LANE_HEIGHT);
         mm.append('line')
           .attr('x1', mx(span.min))
           .attr('x2', Math.max(mx(span.max), mx(span.min) + 2))
           .attr('y1', y).attr('y2', y)
-          .attr('stroke', b.color)
-          .attr('stroke-width', 3)
+          .attr('stroke', isHeadLane ? '#4CAF50' : b.color)
+          .attr('stroke-width', isHeadLane ? 4 : 3)
           .attr('stroke-linecap', 'round')
-          .attr('opacity', dimOthers(b.name) ? 0.15 : 0.9);
+          .attr('opacity', dimOthers(b.name) ? 0.15 : (isHeadLane ? 1 : 0.9));
       }
       // Sediment rows in the map too: low-opacity dead-lane bars.
       for (const tb of traceBars) {

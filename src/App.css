@@ -24,6 +24,11 @@
   --link-rgb: 74, 144, 217;
   --ruler-line: #2c2c3e;
   --tick-line: #555555;
+  /* "You are here" green: the HEAD node ring, minimap dot, header pill
+     dot -- and, at band alpha, the checked-out swimlane's backdrop.
+     Theme-independent by design: one color, one meaning, every preset. */
+  --head-lane-rgb: 76, 175, 80;
+  --head-lane-band: rgba(76, 175, 80, 0.08);
 
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   font-size: 14px;
@@ -1077,17 +1082,19 @@
 }
 /* Sediment-row chips (collapsed inactive lanes) read as quieter than branches. */
 .lane-chip.trace-chip { font-style: italic; opacity: 0.85; }
-/* Current-branch chip (spec 4.3): dot prefix plus a link-tinted fill.
-   rgba(var(--link-rgb), 0.25) is the established "active" tint (same as
-   .view-btn.active), so every theme gets a fitting highlight for free. */
+/* Current-branch chip (spec 4.3): green dot prefix plus a green-tinted
+   fill -- the same "you are here" green as the lane band, HEAD ring and
+   minimap dot, replacing the old link-blue tint that read as "selected"
+   rather than "here". */
 .lane-chip.head-lane {
-  background: rgba(var(--link-rgb), 0.25);
+  background: rgba(var(--head-lane-rgb), 0.2);
   font-weight: 600;
 }
 .lane-chip.head-lane::before {
   content: '●';
   margin-right: 5px;
   font-size: 9px;
+  color: #4CAF50;
 }
 
 /* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
