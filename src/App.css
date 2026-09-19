@@ -44,15 +44,30 @@
    work). Inactive tabs sit on the header, hover lifts them onto
    --bg-input, the active tab rises to a panel fill plus an inset accent
    underline. --- */
+/* The band itself is shell chrome, not tab chrome: it renders even with
+   zero tabs so global controls (settings) always have a home. Band
+   background/border live here; the tabbar below fills the free width. */
+.topbar {
+  display: flex;
+  align-items: center;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border);
+}
 .tabbar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  background: var(--bg-header);
-  border-bottom: 1px solid var(--border);
-  /* Many tabs scroll in one row instead of wrapping or pushing + away. */
+  flex: 1 1 auto;
+  /* Many tabs scroll in one row instead of wrapping or pushing + away;
+     min-width 0 lets the scroll area shrink instead of the pinned gear. */
+  min-width: 0;
   overflow-x: auto;
+}
+.topbar .settings-btn {
+  /* Pinned right, outside the tabbar's horizontal scroll. */
+  flex-shrink: 0;
+  margin: 0 8px;
 }
 
 .tab {

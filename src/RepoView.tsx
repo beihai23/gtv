@@ -59,7 +59,6 @@ interface RepoViewProps {
   // inside RepoView and takes the path as a prop.
   showIssueReport: boolean;
   setShowIssueReport: (v: boolean) => void;
-  setShowSettings: (v: boolean) => void;
 }
 
 // Stable empty-set fallback so the Timeline props keep one identity when no
@@ -103,7 +102,6 @@ export default function RepoView({
   setShowRefLabels,
   showIssueReport,
   setShowIssueReport,
-  setShowSettings,
 }: RepoViewProps) {
   const { t, showStaleBranches, inactiveDays, hideRemotes, setHideRemotes } = useSettings();
   // Seeded from the tab's open (App): the view exists the moment this
@@ -1173,13 +1171,6 @@ export default function RepoView({
               </svg>
             </button>
           )}
-          <button
-            className="view-btn settings-btn"
-            onClick={() => setShowSettings(true)}
-            title={`${t('settings')} (⌘,)`}
-          >
-            ⚙
-          </button>
         </div>
       </header>
 

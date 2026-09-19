@@ -467,6 +467,13 @@ function App() {
           bodies, the same keypress would flip the stacking instead. */}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
 
+      {/* Global chrome band: always rendered, even with zero tabs.
+          Shell-level controls live here rather than inside a tab --
+          and with no tabs open there was previously no way to reach
+          settings by mouse at all (Cmd+, was the only entry left).
+          The tabbar fills the remaining width; the gear is pinned
+          right, outside its horizontal scroll. */}
+      <div className="topbar">
       {tabs.length > 0 && (
         <div className="tabbar">
           {groups.map(group => {
@@ -504,6 +511,14 @@ function App() {
           </button>
         </div>
       )}
+      <button
+        className="view-btn settings-btn"
+        onClick={() => setShowSettings(true)}
+        title={`${t('settings')} (⌘,)`}
+      >
+        ⚙
+      </button>
+      </div>
 
       {/* Second-level worktree row (spec 5.1): members of the ACTIVE
           family; already-open members are highlighted and clicking them
@@ -604,7 +619,6 @@ function App() {
               setShowRefLabels={setShowRefLabels}
               showIssueReport={showIssueReport}
               setShowIssueReport={setShowIssueReport}
-              setShowSettings={setShowSettings}
             />
           </div>
         ))
