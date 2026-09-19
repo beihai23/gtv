@@ -1052,30 +1052,35 @@ export default function RepoView({
           {gitData && (
             <>
               <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
-              {rangedData && (
-                <span className="repo-info">
-                  {/* Position, not classification: head_branch is where THIS
-                      member is checked out (a worktree tab must not announce
-                      the trunk), main_branch is only the detached-HEAD
-                      fallback. Rendered as a pill so it reads as one unit
-                      under the repo name, its green dot matching the HEAD ring
-                      on the graph and the minimap dot -- same green = same
-                      "you are here" meaning on every surface. Clicking jumps
-                      back to HEAD -- the anchor to find when lost in a
-                      6000-commit map. */}
-                  <button
-                    className="head-chip"
-                    title={t('jumpToHead')}
-                    onClick={jumpToHead}
-                  >
-                    <span className="head-chip-dot" aria-hidden="true" />
-                    {gitData.head_branch ?? gitData.main_branch}
-                  </button>
-                  <span className="repo-info-count">
-                    {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
+              <span className="repo-info">
+                {/* Position, not classification: head_branch is where THIS
+                    member is checked out (a worktree tab must not announce
+                    the trunk), main_branch is only the detached-HEAD
+                    fallback. Rendered as a pill so it reads as one unit
+                    under the repo name, its green dot matching the HEAD ring
+                    on the graph and the minimap dot -- same green = same
+                    "you are here" meaning on every surface. Clicking jumps
+                    back to HEAD -- the anchor to find when lost in a
+                    6000-commit map. */}
+                <button
+                  className="head-chip"
+                  title={t('jumpToHead')}
+                  onClick={jumpToHead}
+                >
+                  <span className="head-chip-dot" aria-hidden="true" />
+                  {gitData.head_branch ?? gitData.main_branch}
+                </button>
+                {/* The count describes the branch named in the pill: its
+                    FULL history (rev-list --count HEAD), not the loaded
+                    window, so it stays exact and stable while chunks page
+                    in and regardless of the date scope. Hidden on an
+                    unborn HEAD (empty repo) where no history exists. */}
+                {gitData.head_commit_count != null && (
+                  <span className="repo-info-count" title={t('branchCountTip')}>
+                    {t('commitCount', { n: gitData.head_commit_count })}
                   </span>
-                </span>
-              )}
+                )}
+              </span>
               <span className="repo-path" title={path}>{path}</span>
             </>
           )}

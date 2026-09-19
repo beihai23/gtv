@@ -24,7 +24,7 @@ function commit(id: string, over: Partial<CommitNode> = {}): CommitNode {
 function gitData(commits: CommitNode[], branches: BranchLane[], over: Partial<GitData> = {}): GitData {
   return {
     commits, edges: [], branches, main_branch: 'main', time_gaps: [],
-    has_more: false, head_branch: null, ...over,
+    has_more: false, head_branch: null, head_commit_count: null, ...over,
   };
 }
 

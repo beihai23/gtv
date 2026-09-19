@@ -95,6 +95,13 @@ pub struct GitData {
     /// layout's is_head, which marks the HEAD commit itself.
     #[serde(default)]
     pub head_branch: Option<String>,
+    /// Total commits reachable from HEAD (rev-list --count HEAD): the
+    /// checked-out branch's full history length. Unlike commits.len() it is
+    /// exact regardless of the chunked load window, and it describes the
+    /// branch the identity card names, not the whole-repo view. None on an
+    /// unborn HEAD (empty repo) or a walk failure.
+    #[serde(default)]
+    pub head_commit_count: Option<u64>,
 }
 
 /// An anomalous empty time range that was folded to a fixed pixel width.

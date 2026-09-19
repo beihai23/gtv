@@ -60,6 +60,10 @@ export interface GitData {
   /** Shorthand of the branch HEAD sits on; null while detached (or on an
    *  unborn HEAD). Mirrors models.rs; drives the current-lane marker. */
   head_branch: string | null;
+  /** Total commits reachable from HEAD -- the checked-out branch's full
+   *  history, exact regardless of the chunked load window; null on an
+   *  unborn HEAD (empty repo). Mirrors models.rs. */
+  head_commit_count: number | null;
 }
 
 export interface FileChange {

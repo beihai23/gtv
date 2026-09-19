@@ -154,6 +154,17 @@ impl GitReader {
         head.shorthand().map(|s| s.to_string())
     }
 
+    /// Full history length of the checked-out branch (rev-list --count
+    /// HEAD). Recomputed on every view build/load like head_branch so a
+    /// checkout in another window updates it with the next rebuild. None
+    /// while HEAD is unborn (empty repo).
+    fn head_commit_count(&self) -> Option<u64> {
+        let mut walk = self.repo.revwalk().ok()?;
+        // push_head resolves HEAD; an unborn HEAD errors here -> None.
+        walk.push_head().ok()?;
+        Some(walk.filter_map(|oid| oid.ok()).count() as u64)
+    }
+
     /// Cheap change detector for the repo-watcher poller (watcher.rs):
     /// HEAD (symbolic name + oid) plus the sorted list of every ref
     /// (`name=oid`). Covers commit, amend, checkout (branch and detached),
@@ -642,6 +653,7 @@ impl GitReader {
         let main_branch = self.detect_main_branch(seeds);
         let head_id = self.head_oid();
         let head_branch = self.head_branch();
+        let head_commit_count = self.head_commit_count();
         let mut commits = self.walk_commits(seeds, &HashSet::new(), limit)?;
         // A full chunk means older history may still be out there.
         let has_more = commits.len() == limit;
@@ -668,6 +680,7 @@ impl GitReader {
             time_gaps,
             has_more,
             head_branch,
+            head_commit_count,
         })
     }
 
@@ -698,6 +711,7 @@ impl GitReader {
         let main_branch = self.detect_main_branch(seeds);
         let head_id = self.head_oid();
         let head_branch = self.head_branch();
+        let head_commit_count = self.head_commit_count();
         let mut commits = existing;
         let (branches, edges, time_gaps) =
             layout::compute_layout(&mut commits, seeds, &main_branch, head_id.as_deref());
@@ -716,6 +730,7 @@ impl GitReader {
             time_gaps,
             has_more,
             head_branch,
+            head_commit_count,
         })
     }
 

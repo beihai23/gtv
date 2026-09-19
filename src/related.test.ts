@@ -23,7 +23,7 @@ function commit(id: string, laneIndex: number, laneOwner: string): CommitNode {
 function gitData(commits: CommitNode[], branches: BranchLane[]): GitData {
   return {
     commits, edges: [], branches, main_branch: 'main', time_gaps: [],
-    has_more: false, head_branch: null,
+    has_more: false, head_branch: null, head_commit_count: null,
   };
 }
 
