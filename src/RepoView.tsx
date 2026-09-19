@@ -114,6 +114,9 @@ export default function RepoView({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
+  // View-options popover (low-frequency global presentation toggles live
+  // collapsed behind one trigger instead of a six-button wall).
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   // M3.1 checkout: pending dirty-worktree confirm (null until the preflight
   // reports a dirty worktree) and the branch of the last successful switch
   // (drives the transient success banner; null = no banner).
@@ -145,6 +148,13 @@ export default function RepoView({
   useEffect(() => {
     if (!prevActiveRef.current && active) setFitSignal(n => n + 1);
     prevActiveRef.current = active;
+  }, [active]);
+
+  // A popover left open in this tab while the user switched away would sit
+  // stale on a keep-alive tab -- close it on deactivate (and its backdrop
+  // with it, which would otherwise swallow clicks on the visible tab).
+  useEffect(() => {
+    if (!active) setViewMenuOpen(false);
   }, [active]);
 
   // Ctrl+` toggles the bottom terminal — works with focus anywhere,
@@ -1017,6 +1027,16 @@ export default function RepoView({
     </button>
   );
 
+  // How many presentation options sit OFF their default. That count --
+  // not the five toggles themselves -- is what the collapsed view-options
+  // trigger shows at rest, so hiding the wall does not hide the state.
+  const customViewCount =
+    (compressed ? 0 : 1) +
+    (showMergeLinks ? 0 : 1) +
+    (showRefLabels ? 0 : 1) +
+    (showPatchLinks ? 1 : 0) +
+    (hideRemotes ? 1 : 0);
+
   return (
     <>
       <header className="header">
@@ -1029,16 +1049,23 @@ export default function RepoView({
               {/* Position, not classification: head_branch is where THIS
                   member is checked out (a worktree tab must not announce
                   the trunk), main_branch is only the detached-HEAD
-                  fallback. Clicking jumps back to HEAD -- the anchor to
-                  find when lost in a 6000-commit map. */}
+                  fallback. Rendered as a pill so it reads as one unit
+                  with the repo name, its green dot matching the HEAD ring
+                  on the graph and the minimap dot -- same green = same
+                  "you are here" meaning on every surface. Clicking jumps
+                  back to HEAD -- the anchor to find when lost in a
+                  6000-commit map. */}
               <button
-                className="head-jump-btn"
+                className="head-chip"
                 title={t('jumpToHead')}
                 onClick={jumpToHead}
               >
+                <span className="head-chip-dot" aria-hidden="true" />
                 {gitData.head_branch ?? gitData.main_branch}
               </button>
-              {' '}• {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
+              <span className="repo-info-count">
+                {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
+              </span>
             </span>
           )}
         </div>
@@ -1059,35 +1086,14 @@ export default function RepoView({
           </div>
         )}
 
+        {/* Right controls ordered by role and frequency: the orientation
+            pair (fit, terminal) first, then the date scope in its own
+            separated group -- it changes what data is loaded, so its state
+            must stay visible at rest -- then the five low-frequency
+            presentation toggles collapsed behind one trigger. */}
         <div className="header-right">
           {gitData && (
-            <div className="view-toggles">
-              <button
-                className={`view-btn ${compressed ? 'active' : ''}`}
-                onClick={() => setCompressed(v => !v)}
-                title={t('compressTip')}
-              >
-                {t('compress')}
-              </button>
-              <button
-                className={`view-btn ${showMergeLinks ? 'active' : ''}`}
-                onClick={() => setShowMergeLinks(v => !v)}
-              >
-                {t('mergeLinks')}
-              </button>
-              <button
-                className={`view-btn ${showRefLabels ? 'active' : ''}`}
-                onClick={() => setShowRefLabels(v => !v)}
-              >
-                {t('labels')}
-              </button>
-              <button
-                className={`view-btn ${showPatchLinks ? 'active' : ''}`}
-                onClick={() => setShowPatchLinks(v => !v)}
-                title={t('copiesTip')}
-              >
-                {patchLinksLoading ? t('copiesLoading') : t('copies')}
-              </button>
+            <>
               <button
                 className="view-btn"
                 onClick={() => setFitSignal(n => n + 1)}
@@ -1095,81 +1101,156 @@ export default function RepoView({
               >
                 {t('fit')}
               </button>
-              <button
-                className={`view-btn ${hideRemotes ? 'active' : ''}`}
-                onClick={() => setHideRemotes(!hideRemotes)}
-                title={t('remotesTip')}
-              >
-                {t('remotes')}
-              </button>
-              <select
-                className="view-btn date-select"
-                value={dateRangeValue}
-                onChange={e => {
-                  const v = e.target.value;
-                  // Switching to Custom keeps whatever dates the inputs
-                  // hold (empty strings take the fallbacks in customRange).
-                  if (v === 'custom') setDateRange(customRange(customFrom, customTo));
-                  else if (v === 'all') setDateRange({ kind: 'all' });
-                  else setDateRange({ kind: 'preset', days: Number(v) });
-                  // Re-cropping re-anchors the canvas: reset the viewport.
-                  setViewResetKey(k => k + 1);
-                }}
-              >
-                <option value="all">{t('dateAll')}</option>
-                <option value="7">{t('dateWeek')}</option>
-                <option value="30">{t('dateMonth')}</option>
-                <option value="90">{t('date3m')}</option>
-                <option value="365">{t('dateYear')}</option>
-                <option value="custom">{t('dateCustom')}</option>
-              </select>
-              {dateRange.kind === 'custom' && (
-                <>
-                  <input
-                    type="date"
-                    className="view-btn date-input"
-                    value={customFrom}
-                    max={customTo || undefined}
-                    title={t('dateFrom')}
-                    aria-label={t('dateFrom')}
-                    onChange={e => {
-                      const v = e.target.value;
-                      setCustomFrom(v);
-                      setDateRange(customRange(v, customTo));
-                      setViewResetKey(k => k + 1);
-                    }}
-                  />
-                  <input
-                    type="date"
-                    className="view-btn date-input"
-                    value={customTo}
-                    min={customFrom || undefined}
-                    title={t('dateTo')}
-                    aria-label={t('dateTo')}
-                    onChange={e => {
-                      const v = e.target.value;
-                      setCustomTo(v);
-                      setDateRange(customRange(customFrom, v));
-                      setViewResetKey(k => k + 1);
-                    }}
-                  />
-                </>
+              {termAvailable && (
+                <button
+                  className={`view-btn terminal-toggle-btn${termOpen ? ' active' : ''}`}
+                  onClick={() => setTermOpen(v => !v)}
+                  title={t('terminalTip')}
+                  aria-label={t('terminal')}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                    <polyline points="4.5,6 7,8.5 4.5,11" />
+                    <line x1="9" y1="11" x2="11.5" y2="11" />
+                  </svg>
+                </button>
               )}
-            </div>
-          )}
-          {gitData && termAvailable && (
-            <button
-              className={`view-btn terminal-toggle-btn${termOpen ? ' active' : ''}`}
-              onClick={() => setTermOpen(v => !v)}
-              title={t('terminalTip')}
-              aria-label={t('terminal')}
-            >
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-                <polyline points="4.5,6 7,8.5 4.5,11" />
-                <line x1="9" y1="11" x2="11.5" y2="11" />
-              </svg>
-            </button>
+              <div className="header-scope">
+                <select
+                  className="view-btn date-select"
+                  value={dateRangeValue}
+                  onChange={e => {
+                    const v = e.target.value;
+                    // Switching to Custom keeps whatever dates the inputs
+                    // hold (empty strings take the fallbacks in customRange).
+                    if (v === 'custom') setDateRange(customRange(customFrom, customTo));
+                    else if (v === 'all') setDateRange({ kind: 'all' });
+                    else setDateRange({ kind: 'preset', days: Number(v) });
+                    // Re-cropping re-anchors the canvas: reset the viewport.
+                    setViewResetKey(k => k + 1);
+                  }}
+                >
+                  <option value="all">{t('dateAll')}</option>
+                  <option value="7">{t('dateWeek')}</option>
+                  <option value="30">{t('dateMonth')}</option>
+                  <option value="90">{t('date3m')}</option>
+                  <option value="365">{t('dateYear')}</option>
+                  <option value="custom">{t('dateCustom')}</option>
+                </select>
+                {dateRange.kind === 'custom' && (
+                  <>
+                    <input
+                      type="date"
+                      className="view-btn date-input"
+                      value={customFrom}
+                      max={customTo || undefined}
+                      title={t('dateFrom')}
+                      aria-label={t('dateFrom')}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setCustomFrom(v);
+                        setDateRange(customRange(v, customTo));
+                        setViewResetKey(k => k + 1);
+                      }}
+                    />
+                    <input
+                      type="date"
+                      className="view-btn date-input"
+                      value={customTo}
+                      min={customFrom || undefined}
+                      title={t('dateTo')}
+                      aria-label={t('dateTo')}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setCustomTo(v);
+                        setDateRange(customRange(customFrom, v));
+                        setViewResetKey(k => k + 1);
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+              <div className="view-menu-anchor">
+                <button
+                  className={`view-btn view-menu-btn${viewMenuOpen ? ' active' : ''}`}
+                  onClick={() => setViewMenuOpen(v => !v)}
+                  title={t('viewOptions')}
+                  aria-expanded={viewMenuOpen}
+                >
+                  {t('viewOptions')}
+                  {customViewCount > 0 && (
+                    <span className="view-menu-badge">{customViewCount}</span>
+                  )}
+                </button>
+                {viewMenuOpen && (
+                  <>
+                    {/* Transparent click-catcher: closes on outside click
+                        without dimming the graph behind a small menu. */}
+                    <div className="view-menu-backdrop" onClick={() => setViewMenuOpen(false)} />
+                    <div className="view-menu">
+                      <div className="view-menu-title">{t('viewOptions')}</div>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={compressed}
+                          onChange={() => setCompressed(v => !v)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('compress')}</span>
+                          <span className="view-menu-desc">{t('compressTip')}</span>
+                        </span>
+                      </label>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={showMergeLinks}
+                          onChange={() => setShowMergeLinks(v => !v)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('mergeLinks')}</span>
+                          <span className="view-menu-desc">{t('mergeLinksTip')}</span>
+                        </span>
+                      </label>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={showRefLabels}
+                          onChange={() => setShowRefLabels(v => !v)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('labels')}</span>
+                          <span className="view-menu-desc">{t('labelsTip')}</span>
+                        </span>
+                      </label>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={showPatchLinks}
+                          onChange={() => setShowPatchLinks(v => !v)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('copies')}</span>
+                          <span className="view-menu-desc">
+                            {patchLinksLoading ? t('copiesLoading') : t('copiesTip')}
+                          </span>
+                        </span>
+                      </label>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
+                          checked={hideRemotes}
+                          onChange={() => setHideRemotes(!hideRemotes)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('remotes')}</span>
+                          <span className="view-menu-desc">{t('remotesTip')}</span>
+                        </span>
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
           )}
         </div>
       </header>

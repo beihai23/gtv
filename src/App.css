@@ -266,25 +266,46 @@
   color: var(--accent);
 }
 
+/* Identity group: repo name, then position pill + commit count. The pill
+   groups the "where am I" facts into one visual unit next to the name. */
 .repo-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   color: var(--text-dim);
 }
 
 /* The branch name in the header IS the position indicator (head_branch,
    not the trunk) -- clicking it re-anchors on HEAD, so it reads and
-   behaves like the "where am I" control it is. */
-.head-jump-btn {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--link);
+   behaves like the "where am I" control it is. The pill borrows chip
+   styling so identity and lane filters speak the same visual language;
+   its green dot matches the HEAD ring on the graph and the minimap dot --
+   same green = "you are here" on every surface. */
+.head-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
   cursor: pointer;
 }
 
-.head-jump-btn:hover {
-  text-decoration: underline;
+.head-chip:hover {
+  border-color: var(--accent);
+}
+
+.head-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4caf50;
+  flex-shrink: 0;
 }
 
 .open-btn {
@@ -712,12 +733,97 @@
   flex-shrink: 0;
 }
 
-.view-toggles {
+/* Date scope group: it changes what data is LOADED (vs the presentation
+   toggles, which only change how it is drawn), so it stays visible at
+   rest -- a silently active date filter would shrink the map with no
+   visible cause. The border separates "configure" from the orientation
+   actions (fit, terminal) to its left. */
+.header-scope {
   display: flex;
+  align-items: center;
   gap: 6px;
-  padding-right: 4px;
-  border-right: 1px solid var(--border);
-  margin-right: 4px;
+  padding-left: 12px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+/* Collapsed view-options menu. The anchor is position:relative so the
+   panel tracks the trigger; the backdrop is a TRANSPARENT click-catcher
+   (a small menu does not warrant dimming the graph). */
+.view-menu-anchor {
+  position: relative;
+}
+
+.view-menu-btn .view-menu-badge {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.view-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.view-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 61;
+  width: 300px;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.view-menu-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.view-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.view-menu-item:hover {
+  background: var(--bg-input);
+}
+
+.view-menu-item input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.view-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.view-menu-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.view-menu-desc {
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 .header-chips {
