@@ -47,3 +47,36 @@ describe('viewportRect sanity anchors', () => {
     expect(r.w / r.h).toBeCloseTo(1200 / 800, 10);
   });
 });
+
+// Panning the main view into empty space (content dragged toward the
+// screen center) slides the raw window rect off the minimap canvas; the
+// SVG clips it, so the box visibly shrinks and then disappears -- the
+// position indicator gone exactly when the user needs it. The rect now
+// clamps its position into the map and keeps its size.
+describe('viewportRect stays on the map (off-content pan)', () => {
+  const m = minimapMap(3000, 400, 180, 60, -180, -40);
+
+  it('pins to the left edge and keeps its size when the window exits left', () => {
+    const inBounds = viewportRect(1, 0, 0, 1200, 800, m);
+    // Content dragged hard right => same zoom, window far left of the
+    // scene => raw x deeply negative.
+    const off = viewportRect(1, 20000, 0, 1200, 800, m);
+    expect(off.x).toBe(0);
+    expect(off.w).toBe(inBounds.w);
+    expect(off.h).toBe(inBounds.h);
+  });
+
+  it('pins to the right edge when the window exits right', () => {
+    const r = viewportRect(1, -20000, 0, 1200, 800, m);
+    expect(r.x).toBeCloseTo(180 - r.w, 9);
+    expect(r.w).toBeGreaterThan(0);
+  });
+
+  it('leaves an in-bounds rect untouched', () => {
+    const r = viewportRect(1, 0, 0, 1200, 800, m);
+    expect(r.x).toBeGreaterThanOrEqual(0);
+    expect(r.x).toBeLessThanOrEqual(180 - r.w);
+    expect(r.y).toBeGreaterThanOrEqual(0);
+    expect(r.y).toBeLessThanOrEqual(60 - r.h);
+  });
+});

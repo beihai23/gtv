@@ -12,6 +12,9 @@ export interface MinimapMap {
   x0: number;
   /** Scene y that maps to minimap y = 0. */
   y0: number;
+  /** Minimap canvas size the map was fitted into (viewportRect clamps into it). */
+  boxW: number;
+  boxH: number;
 }
 
 /**
@@ -29,6 +32,8 @@ export function minimapMap(sceneW: number, sceneH: number, boxW: number, boxH: n
     s,
     x0: minX - (boxW - w * s) / (2 * s),
     y0: minY - (boxH - h * s) / (2 * s),
+    boxW,
+    boxH,
   };
 }
 
@@ -56,8 +61,26 @@ export function viewportRect(k: number, tx: number, ty: number, windowW: number,
   // Scale both sides by the same factor so the aspect ratio survives, and
   // grow the rectangle around its own center so it stays where the window is.
   const f = 6 / Math.min(vw, vh);
-  if (f <= 1) return { x, y, w: vw, h: vh };
-  const w = vw * f;
-  const h = vh * f;
-  return { x: x - (w - vw) / 2, y: y - (h - vh) / 2, w, h };
+  let w = vw;
+  let h = vh;
+  let rx = x;
+  let ry = y;
+  if (f > 1) {
+    w = vw * f;
+    h = vh * f;
+    rx = x - (w - vw) / 2;
+    ry = y - (h - vh) / 2;
+  }
+  // Keep the "you are here" box on the map: panning the main view into
+  // empty space moves the raw rect off the canvas and the SVG clips it
+  // away, losing the position indicator exactly when the user has
+  // navigated into no-man's land. Clamp the POSITION, keep the SIZE -- the
+  // pinned edge still points the way back. In-bounds rects are unchanged
+  // (a rect larger than the whole box clamps to 0).
+  return {
+    x: Math.max(0, Math.min(rx, m.boxW - w)),
+    y: Math.max(0, Math.min(ry, m.boxH - h)),
+    w,
+    h,
+  };
 }

@@ -14,6 +14,13 @@ interface TimelineProps {
   selectedCommitId: string | null;
   /** Increments when a repository is (re)opened — the only time the viewport resets. */
   resetKey: number;
+  /** True while this tab is the active one. Keep-alive shells keep hidden
+   *  tabs mounted under display:none; a draw there measures the container
+   *  0x0 and every closure it builds (zoom handler, minimap viewport,
+   *  edge-load probe) carries that poisoned size until the next VISIBLE
+   *  draw. So hidden draws are skipped — and `active` in draw's deps makes
+   *  the activation itself the re-draw, with real dimensions. */
+  active: boolean;
   /** "View from this branch" (lane context menu). */
   onViewFromBranch: (branchName: string) => void;
   /** "Only related branches" (lane context menu): rebuild the view with
@@ -91,7 +98,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -114,7 +121,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
   const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
   /** Scene→minimap mapping (uniform scale, letterbox-centered), set during
    *  minimap draw; viewport rect and jump hit-testing read it. */
-  const minimapMapRef = useRef<MinimapMap>({ s: 1, x0: 0, y0: 0 });
+  const minimapMapRef = useRef<MinimapMap>({ s: 1, x0: 0, y0: 0, boxW: MINIMAP_W, boxH: MINIMAP_H });
 
   const commitMap = useMemo(() => new Map(data.commits.map(c => [c.id, c])), [data]);
   const branchColorMap = useMemo(() => new Map(data.branches.map(b => [b.name, b.color])), [data]);
@@ -153,6 +160,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
 
   const draw = useCallback(() => {
     if (!svgRef.current || !containerRef.current) return;
+    // Hidden keep-alive tab: clientWidth/Height are 0 under display:none,
+    // and this draw's closures (zoom handler, minimapViewport,
+    // maybeLoadOlder) would carry that poisoned size into the next visible
+    // session -- the minimap box vanishing on every pan of a re-activated
+    // tab (0x0 window hits the F2 guard) was exactly this. Nothing is
+    // laid out for an invisible container anyway; activation re-runs draw
+    // through the `active` dep with real dimensions.
+    if (!active) return;
 
     const svg = d3.select(svgRef.current);
     const container = containerRef.current;
@@ -1232,7 +1247,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, onVi
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, onCompareClick, compareBaseId]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, onCompareClick, compareBaseId]);
 
   useEffect(() => {
     draw();

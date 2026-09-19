@@ -1263,6 +1263,7 @@ export default function RepoView({
               onCommitClick={handleNodeClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
+              active={active}
               onViewFromBranch={handleViewFromBranch}
               onRelatedBranch={handleRelatedBranch}
               compressed={compressed}
