@@ -972,6 +972,20 @@ export default function RepoView({
     handleCommitClick(id);
   }, [handleCommitClick, gitData, inactive, repoId, loadDiffStats]);
 
+  // Header branch-name click: re-anchor on HEAD. The "where am I" button
+  // for a 6000-commit map -- same machinery as the locate hit (expand a
+  // collapsed head lane, center on the node, select it).
+  const jumpToHead = useCallback(() => {
+    const head = gitData?.commits.find(c => c.is_head);
+    if (!head) return;
+    if (inactive?.dead.has(head.lane_owner)) {
+      setExpandedDead(prev => new Set(prev).add(head.lane_owner));
+    }
+    focusSeqRef.current += 1;
+    setFocusTarget({ id: head.id, seq: focusSeqRef.current });
+    handleCommitClick(head.id);
+  }, [gitData, inactive, handleCommitClick]);
+
   const renderBranchChip = (branch: BranchLane) => (
     <button
       key={branch.name}
@@ -1014,7 +1028,19 @@ export default function RepoView({
           )}
           {gitData && rangedData && (
             <span className="repo-info">
-              {gitData.main_branch} • {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
+              {/* Position, not classification: head_branch is where THIS
+                  member is checked out (a worktree tab must not announce
+                  the trunk), main_branch is only the detached-HEAD
+                  fallback. Clicking jumps back to HEAD -- the anchor to
+                  find when lost in a 6000-commit map. */}
+              <button
+                className="head-jump-btn"
+                title={t('jumpToHead')}
+                onClick={jumpToHead}
+              >
+                {gitData.head_branch ?? gitData.main_branch}
+              </button>
+              {' '}• {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
             </span>
           )}
         </div>

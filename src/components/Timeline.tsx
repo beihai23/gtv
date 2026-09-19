@@ -1176,6 +1176,25 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .attr('rx', 2)
         .attr('pointer-events', 'none');
 
+      // HEAD anchor (topmost): in a 6000-commit map the graph's own green
+      // ring + label shrink to nothing at overview zoom -- the map itself
+      // is the surface that stays readable, so the dot lives HERE. Same
+      // green as the in-graph marker; dark rim reads on light and dark
+      // themes. Skipped when a filtered view has no head node in it.
+      const headNode = data.commits.find(c => c.is_head && !hiddenIds.has(c.id))
+        ?? data.commits.find(c => c.is_head);
+      if (headNode) {
+        mm.append('circle')
+          .attr('class', 'mm-head')
+          .attr('cx', mx(headNode.x))
+          .attr('cy', my(headNode.y))
+          .attr('r', 3.5)
+          .attr('fill', '#4CAF50')
+          .attr('stroke', 'rgba(0, 0, 0, 0.45)')
+          .attr('stroke-width', 1)
+          .attr('pointer-events', 'none');
+      }
+
       // Click to jump; hold and drag to scrub the viewport across the map.
       // Invert the same map the drawing used, so the jump lands exactly on
       // what was clicked.
