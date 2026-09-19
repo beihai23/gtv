@@ -45,9 +45,6 @@ interface RepoViewProps {
   // active tab's -- T4 review Low-3). Activation false -> true bumps the
   // internal fit signal (D3 re-measures after display:none).
   active: boolean;
-  // Every open source lives in App (unified dedup, spec 5.2); the header
-  // button asks the shell to run the picker.
-  onOpenPicker: () => void;
   // Global display preferences (App-owned so every tab shares them).
   showTags: boolean;
   toggleShowTags: () => void;
@@ -96,7 +93,6 @@ export default function RepoView({
   path,
   initialData,
   active,
-  onOpenPicker,
   showTags,
   toggleShowTags,
   compressed,
@@ -115,7 +111,6 @@ export default function RepoView({
   // loading/error shape.
   const [gitData, setGitData] = useState<GitData | null>(initialData);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [branchList, setBranchList] = useState<BranchLane[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -334,7 +329,6 @@ export default function RepoView({
   // declaration would be a TDZ error (the M1.3 landmine).
   const handleFilterChange = useCallback(async (branchNames: string[]) => {
     setSelectedBranches(branchNames);
-    setLoading(true);
     try {
       const data = await filterByBranches(repoId, branchNames);
       setGitData(data);
@@ -342,8 +336,6 @@ export default function RepoView({
     } catch (err) {
       recordFrontendError(errText(err));
       setError(errText(err));
-    } finally {
-      setLoading(false);
     }
   }, [repoId, loadDiffStats]);
 
@@ -385,7 +377,6 @@ export default function RepoView({
     if (staleSettingRef.current === showStaleBranches) return;
     staleSettingRef.current = showStaleBranches;
     let cancelled = false;
-    setLoading(true);
     setError(null);
     (async () => {
       try {
@@ -418,8 +409,6 @@ export default function RepoView({
       } catch (err) {
         recordFrontendError(errText(err));
         if (!cancelled) setError(errText(err));
-      } finally {
-        if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -611,7 +600,6 @@ export default function RepoView({
   }, [gitData, handleFilterChange]);
 
   const handleViewFromBranch = useCallback(async (branchName: string) => {
-    setLoading(true);
     setError(null);
     try {
       const data = await switchBranch(repoId, branchName);
@@ -624,8 +612,6 @@ export default function RepoView({
     } catch (err) {
       recordFrontendError(errText(err));
       setError(errText(err));
-    } finally {
-      setLoading(false);
     }
   }, [repoId, loadDiffStats]);
 
@@ -958,7 +944,6 @@ export default function RepoView({
     if (r.kind === 'commit' && !r.in_view) {
       // Hit outside the loaded window: swap the view to the target's
       // ancestry (single-seed window), then focus it like any in-view hit.
-      setLoading(true);
       setError(null);
       try {
         const data = await jumpToCommit(repoId, id);
@@ -973,8 +958,6 @@ export default function RepoView({
       } catch (err) {
         recordFrontendError(errText(err));
         setError(errText(err));
-      } finally {
-        setLoading(false);
       }
       return;
     }
@@ -1034,13 +1017,6 @@ export default function RepoView({
               {gitData.main_branch} • {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
             </span>
           )}
-          <button
-            className="open-btn"
-            onClick={onOpenPicker}
-            disabled={loading}
-          >
-            {loading ? t('loading') : t('openRepo')}
-          </button>
         </div>
 
         {branchList.length > 0 && (

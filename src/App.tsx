@@ -582,7 +582,6 @@ function App() {
               path={tab.path}
               initialData={openData[tab.repoId]}
               active={tab.repoId === activeRepoId}
-              onOpenPicker={() => void openPicker()}
               showTags={showTags}
               toggleShowTags={toggleShowTags}
               compressed={compressed}
