@@ -446,10 +446,6 @@ function App() {
   const activeTab = tabs.find(tb => tb.repoId === activeRepoId) ?? null;
   const groups = useMemo(() => groupTabsByCommondir(tabs), [tabs]);
   const activeFamily = activeTab ? families[activeTab.repoId] ?? [] : [];
-  // The band's right tail: the ACTIVE member's filesystem path (the "cd
-  // target" fact, previously tooltip-only). Falls back to the main member
-  // when the family snapshot predates the active tab (briefly, on open).
-  const activeMember = activeFamily.find(m => activeTab != null && m.path === activeTab.path) ?? activeFamily[0];
   const openPaths = useMemo(() => new Set(tabs.map(tb => tb.path)), [tabs]);
 
   // First-level tab title (spec 5.1): the family's MAIN directory name
@@ -533,8 +529,8 @@ function App() {
           branch, the member's semantic identity (unique within a family,
           git's one-branch-per-worktree rule; snapshot at enumeration
           time, refreshed through the repo-changed chain for watched
-          members) -- and the row's right tail carries the active
-          member's path. */}
+          members). The active member's path lives in the tab header's
+          identity card, not here. */}
       {activeFamily.length > 1 && (
         <div className="worktree-row">
           <span className="wt-row-label">{t('worktrees')}</span>
@@ -566,9 +562,6 @@ function App() {
               </button>
             );
           })}
-          {activeMember && (
-            <span className="wt-row-path" title={activeMember.path}>{activeMember.path}</span>
-          )}
         </div>
       )}
 

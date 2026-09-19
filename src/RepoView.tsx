@@ -1040,33 +1040,44 @@ export default function RepoView({
   return (
     <>
       <header className="header">
+        {/* Identity card, stacked (who / where / on disk): the worktree
+            name holds line 1 at full size, the position pill + commit
+            count drop to line 2, and the filesystem path -- previously
+            tooltip-only -- becomes line 3. Stacking spends height instead
+            of width, so the name stays large while the band carries one
+            more fact worth glancing at (each tab is a different member,
+            and "which directory is this" is the first question a
+            multi-worktree session asks). */}
         <div className="header-left">
           {gitData && (
-            <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
-          )}
-          {gitData && rangedData && (
-            <span className="repo-info">
-              {/* Position, not classification: head_branch is where THIS
-                  member is checked out (a worktree tab must not announce
-                  the trunk), main_branch is only the detached-HEAD
-                  fallback. Rendered as a pill so it reads as one unit
-                  with the repo name, its green dot matching the HEAD ring
-                  on the graph and the minimap dot -- same green = same
-                  "you are here" meaning on every surface. Clicking jumps
-                  back to HEAD -- the anchor to find when lost in a
-                  6000-commit map. */}
-              <button
-                className="head-chip"
-                title={t('jumpToHead')}
-                onClick={jumpToHead}
-              >
-                <span className="head-chip-dot" aria-hidden="true" />
-                {gitData.head_branch ?? gitData.main_branch}
-              </button>
-              <span className="repo-info-count">
-                {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
-              </span>
-            </span>
+            <>
+              <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
+              {rangedData && (
+                <span className="repo-info">
+                  {/* Position, not classification: head_branch is where THIS
+                      member is checked out (a worktree tab must not announce
+                      the trunk), main_branch is only the detached-HEAD
+                      fallback. Rendered as a pill so it reads as one unit
+                      under the repo name, its green dot matching the HEAD ring
+                      on the graph and the minimap dot -- same green = same
+                      "you are here" meaning on every surface. Clicking jumps
+                      back to HEAD -- the anchor to find when lost in a
+                      6000-commit map. */}
+                  <button
+                    className="head-chip"
+                    title={t('jumpToHead')}
+                    onClick={jumpToHead}
+                  >
+                    <span className="head-chip-dot" aria-hidden="true" />
+                    {gitData.head_branch ?? gitData.main_branch}
+                  </button>
+                  <span className="repo-info-count">
+                    {t(gitData.has_more ? 'commitCountMore' : 'commitCount', { n: rangedData.commits.length })}
+                  </span>
+                </span>
+              )}
+              <span className="repo-path" title={path}>{path}</span>
+            </>
           )}
         </div>
 
