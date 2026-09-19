@@ -168,11 +168,14 @@ export interface TerminalExit {
 // --- Multi-repo tabs (mirrors models.rs) ---
 
 /** One member of a worktree family (main repo or linked worktree sharing
- *  the same common dir); metadata only, members open lazily. */
+ *  the same common dir); metadata only, members open lazily.
+ *  head_branch = checked-out branch at enumeration time (the chip's
+ *  semantic identity); null = detached HEAD. Mirrors models.rs. */
 export interface WorktreeMember {
   name: string;
   path: string;
   is_main: boolean;
+  head_branch: string | null;
 }
 
 /** openRepository's return: the view data plus the registry identity the

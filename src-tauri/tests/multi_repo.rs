@@ -349,13 +349,27 @@ fn worktree_family_enumerates_identically_from_both_ends() {
             .to_string_lossy()
     );
 
+    // head_branch (the second-level chip's semantic identity): the linked
+    // worktree sits on the branch it was created with; the main repo is on
+    // its init branch (name varies with the machine's init.defaultBranch,
+    // so only Some is pinned).
+    assert_eq!(main.family[1].head_branch.as_deref(), Some("topic"));
+    assert!(main.family[0].head_branch.is_some());
+
     // From the worktree end: a distinct session, the same commondir, the
     // same member set (canonical paths make the sets equal).
     let from_wt = open(&state, &wt);
     assert_ne!(from_wt.repo_id, main.repo_id);
     assert!(!from_wt.already_open);
     assert_eq!(from_wt.commondir, main.commondir);
-    let key = |m: &gtv_lib::models::WorktreeMember| (m.name.clone(), m.path.clone(), m.is_main);
+    let key = |m: &gtv_lib::models::WorktreeMember| {
+        (
+            m.name.clone(),
+            m.path.clone(),
+            m.is_main,
+            m.head_branch.clone(),
+        )
+    };
     let from_main: Vec<_> = main.family.iter().map(key).collect();
     let from_wt_set: Vec<_> = from_wt.family.iter().map(key).collect();
     assert_eq!(from_wt_set, from_main);

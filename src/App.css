@@ -149,6 +149,20 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* The only on-screen word saying the row is worktrees; and the dim
+   branch suffix inside each chip = the member's semantic identity
+   (unique per family, git's one-branch-per-worktree rule). */
+.wt-row-label {
+  color: var(--text-faint);
+  font-size: 10px;
+  margin-right: 4px;
+  user-select: none;
+}
+
+.wt-chip-branch {
+  color: var(--text-faint);
+}
+
 .wt-chip {
   padding: 1px 8px;
   border: 1px solid var(--border);

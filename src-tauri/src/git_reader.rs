@@ -219,7 +219,9 @@ impl GitReader {
     /// yields the same family. Members whose path is gone or that fail
     /// libgit2's worktree validation (stale registration, removed
     /// directory) are skipped with a warning instead of failing the open.
-    /// Sorted main-first, then by name, for a stable presentation.
+    /// Sorted main-first, then by name, for a stable presentation. Every
+    /// member carries its head_branch (see the struct doc for the
+    /// staleness window on unwatched members).
     pub fn worktree_family(&self) -> Result<Vec<WorktreeMember>, String> {
         let mut family: Vec<WorktreeMember> = Vec::new();
 
@@ -236,9 +238,11 @@ impl GitReader {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let path = main_path.to_string_lossy().into_owned();
             family.push(WorktreeMember {
                 name,
-                path: main_path.to_string_lossy().into_owned(),
+                head_branch: member_head_branch(&path),
+                path,
                 is_main: true,
             });
         }
@@ -274,9 +278,11 @@ impl GitReader {
                     continue;
                 }
             };
+            let path = path.to_string_lossy().into_owned();
             family.push(WorktreeMember {
                 name: name.to_string(),
-                path: path.to_string_lossy().into_owned(),
+                head_branch: member_head_branch(&path),
+                path,
                 is_main: false,
             });
         }
@@ -1495,4 +1501,11 @@ fn summarize_stderr(bytes: &[u8]) -> String {
         summary = summary.chars().skip(len - MAX_CHARS).collect();
     }
     format!(": {}", summary)
+}
+
+/// A family member's HEAD branch through a short-lived reader — the same
+/// pattern as the checkout guard's sibling probe. None = detached HEAD or
+/// a member that cannot be opened; the chip falls back to the bare name.
+fn member_head_branch(path: &str) -> Option<String> {
+    GitReader::new(path).ok()?.head_branch()
 }

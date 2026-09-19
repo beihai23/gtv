@@ -509,20 +509,32 @@ function App() {
           family; already-open members are highlighted and clicking them
           just activates (openTab dedup), unopened ones open lazily with a
           fresh repo_id (same-family members never dedup, T1 semantics).
-          Hidden entirely for single-worktree families. */}
+          Hidden entirely for single-worktree families. The leading label
+          is the only on-screen word saying WHAT this row is, and the dim
+          branch suffix is each member's semantic identity (unique within
+          a family -- git's one-branch-per-worktree rule); branch is a
+          snapshot at enumeration time, refreshed through the repo-changed
+          chain for watched members. */}
       {activeFamily.length > 1 && (
         <div className="worktree-row">
+          <span className="wt-row-label">{t('worktrees')}</span>
           {activeFamily.map(m => {
             const open = openPaths.has(m.path);
             const current = activeTab != null && m.path === activeTab.path;
+            const tip = [
+              m.is_main ? t('mainWorktree') : t('linkedWorktree'),
+              ...(m.head_branch ? [`${t('currentBranchTip')}: ${m.head_branch}`] : []),
+              m.path,
+            ].join('\n');
             return (
               <button
                 key={m.path}
                 className={`wt-chip${open ? ' open' : ''}${current ? ' current' : ''}`}
-                title={m.is_main ? `${t('mainWorktree')}\n${m.path}` : m.path}
+                title={tip}
                 onClick={() => void openTab(m.path)}
               >
                 {m.is_main ? '• ' : ''}{m.name}
+                {m.head_branch && <span className="wt-chip-branch"> · {m.head_branch}</span>}
               </button>
             );
           })}

@@ -95,15 +95,15 @@
         commondir: '/mock/taskon-server/.git',
         view: () => DATA,
         family: () => [
-          { name: 'taskon-server', path: '/mock/taskon-server', is_main: true },
-          { name: 'taskon-server-wt', path: '/mock/taskon-server-wt', is_main: false },
+          { name: 'taskon-server', path: '/mock/taskon-server', is_main: true, head_branch: 'main' },
+          { name: 'taskon-server-wt', path: '/mock/taskon-server-wt', is_main: false, head_branch: 'wt-lane' },
         ],
       };
       FIXTURES['/mock/taskon-server-wt'] = { ...FIXTURES['/mock/taskon-server'], view: () => WT_DATA };
       FIXTURES['/mock/other-repo'] = {
         commondir: '/mock/other-repo/.git',
         view: () => OTHER_DATA,
-        family: () => [{ name: 'other-repo', path: '/mock/other-repo', is_main: true }],
+        family: () => [{ name: 'other-repo', path: '/mock/other-repo', is_main: true, head_branch: 'other-main' }],
       };
     });
 
@@ -132,7 +132,7 @@
     }
     function familyOf(path) {
       return FIXTURES[path]?.family()
-        ?? [{ name: path.split('/').pop() || path, path, is_main: true }];
+        ?? [{ name: path.split('/').pop() || path, path, is_main: true, head_branch: 'main' }];
     }
     function viewOf(path) {
       return FIXTURES[path]?.view() ?? DATA;

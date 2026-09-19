@@ -234,12 +234,18 @@ pub struct CheckoutAck {
 
 /// One member of a worktree family: the main repository (is_main) or one
 /// linked worktree sharing the same common dir. Metadata only — members
-/// are opened lazily by the frontend's second-level tabs.
+/// are opened lazily by the frontend's second-level tabs. head_branch is
+/// each member's checked-out branch at enumeration time: the semantic
+/// identity of the second-level chip (git enforces one branch per family,
+/// so it is unique); None = detached HEAD. Snapshot semantics: a checkout
+/// inside a member with no open tab (nothing watches it) stays stale until
+/// the family's next enumeration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeMember {
     pub name: String,
     pub path: String,
     pub is_main: bool,
+    pub head_branch: Option<String>,
 }
 
 /// open_repository's return: the view data plus the registry identity the
