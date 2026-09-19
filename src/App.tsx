@@ -446,6 +446,10 @@ function App() {
   const activeTab = tabs.find(tb => tb.repoId === activeRepoId) ?? null;
   const groups = useMemo(() => groupTabsByCommondir(tabs), [tabs]);
   const activeFamily = activeTab ? families[activeTab.repoId] ?? [] : [];
+  // The band's right tail: the ACTIVE member's filesystem path (the "cd
+  // target" fact, previously tooltip-only). Falls back to the main member
+  // when the family snapshot predates the active tab (briefly, on open).
+  const activeMember = activeFamily.find(m => activeTab != null && m.path === activeTab.path) ?? activeFamily[0];
   const openPaths = useMemo(() => new Set(tabs.map(tb => tb.path)), [tabs]);
 
   // First-level tab title (spec 5.1): the family's MAIN directory name
@@ -524,12 +528,13 @@ function App() {
           family; already-open members are highlighted and clicking them
           just activates (openTab dedup), unopened ones open lazily with a
           fresh repo_id (same-family members never dedup, T1 semantics).
-          Hidden entirely for single-worktree families. The leading label
-          is the only on-screen word saying WHAT this row is, and the dim
-          branch suffix is each member's semantic identity (unique within
-          a family -- git's one-branch-per-worktree rule); branch is a
-          snapshot at enumeration time, refreshed through the repo-changed
-          chain for watched members. */}
+          Hidden entirely for single-worktree families. Each chip is two
+          lines -- worktree name (home icon = main worktree) over its
+          branch, the member's semantic identity (unique within a family,
+          git's one-branch-per-worktree rule; snapshot at enumeration
+          time, refreshed through the repo-changed chain for watched
+          members) -- and the row's right tail carries the active
+          member's path. */}
       {activeFamily.length > 1 && (
         <div className="worktree-row">
           <span className="wt-row-label">{t('worktrees')}</span>
@@ -548,11 +553,22 @@ function App() {
                 title={tip}
                 onClick={() => void openTab(m.path)}
               >
-                {m.is_main ? '• ' : ''}{m.name}
-                {m.head_branch && <span className="wt-chip-branch"> · {m.head_branch}</span>}
+                <span className="wt-chip-name">
+                  {m.is_main && (
+                    <svg className="wt-chip-home" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M2.5 8 8 2.8 13.5 8" />
+                      <path d="M4.2 6.8V13.2h7.6V6.8" />
+                    </svg>
+                  )}
+                  {m.name}
+                </span>
+                <span className="wt-chip-branch">{m.head_branch ?? '—'}</span>
               </button>
             );
           })}
+          {activeMember && (
+            <span className="wt-row-path" title={activeMember.path}>{activeMember.path}</span>
+          )}
         </div>
       )}
 

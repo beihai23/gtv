@@ -164,9 +164,7 @@
   border-bottom: 1px solid var(--border);
 }
 
-/* The only on-screen word saying the row is worktrees; and the dim
-   branch suffix inside each chip = the member's semantic identity
-   (unique per family, git's one-branch-per-worktree rule). */
+/* The only on-screen word saying the row is worktrees. */
 .wt-row-label {
   color: var(--text-faint);
   font-size: 10px;
@@ -174,12 +172,12 @@
   user-select: none;
 }
 
-.wt-chip-branch {
-  color: var(--text-faint);
-}
-
 .wt-chip {
-  padding: 1px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 3px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
@@ -187,12 +185,53 @@
   font-size: 11px;
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
-  /* Long member+branch names must not stretch the row: truncate, the
-     tooltip carries the full text. */
+  /* Two lines: width follows the LONGER line alone, so name+branch no
+     longer sum into one wide pill. Both lines truncate; the tooltip
+     carries the full text. */
   max-width: 220px;
+}
+
+.wt-chip-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Home icon = the main worktree. A shape reads at a glance where the old
+   "• " text prefix was invisible. */
+.wt-chip-home {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.wt-chip-branch {
+  /* Second line: the member's semantic identity (unique per family,
+     git's one-branch-per-worktree rule). Em dash = detached HEAD. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+/* The band's long dead right tail, put to work: the ACTIVE member's
+   filesystem path -- the "cd target" fact, previously tooltip-only.
+   Selectable so it can be copied straight out of the bar. */
+.wt-row-path {
+  margin-left: auto;
+  padding-left: 16px;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 10px;
+  user-select: text;
 }
 
 .wt-chip:hover {
@@ -246,11 +285,16 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Region boundaries: identity | lane filters | controls get hairline
+   separators. Without them the middle void (left-aligned chips leave the
+   tail empty) reads as unfinished layout rather than intentional space. */
 .header-left {
   display: flex;
   align-items: center;
   gap: 16px;
   flex-shrink: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
 }
 
 .repo-name {
@@ -731,6 +775,8 @@
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
 }
 
 /* Date scope group: it changes what data is LOADED (vs the presentation
@@ -742,8 +788,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-left: 12px;
-  margin-left: 4px;
+  /* Minor separator (inside the controls group): lighter spacing than
+     the major region borders, so hierarchy still reads. */
+  padding-left: 10px;
   border-left: 1px solid var(--border);
 }
 
@@ -831,7 +878,9 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  /* Left-aligned: reading order identity -> filters continues straight
+     on; centered chips floated loose of the group to their left. */
+  justify-content: flex-start;
   gap: 8px;
   container-type: inline-size;
 }
