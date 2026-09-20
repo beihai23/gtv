@@ -176,14 +176,19 @@ pub fn compute_layout(
         }
     }
 
-    // Fallback: commits unreachable from any seed's first-parent chain
-    // (e.g. second-parent ancestry of an unmerged branch) join the lane of
-    // their nearest descendant. Rare, but keeps the "every commit has a
-    // lane" invariant.
-    for i in 0..commits.len() {
-        if owner[i].is_none() {
-            owner[i] = Some(main_branch.to_string());
-        }
+    // Fallback: lane purity. A lane renders exactly the first-parent lineage
+    // of its own branch — merged-in content from other branches is that
+    // other branch's history, never this lane's (git common sense; the user
+    // rule stated 2026-09-20: "每个分支的泳道上只能出现自己分支上的
+    // commit"). Commits no seed claimed therefore belong to NO rendered
+    // lane: mark them unattributed ("") and the frontend hides them and
+    // their edges outright. Ref-carrying strays (a branch deselected in the
+    // branch panel whose commits still enter the window through merges from
+    // selected lanes) and anonymous strays (stale merged lineage whose tip
+    // fell outside the window) are handled identically — absorbing either
+    // into a lane would misattribute foreign lineage.
+    for owner_slot in owner.iter_mut().filter(|o| o.is_none()) {
+        *owner_slot = Some(String::new());
     }
 
     // Vertical lane order: main on top, others by fork-point time
@@ -262,8 +267,23 @@ pub fn compute_layout(
                 && fork_points.get(&child_owner).map(|fp| fp == parent_id).unwrap_or(false);
 
             let edge_type = if is_merge_link {
-                if parent_owner != child_owner {
+                if !parent_owner.is_empty() && parent_owner != child_owner {
                     commits[i].merge_branch_name = Some(parent_owner.clone());
+                } else if parent_owner.is_empty() {
+                    // The merged-in lineage is unattributed (hidden). The
+                    // merge node stays on the lane — label it from the
+                    // hidden parent's own branch refs so "what came in here"
+                    // remains readable on the first-parent lane.
+                    commits[i].merge_branch_name = commits[pi]
+                        .branch_refs
+                        .iter()
+                        .find(|r| !r.is_tag)
+                        .map(|r| {
+                            r.name
+                                .strip_prefix("origin/")
+                                .unwrap_or(&r.name)
+                                .to_string()
+                        });
                 }
                 EdgeType::Merge
             } else if is_fork_edge {
@@ -320,6 +340,12 @@ pub fn compute_layout(
             || fork_point_ids.contains(&c.id)
             || is_lane_birth
             || !has_same_lane_child.contains(&i);
+        // Unattributed lineage never renders as a key node — the frontend
+        // hides it outright, and keeping it out of the key set also keeps it
+        // out of the x-cascade and the minimap.
+        if c.lane_owner.is_empty() {
+            c.is_key = false;
+        }
     }
 
     // Time-proportional x with ONE global min-spacing cascade over the key

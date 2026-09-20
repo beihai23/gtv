@@ -34,6 +34,9 @@ interface TimelineProps {
   patchLinks: PatchLink[];
   /** Increment to trigger "Fit to view" from outside. */
   fitSignal: number;
+  /** Increment to trigger "go home" (Age-of-Empires style camera snap to
+   *  HEAD + ring flash + minimap ping) from the header button / H key. */
+  headSignal: number;
   /** True while older history can still be paged in. */
   hasMore: boolean;
   /** An older-history page load is in flight. */
@@ -75,6 +78,10 @@ interface TimelineProps {
 const MINIMAP_W = 280;
 const MINIMAP_H = 170;
 
+/** Neutral gray for commits no lane claims (lane_owner ""); visible on both
+ *  themes, distinct from every lane color including main's blue. */
+const UNATTRIBUTED_COLOR = '#9E9E9E';
+
 interface LaneMenu {
   x: number;
   y: number;
@@ -101,7 +108,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -129,6 +136,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   const commitMap = useMemo(() => new Map(data.commits.map(c => [c.id, c])), [data]);
   const branchColorMap = useMemo(() => new Map(data.branches.map(b => [b.name, b.color])), [data]);
 
+  // Unattributed commits (lane_owner "" — a ref-carrying stray from a branch
+  // the panel deselected; see layout.rs fallback pass 1) ride the graph
+  // without claiming a lane: neutral gray, never the host lane's color.
+  const ownerColor = (owner: string) =>
+    owner === '' ? UNATTRIBUTED_COLOR : branchColorMap.get(owner) ?? '#4A90D9';
+
   // Reset view-local state when a different repository is opened.
   useEffect(() => {
     setFocusedLane(null);
@@ -154,8 +167,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
   }, [headLaneHover]);
 
+  // Foreign lineage (lane_owner "" — commits of branches with no rendered
+  // lane) is hidden outright: a lane shows only its own branch's commits.
   const visibleCommits = useMemo(() => {
-    const alive = data.commits.filter(c => !hiddenIds.has(c.id));
+    const alive = data.commits.filter(c => !hiddenIds.has(c.id) && c.lane_owner !== '');
     if (!compressed) return alive;
     return alive.filter(c => c.is_key || expandedLanes.has(c.lane_owner));
   }, [data, compressed, expandedLanes, hiddenIds]);
@@ -164,7 +179,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     const m = new Map<string, number>();
     if (!compressed) return m;
     for (const c of data.commits) {
-      if (hiddenIds.has(c.id)) continue;
+      if (hiddenIds.has(c.id) || c.lane_owner === '') continue;
       if (!c.is_key && !expandedLanes.has(c.lane_owner)) {
         m.set(c.lane_owner, (m.get(c.lane_owner) ?? 0) + 1);
       }
@@ -461,8 +476,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.05 : 0.3);
 
     // --- branch bars (span ALL commits of the lane, compression-proof) --------
+    // Foreign lineage (lane_owner "") is parked on lane 0 but belongs to no
+    // lane — excluded so a lane's track never stretches over hidden commits.
     const laneSpan = new Map<number, { min: number; max: number }>();
     for (const c of data.commits) {
+      if (c.lane_owner === '') continue;
       const span = laneSpan.get(c.lane) ?? { min: c.x, max: c.x };
       span.min = Math.min(span.min, c.x);
       span.max = Math.max(span.max, c.x);
@@ -643,7 +661,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('stroke', (d: CommitEdge) => {
         if (isHotEdge(d)) return '#FFD166';
         const from = commitMap.get(d.from);
-        return from ? branchColorMap.get(from.lane_owner) ?? '#888' : '#888';
+        return from ? ownerColor(from.lane_owner) : '#888';
       })
       .attr('stroke-width', (d: CommitEdge) => {
         if (isHotEdge(d)) return 4;
@@ -798,7 +816,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
 
     nodes.append('circle')
       .attr('r', nodeRadius)
-      .attr('fill', (d: CommitNode) => branchColorMap.get(d.lane_owner) ?? '#4A90D9');
+      .attr('fill', (d: CommitNode) => ownerColor(d.lane_owner));
 
     // Selection halo: a crisp accent ring over a soft wide glow. The accent
     // contrasts with the canvas in every theme (a plain white stroke was
@@ -957,7 +975,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
             .attr('x', 0).attr('y', -13)
             .attr('width', w).attr('height', 16)
             .attr('rx', 8)
-            .attr('fill', n.is_tag ? '#9C27B0' : n.name.startsWith('+') ? '#555' : branchColorMap.get(s.c.lane_owner) ?? '#4A90D9')
+            .attr('fill', n.is_tag ? '#9C27B0' : n.name.startsWith('+') ? '#555' : ownerColor(s.c.lane_owner))
             .attr('opacity', 0.92);
           item.append('text')
             .attr('x', w / 2).attr('y', -2)
@@ -1207,7 +1225,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           .attr('r', 1.8)
           // Lane-colored like the main graph; hardcoded white vanished on
           // light themes, --text turned into a black blob.
-          .attr('fill', branchColorMap.get(c.lane_owner) ?? cssVar('--text', '#fff'))
+          .attr('fill', ownerColor(c.lane_owner))
           .attr('opacity', 0.85);
       }
 
@@ -1358,6 +1376,70 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     fitToView();
   }, [fitSignal, fitToView]);
 
+  // "Go home" lives in the app header (button + H key); headSignal
+  // increments trigger it here. Age-of-Empires go-home semantics: the
+  // camera snaps straight to the town center — no glide — the spot flashes
+  // a "you are here" ring, and the minimap pings at the landing point.
+  // Position only: selection and the details panel stay the user's (H in
+  // AoE selects the TC; here the ring alone carries the feedback). Zoom
+  // follows the search-jump rule — never below 1x, so the landing context
+  // is legible from a zoomed-out overview.
+  const headSignalRef = useRef(headSignal);
+  useEffect(() => {
+    if (headSignalRef.current === headSignal) return;
+    headSignalRef.current = headSignal;
+    const c = data.commits.find(x => x.is_head && !hiddenIds.has(x.id))
+      ?? data.commits.find(x => x.is_head);
+    if (!c || !svgRef.current || !zoomRef.current || !containerRef.current) return;
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    const k = Math.max(transformRef.current.k, 1);
+    const next = d3.zoomIdentity
+      .translate(width / 2 - c.x * k, height / 2 - c.y * k)
+      .scale(k);
+    d3.select(svgRef.current).call(zoomRef.current.transform, next);
+
+    // Ring flash on the HEAD node, in screen coordinates (the pulses live
+    // on the svg root, outside the zoom group, so the camera snap doesn't
+    // drag them along). Two quick pulses read as "flare", one reads as
+    // noise; both fade fully so nothing lingers on the canvas.
+    const svg = d3.select(svgRef.current);
+    const rgb = cssVar('--head-lane-rgb', '76, 175, 80');
+    const sx = next.x + c.x * k;
+    const sy = next.y + c.y * k;
+    for (const delay of [0, 200]) {
+      svg.append('circle')
+        .attr('cx', sx).attr('cy', sy).attr('r', 10)
+        .attr('fill', 'none')
+        .attr('stroke', `rgba(${rgb}, 0.9)`)
+        .attr('stroke-width', 3)
+        .attr('pointer-events', 'none')
+        .transition().delay(delay).duration(420).ease(d3.easeCubicOut)
+        .attr('r', 30)
+        .attr('stroke', `rgba(${rgb}, 0)`)
+        .attr('stroke-width', 1)
+        .remove();
+    }
+
+    // Minimap ping at the landing spot — the AoE flare that tells you
+    // where "home" sits in the whole-scheme-of-things.
+    if (minimapRef.current) {
+      const map = minimapMapRef.current;
+      d3.select(minimapRef.current).append('circle')
+        .attr('cx', (c.x - map.x0) * map.s)
+        .attr('cy', (c.y - map.y0) * map.s)
+        .attr('r', 2)
+        .attr('fill', 'none')
+        .attr('stroke', `rgba(${rgb}, 0.9)`)
+        .attr('stroke-width', 2)
+        .attr('pointer-events', 'none')
+        .transition().duration(700).ease(d3.easeCubicOut)
+        .attr('r', 16)
+        .attr('stroke', `rgba(${rgb}, 0)`)
+        .remove();
+    }
+  }, [headSignal, data, hiddenIds]);
+
   // Header search jump: make sure the target node is visible (expanding
   // its lane in compressed mode — x/y are backend-computed and do not
   // change on expand) and center on it, zooming to at least 1x so the
@@ -1502,7 +1584,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         >
           <div className="tooltip-hash">{hoveredCommit.short_id}</div>
           <div className="tooltip-message">{hoveredCommit.message}</div>
-          <div className="tooltip-author">{hoveredCommit.author_name} · {hoveredCommit.lane_owner}</div>
+          <div className="tooltip-author">
+            {hoveredCommit.author_name}
+            {/* Unattributed commits name no lane — the refs below say
+                where they belong. */}
+            {hoveredCommit.lane_owner ? <> · {hoveredCommit.lane_owner}</> : null}
+          </div>
           <div className="tooltip-time">{formatTime(hoveredCommit.timestamp)}</div>
           {(hoveredCommit.additions + hoveredCommit.deletions) > 0 && (
             <div className="tooltip-time">

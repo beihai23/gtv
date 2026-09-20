@@ -144,6 +144,9 @@ export default function RepoView({
   // and so does activation -- a tab re-shown from display:none must have
   // its D3 canvas re-measured (zero-size while hidden).
   const [fitSignal, setFitSignal] = useState(0);
+  // "Go home" (Age-of-Empires camera snap to HEAD): the header button and
+  // the H key both bump this; Timeline owns the camera work.
+  const [headSignal, setHeadSignal] = useState(0);
   const prevActiveRef = useRef(active);
   useEffect(() => {
     if (!prevActiveRef.current && active) setFitSignal(n => n + 1);
@@ -826,11 +829,23 @@ export default function RepoView({
     // so cropped commits stop matching. Remote full-history hits keep
     // coming, but one outside the current window is demoted to in_view
     // false and takes the existing "view from this commit" jump path.
+    // Foreign lineage (lane_owner "" — deselected branches' commits) is
+    // hidden from the canvas, so it never matches as in-view either.
+    const foreignIds = new Set(
+      (rangedData?.commits ?? []).filter(c => c.lane_owner === '').map(c => c.id),
+    );
     const remote = dateRange.kind === 'all'
-      ? remoteHits
-      : remoteHits.map(h => ({ ...h, in_view: h.in_view && !outOfRange.has(h.id) }));
+      ? remoteHits.filter(h => !foreignIds.has(h.id))
+      : remoteHits
+          .filter(h => !foreignIds.has(h.id))
+          .map(h => ({ ...h, in_view: h.in_view && !outOfRange.has(h.id) }));
     return mergeLocate(
-      matchLoaded(rangedData?.commits ?? [], rangedData?.branches ?? [], locateQuery, hideRemotes),
+      matchLoaded(
+        (rangedData?.commits ?? []).filter(c => c.lane_owner !== ''),
+        rangedData?.branches ?? [],
+        locateQuery,
+        hideRemotes,
+      ),
       remote,
       SEARCH_LIMIT,
     );
@@ -947,6 +962,26 @@ export default function RepoView({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [active, comparePair]);
+
+  // H = "go home" (Age of Empires): snap the camera back to HEAD. Plain H
+  // only — with Cmd/Ctrl it means something else (Cmd+H hides the window,
+  // Ctrl+H is history in some editors). INPUT/TEXTAREA bail: typing in the
+  // locate box must not jump, and the integrated terminal's xterm owns a
+  // TEXTAREA, so an 'h' meant for the shell never triggers the camera.
+  // Active tab only (same multi-instance gate as the handlers above).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!active || !gitData) return;
+      if (e.key !== 'h' && e.key !== 'H') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      e.preventDefault();
+      setHeadSignal(n => n + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, gitData]);
 
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
@@ -1121,6 +1156,13 @@ export default function RepoView({
                 title={t('fitTip')}
               >
                 {t('fit')}
+              </button>
+              <button
+                className="view-btn"
+                onClick={() => setHeadSignal(n => n + 1)}
+                title={t('headHomeTip')}
+              >
+                ⌖ {t('headHome')}
               </button>
               {termAvailable && (
                 <button
@@ -1390,6 +1432,7 @@ export default function RepoView({
               showRefLabels={showRefLabels}
               patchLinks={showPatchLinks ? patchLinks : NO_LINKS}
               fitSignal={fitSignal}
+              headSignal={headSignal}
               hasMore={gitData.has_more ?? false}
               loadingOlder={loadingOlder}
               onLoadOlder={handleLoadOlder}

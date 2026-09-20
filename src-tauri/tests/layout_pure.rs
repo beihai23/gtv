@@ -334,3 +334,127 @@ fn same_second_commits_order_topologically() {
         assert!(x_of(id) > x_of("m1"));
     }
 }
+
+/// A ref-carrying commit no seed claimed (its branch is deselected in the
+/// branch panel, but it entered the window through a merge from a selected
+/// lane) must NOT be absorbed by the fake-main fallback — it renders
+/// unattributed (""), and its unclaimed first-parent ancestry travels with
+/// it instead of splitting onto the fallback lane.
+#[test]
+fn unselected_ref_tip_is_unattributed_not_absorbed() {
+    fn with_refs(mut c: CommitNode, names: &[&str]) -> CommitNode {
+        c.branch_refs = names
+            .iter()
+            .map(|n| BranchRef {
+                name: n.to_string(),
+                is_remote: true,
+                is_tag: false,
+                color: String::new(),
+            })
+            .collect();
+        c
+    }
+
+    //   web:  b1 -> w1 -> w2                     (main_branch stand-in)
+    //   pre:  b1 -> ph1 -> pm(merge t2) -> ptip
+    //   tran:      b1 -> t1 -> t2 [ref]          (deselected branch)
+    let mut commits = vec![
+        commit("b1", 100, &[]),
+        commit("w1", 110, &["b1"]),
+        commit("w2", 120, &["w1"]),
+        commit("ph1", 115, &["b1"]),
+        commit("pm", 150, &["ph1", "t2"]),
+        commit("ptip", 160, &["pm"]),
+        with_refs(commit("t1", 130, &["b1"]), &[]),
+        with_refs(commit("t2", 140, &["t1"]), &["origin/tran"]),
+    ];
+    // transfi is deselected: only web and pre seed the view. main_branch is
+    // "web" — what detect_main_branch yields when main is not selected
+    // (seeds.first()).
+    let (lanes, edges, _) = compute_layout(
+        &mut commits,
+        &[seed("web", "w2"), seed("pre", "ptip")],
+        "web",
+        Some("w2"),
+    );
+    let _ = &lanes;
+
+    assert_eq!(lane_of(&commits, "t2"), "", "ref tip must be unattributed");
+    assert_eq!(lane_of(&commits, "t1"), "", "ancestry travels with the tip");
+    assert_eq!(commits.iter().find(|c| c.id == "t2").unwrap().lane, 0);
+    assert!(!commits.iter().find(|c| c.id == "t2").unwrap().is_key);
+    assert_eq!(lane_of(&commits, "w2"), "web");
+    assert_eq!(lane_of(&commits, "ptip"), "pre");
+    // The merge stays on pre's lane and names the hidden lineage from its refs.
+    assert_eq!(
+        commits.iter().find(|c| c.id == "pm").unwrap().merge_branch_name,
+        Some("tran".to_string())
+    );
+    assert_eq!(edge_types(&commits, &edges, "pm").len(), 2);
+    assert!(matches!(
+        edge_types(&commits, &edges, "pm")[..],
+        [EdgeType::Direct, EdgeType::Merge]
+    ));
+}
+
+/// Same graph with the branch selected: the tip claims its own lane and the
+/// merge names it — the pre-fix full-view behaviour must be preserved.
+#[test]
+fn selected_ref_tip_claims_its_lane() {
+    fn with_refs(mut c: CommitNode, names: &[&str]) -> CommitNode {
+        c.branch_refs = names
+            .iter()
+            .map(|n| BranchRef {
+                name: n.to_string(),
+                is_remote: true,
+                is_tag: false,
+                color: String::new(),
+            })
+            .collect();
+        c
+    }
+    let mut commits = vec![
+        commit("b1", 100, &[]),
+        commit("w1", 110, &["b1"]),
+        commit("w2", 120, &["w1"]),
+        commit("ph1", 115, &["b1"]),
+        commit("pm", 150, &["ph1", "t2"]),
+        commit("ptip", 160, &["pm"]),
+        with_refs(commit("t1", 130, &["b1"]), &[]),
+        with_refs(commit("t2", 140, &["t1"]), &["origin/tran"]),
+    ];
+    let (lanes, _edges, _) = compute_layout(
+        &mut commits,
+        &[seed("web", "w2"), seed("pre", "ptip"), seed("tran", "t2")],
+        "web",
+        Some("w2"),
+    );
+    assert_eq!(lane_of(&commits, "t2"), "tran");
+    assert_eq!(lane_of(&commits, "t1"), "tran");
+    assert!(lanes.iter().any(|l| l.name == "tran"));
+    assert_eq!(
+        commits.iter().find(|c| c.id == "pm").unwrap().merge_branch_name,
+        Some("tran".to_string())
+    );
+}
+
+/// Anonymous (ref-less) unclaimed lineage is foreign too: it belongs to no
+/// rendered lane and is unattributed (hidden), never painted onto a lane it
+/// was merely merged into.
+#[test]
+fn anonymous_unclaimed_lineage_is_unattributed() {
+    let mut commits = vec![
+        commit("b1", 100, &[]),
+        commit("w1", 110, &["b1"]),
+        commit("m", 130, &["w1", "s1"]),
+        commit("w2", 140, &["w1"]),
+        commit("s1", 120, &["b1"]),
+    ];
+    let (_, _edges, _) = compute_layout(&mut commits, &[seed("web", "w2")], "web", Some("w2"));
+    assert_eq!(lane_of(&commits, "s1"), "");
+    // No refs on the hidden parent, so the merge node names nothing.
+    assert_eq!(
+        commits.iter().find(|c| c.id == "m").unwrap().merge_branch_name,
+        None
+    );
+}
