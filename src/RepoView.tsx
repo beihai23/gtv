@@ -20,7 +20,7 @@ import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
 import { nextPair } from './compare';
 import type { ComparePair } from './compare';
-import type { GitData, CommitDetail, BranchLane, PatchLink, RepoChanged, WorktreeStatus } from './types';
+import type { GitData, CommitDetail, BranchLane, PatchLink, RepoChanged, WorktreeStatus, WorktreeMember } from './types';
 import type { SearchHit } from './types';
 
 // Per-repo view body (multi-repo-tabs Tasks 4+5): everything that depends
@@ -39,6 +39,12 @@ interface RepoViewProps {
   repoId: number;
   path: string;
   initialData: GitData;
+  // The tab's worktree family (App's snapshot): drives the member
+  // selector when more than one member exists.
+  family: WorktreeMember[];
+  /** Member switch (worktree selector): re-opens `path` through App's
+   *  openTab, which re-points this family's tab at that member. */
+  onSwitchMember: (path: string) => void;
   // True while this tab is the active one. Keyboard handlers bail when
   // inactive (N kept-alive tabs must not double-fire shortcuts) and the
   // issue-report dialog renders only here (exactly one z-80 dialog, the
@@ -91,6 +97,8 @@ export default function RepoView({
   repoId,
   path,
   initialData,
+  family,
+  onSwitchMember,
   active,
   showTags,
   toggleShowTags,
@@ -117,6 +125,10 @@ export default function RepoView({
   // View-options popover (low-frequency global presentation toggles live
   // collapsed behind one trigger instead of a six-button wall).
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  // Worktree-member popover (same low-frequency-popover idiom): the
+  // family selector that replaced second-level member tabs. A member is
+  // an anchor parameter of THIS view, not another view.
+  const [memberMenuOpen, setMemberMenuOpen] = useState(false);
   // M3.1 checkout: pending dirty-worktree confirm (null until the preflight
   // reports a dirty worktree) and the branch of the last successful switch
   // (drives the transient success banner; null = no banner).
@@ -157,7 +169,10 @@ export default function RepoView({
   // stale on a keep-alive tab -- close it on deactivate (and its backdrop
   // with it, which would otherwise swallow clicks on the visible tab).
   useEffect(() => {
-    if (!active) setViewMenuOpen(false);
+    if (!active) {
+      setViewMenuOpen(false);
+      setMemberMenuOpen(false);
+    }
   }, [active]);
 
   // Ctrl+` toggles the bottom terminal — works with focus anywhere,
@@ -242,6 +257,17 @@ export default function RepoView({
     for (const [k, v] of rangeEmpty?.dead ?? []) m.set(k, v);
     return m;
   }, [inactive, rangeEmpty]);
+  // Sibling members' checkouts (branch -> member name), current member
+  // excluded: Timeline badges those lanes with a house marker. Memoized
+  // for identity -- it sits in Timeline's draw-effect deps.
+  const memberLanes = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const mem of family) {
+      if (mem.path === path || !mem.head_branch) continue;
+      m.set(mem.head_branch, mem.name);
+    }
+    return m;
+  }, [family, path]);
   const view = useMemo(
     () => (rangedData ? collapseLanes(rangedData, dead) : null),
     [rangedData, dead],
@@ -1079,17 +1105,70 @@ export default function RepoView({
     <>
       <header className="header">
         {/* Identity card, stacked (who / where / on disk): the worktree
-            name holds line 1 at full size, the position pill + commit
-            count drop to line 2, and the filesystem path -- previously
-            tooltip-only -- becomes line 3. Stacking spends height instead
-            of width, so the name stays large while the band carries one
-            more fact worth glancing at (each tab is a different member,
-            and "which directory is this" is the first question a
-            multi-worktree session asks). */}
+            member holds line 1 at full size -- and in multi-member
+            families it IS the member selector (same low-frequency-popover
+            idiom as the view-options trigger: the state stays visible on
+            the trigger, the list is one click away). A member is an anchor
+            parameter of this one view, not another view -- that is why it
+            is a selector and not a tab. The position pill + commit count
+            drop to line 2, the filesystem path is line 3. */}
         <div className="header-left">
           {gitData && (
             <>
-              <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
+              {family.length > 1 ? (
+                <div className="member-menu-anchor">
+                  <button
+                    className="repo-name member-menu-btn"
+                    aria-expanded={memberMenuOpen}
+                    title={t('switchWorktree')}
+                    onClick={() => setMemberMenuOpen(v => !v)}
+                  >
+                    {path.split('/').pop()}
+                    <span className="member-caret" aria-hidden="true">▾</span>
+                  </button>
+                  {memberMenuOpen && (
+                    <>
+                      <div className="member-menu-backdrop" onClick={() => setMemberMenuOpen(false)} />
+                      <div className="member-menu">
+                        <div className="member-menu-title">{t('worktrees')}</div>
+                        {family.map(m => {
+                          const current = m.path === path;
+                          const tip = [
+                            m.is_main ? t('mainWorktree') : t('linkedWorktree'),
+                            ...(m.head_branch ? [`${t('currentBranchTip')}: ${m.head_branch}`] : []),
+                            m.path,
+                          ].join('\n');
+                          return (
+                            <button
+                              key={m.path}
+                              className={`member-item${current ? ' current' : ''}`}
+                              title={tip}
+                              onClick={() => {
+                                setMemberMenuOpen(false);
+                                if (!current) onSwitchMember(m.path);
+                              }}
+                            >
+                              <span className="member-item-name">
+                                {m.is_main && (
+                                  <svg className="member-item-home" width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M2.5 8 8 2.8 13.5 8" />
+                                    <path d="M4.2 6.8V13.2h7.6V6.8" />
+                                  </svg>
+                                )}
+                                {m.name}
+                              </span>
+                              <span className="member-item-branch">{m.head_branch ?? '—'}</span>
+                              <span className="member-item-path">{m.path}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
+              )}
               <span className="repo-info">
                 {/* Position, not classification: head_branch is where THIS
                     member is checked out (a worktree tab must not announce
@@ -1444,6 +1523,7 @@ export default function RepoView({
               traceGroupLabel={traceGroupLabel}
               headBranch={gitData?.head_branch ?? null}
               headLaneHover={headLaneHover}
+              memberLanes={memberLanes}
               onCheckoutBranch={handleCheckoutBranch}
               onCompareClick={handleCompareClick}
               compareBaseId={compareBaseId}

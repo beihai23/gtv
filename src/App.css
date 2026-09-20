@@ -159,99 +159,6 @@
   color: var(--text);
 }
 
-.worktree-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 2px 8px;
-  background: var(--bg-header);
-  border-bottom: 1px solid var(--border);
-}
-
-/* The only on-screen word saying the row is worktrees. */
-.wt-row-label {
-  color: var(--text-faint);
-  font-size: 10px;
-  margin-right: 4px;
-  user-select: none;
-}
-
-.wt-chip {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 11px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-  /* Two lines: width follows the LONGER line alone, so name+branch no
-     longer sum into one wide pill. Both lines truncate; the tooltip
-     carries the full text. */
-  max-width: 220px;
-}
-
-.wt-chip-name {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Home icon = the main worktree. A shape reads at a glance where the old
-   "• " text prefix was invisible. */
-.wt-chip-home {
-  color: var(--text-faint);
-  flex-shrink: 0;
-}
-
-.wt-chip-branch {
-  /* Second line: the member's semantic identity (unique per family,
-     git's one-branch-per-worktree rule). Em dash = detached HEAD. */
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.wt-chip:hover {
-  border-color: var(--text-faint);
-  color: var(--text);
-}
-
-/* Second-level states: open = the member has a tab (bright text, visible
-   border); current = that tab is THE active one (accent border plus the
-   app-wide link tint used by .view-btn.active / .head-lane). */
-.wt-chip.open {
-  border-color: var(--text-faint);
-  color: var(--text);
-}
-
-.wt-chip.current {
-  border-color: var(--accent);
-  background: rgba(var(--link-rgb), 0.25);
-  color: var(--text);
-  font-weight: 600;
-}
-
-/* Current chip hover (T6 N1): .wt-chip.current ties .wt-chip:hover on
-   specificity and wins by source order, so the current chip showed zero
-   hover feedback. A dedicated :hover rule outranks both and deepens the
-   active tint instead of resetting it. */
-.wt-chip.current:hover {
-  background: rgba(var(--link-rgb), 0.4);
-}
-
 /* Keep-alive wrapper: exactly one visible tab body at a time; hidden ones
    keep their RepoView (selection, viewport, terminal) mounted. */
 .tab-body {
@@ -875,6 +782,144 @@
 }
 
 .view-menu-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Worktree-member selector (the popover that replaced second-level member
+   tabs). Same idiom as the view-options menu: the trigger IS the identity
+   card's line-1 member name, the panel drops from it. A member is an
+   anchor parameter of this view, not another view -- selector styling,
+   never tab styling. */
+.member-menu-anchor {
+  position: relative;
+}
+
+/* Line-1 name turned trigger: keeps the h1's size/weight/color so the
+   identity card reads unchanged at rest; only the caret betrays it. */
+.member-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.member-menu-btn:hover .member-caret {
+  color: var(--text);
+}
+
+.member-caret {
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: color 0.15s;
+}
+
+.member-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.member-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 61;
+  width: 340px;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.member-menu-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+/* Three stacked lines per member: name / checked-out branch / path --
+   the same who-where-on-disk facts the identity card carries, so the
+   menu items ARE identity cards in miniature. */
+.member-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.member-item:hover {
+  background: var(--bg-input);
+}
+
+/* The selected member carries the "you are here" green tint -- the same
+   anchor language as the lane band and the head-lane chip. */
+.member-item.current {
+  background: rgba(var(--head-lane-rgb), 0.12);
+}
+
+.member-item.current .member-item-name {
+  font-weight: 600;
+}
+
+.member-item-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* Home icon = the main worktree. */
+.member-item-home {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.member-item-branch {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.member-item-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* Sibling-member checkout badge on a lane chip: a house marker, visually
+   quieter than the head lane's green dot -- the other anchors in the
+   family, not the one you are on. */
+.lane-chip.member-lane::before {
+  content: '⌂';
+  margin-right: 5px;
   font-size: 11px;
   color: var(--text-dim);
 }

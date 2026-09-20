@@ -1,6 +1,5 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import {
-  groupTabsByCommondir,
   migrateRestore,
   nextActiveAfterClose,
   nextActiveRepoId,
@@ -32,28 +31,6 @@ const tab = (repoId: number, path: string, commondir: string): TabInfo => ({
   repoId,
   path,
   commondir,
-});
-
-// --- groupTabsByCommondir --------------------------------------------------
-
-describe('groupTabsByCommondir', () => {
-  it('groups by commondir, groups and members in insertion order', () => {
-    // Interleaved families: A's group must stay first (first insertion),
-    // and each group keeps its members in the order they were opened.
-    const tabs = [
-      tab(1, '/a', 'CD-A'),
-      tab(2, '/x', 'CD-X'),
-      tab(3, '/b', 'CD-A'),
-      tab(4, '/y', 'CD-X'),
-      tab(5, '/c', 'CD-A'),
-    ];
-    const groups = groupTabsByCommondir(tabs);
-    expect(groups.map(g => g.map(t => t.repoId))).toEqual([[1, 3, 5], [2, 4]]);
-  });
-
-  it('an empty tab list groups into nothing', () => {
-    expect(groupTabsByCommondir([])).toEqual([]);
-  });
 });
 
 // --- nextActiveAfterClose --------------------------------------------------

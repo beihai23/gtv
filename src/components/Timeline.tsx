@@ -58,6 +58,10 @@ interface TimelineProps {
   /** Shorthand of the branch HEAD is on; null while detached. Drives the
    *  current-branch lane chip marker (spec 4.3). */
   headBranch: string | null;
+  /** Sibling worktree members' checkouts (branch name -> member name),
+   *  EXCLUDING the current member (whose lane is the head lane): each
+   *  entry earns a house badge on its lane chip -- one graph, N anchors. */
+  memberLanes: Map<string, string>;
   /** Branch name while the header position pill is hovered (RepoView):
    *  transiently focuses the "you are here" lane. Null when not hovered. */
   headLaneHover: string | null;
@@ -108,7 +112,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -556,9 +560,17 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .data(data.branches, (d: BranchLane) => d.name)
       .join('div')
       // Current-branch marker (spec 4.3): the head-lane class adds the dot
-      // prefix + tint; a null title attr strips the marker on non-head chips.
-      .attr('class', (d: BranchLane) => (d.name === headBranch ? 'lane-chip head-lane' : 'lane-chip'))
-      .attr('title', (d: BranchLane) => (d.name === headBranch ? t('currentBranchTip') : null))
+      // prefix + tint. Sibling worktree members' checked-out lanes get a
+      // house badge -- one graph, N anchors, no duplicate member views.
+      .attr('class', (d: BranchLane) => (
+        d.name === headBranch ? 'lane-chip head-lane'
+          : memberLanes.has(d.name) ? 'lane-chip member-lane'
+            : 'lane-chip'))
+      .attr('title', (d: BranchLane) => {
+        if (d.name === headBranch) return t('currentBranchTip');
+        const member = memberLanes.get(d.name);
+        return member != null ? t('checkedOutIn', { name: member }) : null;
+      })
       .style('color', (d: BranchLane) => d.color)
       .style('border-color', (d: BranchLane) => d.color)
       .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
@@ -1344,7 +1356,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, onCompareClick, compareBaseId]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
 
   useEffect(() => {
     draw();

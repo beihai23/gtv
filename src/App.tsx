@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -12,7 +12,6 @@ import {
   setAutoFetch,
 } from './api';
 import {
-  groupTabsByCommondir,
   migrateRestore,
   nextActiveRepoId,
   persistTabs,
@@ -96,44 +95,68 @@ function App() {
   // openTab must never capture a stale render's value.
   const staleRef = useRef(showStaleBranches);
   useEffect(() => { staleRef.current = showStaleBranches; }, [showStaleBranches]);
-  // Last activated repo per commondir: clicking a group's first-level tab
-  // returns to the member the user was last on (not always the group's
-  // first-opened representative).
-  const lastActiveInGroup = useRef<Map<string, number>>(new Map());
   // Per-repo debounce timers for the family refresh listener below.
   const familyTimers = useRef<Map<number, number>>(new Map());
 
   // Single writer for the tab shell: applies the next tabs/active pair,
-  // mirrors both into the refs, records the group's last-active member,
-  // and persists. The persisted active index is DERIVED from the active
-  // repo id, so a close can never leave a dangling index behind.
+  // mirrors both into the refs, and persists. The persisted active index
+  // is DERIVED from the active repo id, so a close can never leave a
+  // dangling index behind.
   const applyTabs = useCallback((nextTabs: TabInfo[], nextActiveRepoId: number | null) => {
     tabsRef.current = nextTabs;
     activeRepoIdRef.current = nextActiveRepoId;
     setTabs(nextTabs);
     setActiveRepoId(nextActiveRepoId);
-    if (nextActiveRepoId != null) {
-      const active = nextTabs.find(tb => tb.repoId === nextActiveRepoId);
-      if (active) lastActiveInGroup.current.set(active.commondir, active.repoId);
-    }
     persistTabs(nextTabs, nextTabs.findIndex(tb => tb.repoId === nextActiveRepoId));
   }, []);
 
   // Integrate one OpenedRepo -- the shared tail of every open source: a
   // dedup hit (backend matched the canonical path to an open session)
-  // activates the existing tab; a fresh id pushes a new tab. The backend
-  // already made the opened repo the active one.
+  // activates the existing tab; a path from an ALREADY-OPEN worktree
+  // family switches that family's tab to the new member (one tab per
+  // family -- members are anchor parameters of one view, not separate
+  // views); anything else pushes a fresh tab. The backend already made
+  // the opened repo the active one.
   const integrateOpened = useCallback((opened: OpenedRepo, path: string) => {
-    setFamilies(prev => ({ ...prev, [opened.repo_id]: opened.family }));
-    setOpenData(prev =>
-      opened.repo_id in prev ? prev : { ...prev, [opened.repo_id]: opened.data });
     setOpenError(null);
     setOpenErrorPath(null);
+    const familySnapshot = () => setFamilies(prev =>
+      ({ ...prev, [opened.repo_id]: opened.family }));
+    const seedData = () => setOpenData(prev =>
+      opened.repo_id in prev ? prev : { ...prev, [opened.repo_id]: opened.data });
     const existing = tabsRef.current.findIndex(tb => tb.repoId === opened.repo_id);
     if (existing >= 0) {
+      familySnapshot();
+      seedData();
       applyTabs(tabsRef.current, opened.repo_id);
       return;
     }
+    // Member switch: re-point the family's tab at the newly opened
+    // member IN PLACE (same tab slot) and retire the old member's
+    // session -- its watcher, terminal and repo id go with it.
+    const familyIdx = tabsRef.current.findIndex(tb => tb.commondir === opened.commondir);
+    if (familyIdx >= 0) {
+      const old = tabsRef.current[familyIdx];
+      void closeRepository(old.repoId).catch(() => {});
+      setFamilies(prev => {
+        const next = { ...prev };
+        delete next[old.repoId];
+        return { ...next, [opened.repo_id]: opened.family };
+      });
+      setOpenData(prev => {
+        const next = { ...prev };
+        delete next[old.repoId];
+        return { ...next, [opened.repo_id]: opened.data };
+      });
+      applyTabs(
+        tabsRef.current.map((tb, i) =>
+          i === familyIdx ? { repoId: opened.repo_id, path, commondir: opened.commondir } : tb),
+        opened.repo_id,
+      );
+      return;
+    }
+    familySnapshot();
+    seedData();
     applyTabs(
       [...tabsRef.current, { repoId: opened.repo_id, path, commondir: opened.commondir }],
       opened.repo_id,
@@ -230,22 +253,6 @@ function App() {
     applyTabs(tabsRef.current, repoId);
     void setActiveRepository(repoId).catch(() => {});
   }, [applyTabs]);
-
-  // First-level tabs are commondir groups: clicking one returns to the
-  // member last active in that group (fallback: first-opened member).
-  const activateGroup = useCallback((group: TabInfo[]) => {
-    const preferred = lastActiveInGroup.current.get(group[0].commondir);
-    const target = preferred != null && group.some(tb => tb.repoId === preferred)
-      ? preferred
-      : group[0].repoId;
-    activateTab(target);
-  }, [activateTab]);
-
-  // The x on a first-level tab closes the whole family group (each member
-  // loses its session and its terminal; the neighbor rule runs per close).
-  const closeGroup = useCallback((group: TabInfo[]) => {
-    for (const tb of group) closeTab(tb.repoId);
-  }, [closeTab]);
 
   // Family refresh on repo-changed (Task 5 choice): the payload carries
   // no family snapshot, so App re-opens the changed repo's path --
@@ -443,18 +450,14 @@ function App() {
   }, [openTab, applyTabs]);
 
   // --- Derived render state ---
-  const activeTab = tabs.find(tb => tb.repoId === activeRepoId) ?? null;
-  const groups = useMemo(() => groupTabsByCommondir(tabs), [tabs]);
-  const activeFamily = activeTab ? families[activeTab.repoId] ?? [] : [];
-  const openPaths = useMemo(() => new Set(tabs.map(tb => tb.path)), [tabs]);
 
-  // First-level tab title (spec 5.1): the family's MAIN directory name
-  // (stable no matter which member opened first); the representative
-  // tab's family snapshot is the metadata source, its path the fallback.
-  const groupTitle = (group: TabInfo[]): string => {
-    const family = families[group[0].repoId] ?? [];
+  // Tab title: the family's MAIN directory name (stable no matter which
+  // member is currently selected); the tab's family snapshot is the
+  // metadata source, its path the fallback.
+  const tabTitle = (tab: TabInfo): string => {
+    const family = families[tab.repoId] ?? [];
     const main = family.find(m => m.is_main);
-    return main?.name || group[0].path.split('/').pop() || '';
+    return main?.name || tab.path.split('/').pop() || '';
   };
 
   return (
@@ -476,32 +479,28 @@ function App() {
       <div className="topbar">
       {tabs.length > 0 && (
         <div className="tabbar">
-          {groups.map(group => {
-            const isActiveGroup = activeTab != null
-              && group.some(tb => tb.repoId === activeTab.repoId);
-            return (
-              <div
-                key={group[0].commondir}
-                className={`tab${isActiveGroup ? ' active' : ''}`}
+          {tabs.map(tab => (
+            <div
+              key={tab.commondir}
+              className={`tab${tab.repoId === activeRepoId ? ' active' : ''}`}
+            >
+              <button
+                className="tab-label"
+                title={tab.path}
+                onClick={() => activateTab(tab.repoId)}
               >
-                <button
-                  className="tab-label"
-                  title={group[0].path}
-                  onClick={() => activateGroup(group)}
-                >
-                  {groupTitle(group)}
-                </button>
-                <button
-                  className="tab-close"
-                  aria-label={t('closeTab')}
-                  title={t('closeTabGroup')}
-                  onClick={() => closeGroup(group)}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
+                {tabTitle(tab)}
+              </button>
+              <button
+                className="tab-close"
+                aria-label={t('closeTab')}
+                title={t('closeTab')}
+                onClick={() => closeTab(tab.repoId)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
           <button
             className="tab-new"
             title={t('openRepo')}
@@ -519,51 +518,6 @@ function App() {
         ⚙
       </button>
       </div>
-
-      {/* Second-level worktree row (spec 5.1): members of the ACTIVE
-          family; already-open members are highlighted and clicking them
-          just activates (openTab dedup), unopened ones open lazily with a
-          fresh repo_id (same-family members never dedup, T1 semantics).
-          Hidden entirely for single-worktree families. Each chip is two
-          lines -- worktree name (home icon = main worktree) over its
-          branch, the member's semantic identity (unique within a family,
-          git's one-branch-per-worktree rule; snapshot at enumeration
-          time, refreshed through the repo-changed chain for watched
-          members). The active member's path lives in the tab header's
-          identity card, not here. */}
-      {activeFamily.length > 1 && (
-        <div className="worktree-row">
-          <span className="wt-row-label">{t('worktrees')}</span>
-          {activeFamily.map(m => {
-            const open = openPaths.has(m.path);
-            const current = activeTab != null && m.path === activeTab.path;
-            const tip = [
-              m.is_main ? t('mainWorktree') : t('linkedWorktree'),
-              ...(m.head_branch ? [`${t('currentBranchTip')}: ${m.head_branch}`] : []),
-              m.path,
-            ].join('\n');
-            return (
-              <button
-                key={m.path}
-                className={`wt-chip${open ? ' open' : ''}${current ? ' current' : ''}`}
-                title={tip}
-                onClick={() => void openTab(m.path)}
-              >
-                <span className="wt-chip-name">
-                  {m.is_main && (
-                    <svg className="wt-chip-home" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M2.5 8 8 2.8 13.5 8" />
-                      <path d="M4.2 6.8V13.2h7.6V6.8" />
-                    </svg>
-                  )}
-                  {m.name}
-                </span>
-                <span className="wt-chip-branch">{m.head_branch ?? '—'}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       {/* Open failure strip: the i18n lead-in plus the RAW backend message
           (kept untranslated -- it is the actual error contract), a retry
@@ -617,6 +571,8 @@ function App() {
               repoId={tab.repoId}
               path={tab.path}
               initialData={openData[tab.repoId]}
+              family={families[tab.repoId] ?? []}
+              onSwitchMember={openTab}
               active={tab.repoId === activeRepoId}
               showTags={showTags}
               toggleShowTags={toggleShowTags}

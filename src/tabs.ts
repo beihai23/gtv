@@ -21,24 +21,6 @@ export const LEGACY_LATEST_KEY = 'gtv_latest_repo';
 
 const store = (): Storage | undefined => globalThis.localStorage;
 
-/** Group tabs by commondir (one worktree family per group). Groups appear
- *  in first-insertion order and members in insertion order -- the tab bar
- *  renders exactly this sequence. */
-export function groupTabsByCommondir(tabs: TabInfo[]): TabInfo[][] {
-  const groups: TabInfo[][] = [];
-  const groupIndex = new Map<string, number>();
-  for (const t of tabs) {
-    const idx = groupIndex.get(t.commondir);
-    if (idx === undefined) {
-      groupIndex.set(t.commondir, groups.length);
-      groups.push([t]);
-    } else {
-      groups[idx].push(t);
-    }
-  }
-  return groups;
-}
-
 /** Which tab to activate after closing `closedIdx` (an index into the
  *  PRE-close list): the right neighbor first (browser-tab muscle memory),
  *  else the left one, else -1 when no tabs remain. The result indexes the
