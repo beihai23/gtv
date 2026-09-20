@@ -807,9 +807,12 @@ export default function RepoView({
     () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
     [filteredBranches, allDeadNames]
   );
-  const activeSelectedCount = useMemo(
-    () => selectedBranches.filter(name => !allDeadNames.has(name)).length,
-    [selectedBranches, allDeadNames]
+  // Panel count describes the LISTED set ("of the n rows shown, m are
+  // selected"), so it must shrink with the search box — a global selected
+  // count next to a filtered list reads as "5 of 3 selected".
+  const shownSelectedCount = useMemo(
+    () => activeBranches.filter(b => selectedBranches.includes(b.name)).length,
+    [activeBranches, selectedBranches]
   );
 
   const INLINE_CHIP_LIMIT = 8;
@@ -822,28 +825,56 @@ export default function RepoView({
 
   const hasMoreTags = activeBranches.length > inlineBranches.length;
 
-  // Panel groups: enabled (selected) chips first, then the rest. Dead lanes
-  // are excluded here — they have their own groups below and never leave
+  // Panel sections: the list is STABLE — a row's position depends only on
+  // ref class and activity order, never on selection. The old
+  // Enabled/Disabled split teleported a chip between groups on every
+  // toggle, reflowing the list under the cursor; state now changes in
+  // place (the checkbox) like every checklist-style filter UI. Dead lanes
+  // stay out — they have their own sections below and never leave
   // selectedBranches.
-  const panelEnabled = useMemo(
-    () => activeBranches.filter(b => selectedBranches.includes(b.name)),
-    [activeBranches, selectedBranches]
+  const panelBranches = useMemo(
+    () => activeBranches.filter(b => !b.is_tag),
+    [activeBranches]
   );
-  const panelDisabled = useMemo(
-    () => activeBranches.filter(b => !selectedBranches.includes(b.name)),
-    [activeBranches, selectedBranches]
+  const panelTags = useMemo(
+    () => activeBranches.filter(b => b.is_tag),
+    [activeBranches]
   );
 
-  // Dead-lane panel groups (newest activity first, matching the chips above).
+  // Toolbar bulk actions operate on the rows CURRENTLY LISTED (search +
+  // tag-class filter applied) — the select-all-shown idiom, so "select
+  // everything matching release/*" composes from the search box. Select
+  // ADDS to the curated set (a filter that happens to hide a lane must
+  // never surprise-drop it); clear removes exactly the listed ones, and
+  // with an empty filter that is the old global "None". Declared after
+  // activeBranches: a useCallback dep array is read during render, and
+  // an earlier declaration would be a TDZ error (the M1.3 landmine).
+  const selectShown = useCallback(() => {
+    const shown = activeBranches.map(b => b.name);
+    const next = [...new Set([...selectedBranches, ...shown])];
+    handleFilterChange(next);
+  }, [activeBranches, selectedBranches, handleFilterChange]);
+  const clearShown = useCallback(() => {
+    const shown = new Set(activeBranches.map(b => b.name));
+    handleFilterChange(selectedBranches.filter(n => !shown.has(n)));
+  }, [activeBranches, selectedBranches, handleFilterChange]);
+
+  // Dead-lane panel groups (newest activity first, matching the rows
+  // above). The search box filters them too: a lane collapsed into the
+  // sediment is exactly the one a user goes looking for by name.
   const byActivity = (a: BranchLane, b: BranchLane) =>
     (refActivity.get(b.name) ?? 0) - (refActivity.get(a.name) ?? 0);
+  const deadNameMatches = useCallback(
+    (b: BranchLane) => !searchQuery || b.name.toLowerCase().includes(searchQuery.toLowerCase()),
+    [searchQuery]
+  );
   const panelArchived = useMemo(
-    () => [...mergedGroups.archived].sort(byActivity),
-    [mergedGroups, refActivity]
+    () => [...mergedGroups.archived].filter(deadNameMatches).sort(byActivity),
+    [mergedGroups, refActivity, deadNameMatches]
   );
   const panelDormant = useMemo(
-    () => [...mergedGroups.dormant].sort(byActivity),
-    [mergedGroups, refActivity]
+    () => [...mergedGroups.dormant].filter(deadNameMatches).sort(byActivity),
+    [mergedGroups, refActivity, deadNameMatches]
   );
 
   // Header search results: instant loaded-range matches merged with the
@@ -1058,38 +1089,92 @@ export default function RepoView({
     handleCommitClick(head.id);
   }, [gitData, inactive, handleCommitClick]);
 
-  const renderBranchChip = (branch: BranchLane) => (
-    <button
-      key={branch.name}
-      className={`filter-tag ${selectedBranches.includes(branch.name) ? 'active' : ''}`}
-      style={{
-        borderColor: branch.color,
-        backgroundColor: selectedBranches.includes(branch.name) ? branch.color : 'transparent'
-      }}
-      onClick={() => toggleBranchFilter(branch.name)}
-      onDoubleClick={() => handleFilterChange([branch.name])}
-      title={`${branch.name}\n${t('chipTip')}`}
-    >
-      {truncateMiddle(branch.name)}
-    </button>
+  // Header chip doubles as the lane legend: a small color dot keeps the
+  // lane<->color mapping visible while the chip's own surface stays
+  // NEUTRAL — selected = filled, off = ghost. The old solid lane-color
+  // fill stacked identity and state at the same intensity and turned the
+  // rest state into a wall of unrelated saturated hues. The hidden
+  // double-click solo is gone too (each double-click burned two toggle
+  // rebuilds before the solo landed); the panel's explicit per-row solo
+  // button replaces it.
+  const renderBranchChip = (branch: BranchLane) => {
+    const on = selectedBranches.includes(branch.name);
+    return (
+      <button
+        key={branch.name}
+        className={`filter-tag${on ? ' active' : ''}`}
+        onClick={() => toggleBranchFilter(branch.name)}
+        title={branch.name}
+      >
+        <span className="chip-dot" style={{ background: branch.color }} />
+        {truncateMiddle(branch.name)}
+      </button>
+    );
+  };
+
+  // Panel row for a live ref: a stable checklist row — position never
+  // depends on selection, the checkbox flips in place. Interactive
+  // children of a label (the solo button) do not activate it, so each
+  // control stays single-purpose.
+  const renderBranchRow = (branch: BranchLane) => (
+    <label key={branch.name} className="branch-row" title={branch.name}>
+      <input
+        type="checkbox"
+        checked={selectedBranches.includes(branch.name)}
+        onChange={() => toggleBranchFilter(branch.name)}
+      />
+      <span className="branch-row-dot" style={{ background: branch.color }} />
+      <span className="branch-row-name">{truncateMiddle(branch.name)}</span>
+      {branch.is_tag && (
+        <svg className="branch-row-tag-ico" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
+          <circle cx="5.3" cy="5.3" r="0.8" fill="currentColor" stroke="none" />
+        </svg>
+      )}
+      <button
+        type="button"
+        className="branch-row-solo"
+        title={t('onlyThis')}
+        onClick={() => handleFilterChange([branch.name])}
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+          <circle cx="8" cy="8" r="5" />
+          <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+    </label>
   );
 
-  // Dead-lane chip: active = lane restored on the canvas. Clicking toggles
-  // visibility only (the lane stays selected on the backend side).
-  const renderDeadChip = (branch: BranchLane) => (
-    <button
-      key={branch.name}
-      className={`filter-tag ${expandedDead.has(branch.name) ? 'active' : ''}`}
-      style={{
-        borderColor: branch.color,
-        backgroundColor: expandedDead.has(branch.name) ? branch.color : 'transparent'
-      }}
-      onClick={() => toggleDeadLane(branch.name)}
-      title={branch.name}
-    >
-      {truncateMiddle(branch.name)}
-    </button>
-  );
+  // Dead-lane row: an EYE, not a checkbox — clicking changes VISIBILITY
+  // only (the lane stays selected on the backend side), a different verb
+  // than the rows above, so it must not wear the same control.
+  const renderDeadRow = (branch: BranchLane) => {
+    const on = expandedDead.has(branch.name);
+    return (
+      <div
+        key={branch.name}
+        className={`branch-row dead${on ? ' on' : ''}`}
+        role="button"
+        tabIndex={0}
+        title={branch.name}
+        onClick={() => toggleDeadLane(branch.name)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleDeadLane(branch.name);
+          }
+        }}
+      >
+        <svg className="branch-row-eye" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+          <circle cx="8" cy="8" r="2" />
+          {!on && <line x1="3" y1="13" x2="13" y2="3" />}
+        </svg>
+        <span className="branch-row-dot" style={{ background: branch.color }} />
+        <span className="branch-row-name">{truncateMiddle(branch.name)}</span>
+      </div>
+    );
+  };
 
   // How many presentation options sit OFF their default. That count --
   // not the five toggles themselves -- is what the collapsed view-options
@@ -1414,7 +1499,10 @@ export default function RepoView({
       {showAllTags && (
         <div className="branch-panel-backdrop" onClick={() => setShowAllTags(false)}>
           <div className="branch-panel" onClick={e => e.stopPropagation()}>
-            <div className="branch-panel-header">
+            {/* Head = orientation only (find, dismiss). Every mutating
+                control lives in the toolbar below, so the two rows never
+                compete for attention and each has room to be labeled. */}
+            <div className="branch-panel-head">
               <input
                 type="text"
                 className="search-input branch-panel-search"
@@ -1423,32 +1511,46 @@ export default function RepoView({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus
               />
-              <span className="branch-panel-count">{t('refsShown', { n: activeBranches.length, m: activeSelectedCount })}</span>
               <button
-                className={`view-btn ${showTags ? 'active' : ''}`}
+                className="branch-panel-close"
+                onClick={() => setShowAllTags(false)}
+                aria-label={t('close')}
+                title={t('close')}
+              >
+                ×
+              </button>
+            </div>
+            {/* Toolbar = the three bulk verbs, each scoped honestly:
+                the Tags pill gates which ref CLASS is listed; select/clear
+                act on the rows the search + class filter currently show. */}
+            <div className="branch-panel-toolbar">
+              <button
+                className={`panel-pill${showTags ? ' on' : ''}`}
                 onClick={toggleShowTags}
                 title={t('tagsTip')}
+                aria-pressed={showTags}
               >
                 {t('tags')}
               </button>
-              <button className="view-btn" onClick={() => handleFilterChange(branchList.map(b => b.name))}>{t('all')}</button>
-              <button className="view-btn" onClick={() => handleFilterChange([])}>{t('none')}</button>
-              <button className="view-btn" onClick={() => setShowAllTags(false)}>{t('close')}</button>
+              <span className="toolbar-spacer" />
+              <button className="panel-link" onClick={selectShown}>{t('selectShown')}</button>
+              <button className="panel-link" onClick={clearShown}>{t('clearShown')}</button>
+              <span className="branch-panel-count">{t('refsSelected', { n: activeBranches.length, m: shownSelectedCount })}</span>
             </div>
             <div className="branch-panel-list">
-              {panelEnabled.length > 0 && (
+              {panelBranches.length > 0 && (
                 <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">{t('enabled', { n: panelEnabled.length })}</div>
-                  <div className="branch-panel-chips">
-                    {panelEnabled.map(renderBranchChip)}
+                  <div className="branch-panel-group-title">{t('branchesSection', { n: panelBranches.length })}</div>
+                  <div className="branch-panel-rows">
+                    {panelBranches.map(renderBranchRow)}
                   </div>
                 </div>
               )}
-              {panelDisabled.length > 0 && (
+              {panelTags.length > 0 && (
                 <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">{t('disabled', { n: panelDisabled.length })}</div>
-                  <div className="branch-panel-chips">
-                    {panelDisabled.map(renderBranchChip)}
+                  <div className="branch-panel-group-title">{t('tagsSection', { n: panelTags.length })}</div>
+                  <div className="branch-panel-rows">
+                    {panelTags.map(renderBranchRow)}
                   </div>
                 </div>
               )}
@@ -1460,8 +1562,8 @@ export default function RepoView({
                       {traceGroupLabel('archived')}
                     </button>
                   </div>
-                  <div className="branch-panel-chips">
-                    {panelArchived.map(renderDeadChip)}
+                  <div className="branch-panel-rows">
+                    {panelArchived.map(renderDeadRow)}
                   </div>
                 </div>
               )}
@@ -1473,10 +1575,13 @@ export default function RepoView({
                       {traceGroupLabel('dormant')}
                     </button>
                   </div>
-                  <div className="branch-panel-chips">
-                    {panelDormant.map(renderDeadChip)}
+                  <div className="branch-panel-rows">
+                    {panelDormant.map(renderDeadRow)}
                   </div>
                 </div>
+              )}
+              {panelBranches.length === 0 && panelTags.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
+                <div className="branch-panel-empty">{t('noRefsMatch')}</div>
               )}
             </div>
             <div className="branch-panel-footer">

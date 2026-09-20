@@ -1018,22 +1018,42 @@
   overflow: hidden;
 }
 
+/* Neutral chip surface: lane identity rides on the dot only, and the
+   on/off state is the chip's own fill — selected = filled, off = ghost.
+   The old solid lane-color fill stacked identity and state at the same
+   intensity and turned a row of chips into unrelated saturated hues. */
 .filter-tag {
   height: 26px;
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 4px 10px;
   font-size: 11px;
-  border: 1px solid;
+  border: 1px solid transparent;
   border-radius: 12px;
   cursor: pointer;
-  color: var(--text);
+  color: var(--text-dim);
+  background: transparent;
   white-space: nowrap;
-  transition: all 0.2s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-tag.active {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .filter-tag:hover {
-  opacity: 0.8;
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .filter-tag.show-more {
@@ -1281,7 +1301,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   position: absolute;
   top: 64px;
   right: 24px;
-  width: min(760px, 85vw);
+  width: min(600px, 90vw);
   max-height: 55vh;
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -1290,15 +1310,14 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   display: flex;
   flex-direction: column;
 }
-.branch-panel-header {
+/* Head = orientation only (find + dismiss); mutations live in the
+   toolbar so each control gets room to be what it is. */
+.branch-panel-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 12px;
 }
 .branch-panel-search {
   flex: 1;
@@ -1306,8 +1325,72 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-input);
   border-color: var(--border);
 }
+.branch-panel-close {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.branch-panel-close:hover {
+  color: var(--text);
+  background: var(--bg-input);
+}
+/* Toolbar = the three bulk verbs. The Tags pill is a pressed-state
+   toggle (aria-pressed), links are quiet text actions. */
+.branch-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.toolbar-spacer {
+  flex: 1;
+}
+.panel-pill {
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.panel-pill.on {
+  background: var(--bg-input);
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+.panel-pill:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.panel-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--link);
+  font-size: 11px;
+  cursor: pointer;
+}
+.panel-link:hover {
+  text-decoration: underline;
+}
 .branch-panel-count {
   white-space: nowrap;
+  font-size: 11px;
 }
 .branch-panel-footer {
   padding: 8px 14px;
@@ -1331,10 +1414,100 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   margin-bottom: 6px;
 }
 
-.branch-panel-chips {
+.branch-panel-rows {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Stable checklist row: checkbox = selection, dot = lane identity,
+   name truncates, and the "only this" button appears on hover (kept
+   out of the resting row so scan lines stay clean). Dead rows swap the
+   checkbox for an eye -- visibility, a different verb than selection. */
+.branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.branch-row:hover {
+  background: var(--bg-input);
+}
+
+.branch-row input[type='checkbox'] {
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.branch-row-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.branch-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-row-tag-ico {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.branch-row-solo {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.branch-row:hover .branch-row-solo,
+.branch-row-solo:focus-visible {
+  opacity: 1;
+}
+
+.branch-row-solo:hover {
+  color: var(--text);
+}
+
+/* Dead row: visible lanes stay faintly marked so the section's state
+   reads without hovering. */
+.branch-row.dead.on {
+  background: var(--bg-input);
+}
+
+.branch-row-eye {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.branch-row.dead.on .branch-row-eye {
+  color: var(--text);
+}
+
+.branch-panel-empty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12px;
 }
 
 /* Expand-all button inside an Archived/Dormant group title. */

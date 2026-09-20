@@ -11,9 +11,15 @@ use std::collections::{HashMap, HashSet};
 pub const MAIN_COLOR: &str = "#4A90D9";
 pub const TAG_COLOR: &str = "#9C27B0";
 
-const LANE_PALETTE: [&str; 12] = [
-    "#E91E63", "#FF9800", "#9C27B0", "#009688", "#FF5722", "#3F51B5",
-    "#8BC34A", "#00BCD4", "#795548", "#673AB7", "#4CAF50", "#607D8B",
+// Reserved semantic colors must never appear here: the UI paints the
+// checked-out lane's ring/band/arrow in #4CAF50 ("you are here" green)
+// and every tag ref in TAG_COLOR, so a lane painted the same hex would
+// fake that meaning. MAIN_COLOR stays out for the same reason (lane 0
+// is fixed to it separately). Ten hues means faster palette recycling
+// than the old twelve -- a lesser evil than stealing a semantic color.
+const LANE_PALETTE: [&str; 10] = [
+    "#E91E63", "#FF9800", "#009688", "#FF5722", "#3F51B5",
+    "#8BC34A", "#00BCD4", "#795548", "#673AB7", "#607D8B",
 ];
 
 /// Single source of truth for lane colors. Lane 0 (main) is fixed;
