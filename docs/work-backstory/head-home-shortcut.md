@@ -2,7 +2,7 @@
 arc: head-home-shortcut
 started: c616820812955a96ee073a9ff586b7fd4b8bc38c
 status: resolved
-commits: []
+commits: [fa6b5f7]
 ---
 
 # 回到 HEAD：快捷键 + 按钮，帝国时代的「回家」体验
