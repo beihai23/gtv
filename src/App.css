@@ -787,37 +787,73 @@
 }
 
 /* Worktree-member selector (the popover that replaced second-level member
-   tabs). Same idiom as the view-options menu: the trigger IS the identity
-   card's line-1 member name, the panel drops from it. A member is an
-   anchor parameter of this view, not another view -- selector styling,
-   never tab styling. */
+   tabs). Same idiom as the view-options menu: the state stays visible on
+   the trigger, the list is one click away. A member is an anchor
+   parameter of this view, not another view -- selector styling, never
+   tab styling. */
 .member-menu-anchor {
   position: relative;
 }
 
-/* Line-1 name turned trigger: keeps the h1's size/weight/color so the
-   identity card reads unchanged at rest; only the caret betrays it. */
+/* Line 1 reads as a labeled field, not a bare title: the label carries
+   the semantics ("Worktrees" -- no glyph reliably says worktree to a git
+   user), the chip's border and chevron carry the button affordance. */
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.member-menu-label {
+  flex-shrink: 0;
+  font-size: 11px; /* same word as .member-menu-title; look identical */
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  user-select: none;
+}
+
 .member-menu-btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 0;
+  gap: 6px;
+  max-width: min(460px, 100%);
+  padding: 3px 10px 3px 12px;
   background: transparent;
-  border: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--accent);
+  transition: background 0.15s, border-color 0.15s;
 }
 
-.member-menu-btn:hover .member-caret {
-  color: var(--text);
+.member-menu-btn:hover {
+  background: var(--bg-input);
+  border-color: var(--text-faint);
+}
+
+.member-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .member-caret {
-  font-size: 12px;
+  flex-shrink: 0;
   color: var(--text-dim);
-  transition: color 0.15s;
+  transition: color 0.15s, transform 0.15s;
+}
+
+.member-menu-btn:hover .member-caret,
+.member-caret.open {
+  color: var(--text);
+}
+
+.member-caret.open {
+  transform: rotate(180deg);
 }
 
 .member-menu-backdrop {

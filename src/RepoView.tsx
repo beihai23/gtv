@@ -1116,16 +1116,29 @@ export default function RepoView({
           {gitData && (
             <>
               {family.length > 1 ? (
-                <div className="member-menu-anchor">
-                  <button
-                    className="repo-name member-menu-btn"
-                    aria-expanded={memberMenuOpen}
-                    title={t('switchWorktree')}
-                    onClick={() => setMemberMenuOpen(v => !v)}
-                  >
-                    {path.split('/').pop()}
-                    <span className="member-caret" aria-hidden="true">▾</span>
-                  </button>
+                <div className="member-row">
+                  {/* The WORD, not an icon: no glyph reliably says
+                      "worktree" to a git user, and a bare name + caret
+                      read as a static title. A visible label (form
+                      field convention: label + control) tells the user
+                      what this selector switches before anything is
+                      clicked. */}
+                  <span className="member-menu-label">{t('worktrees')}</span>
+                  <div className="member-menu-anchor">
+                    <button
+                      className="member-menu-btn"
+                      aria-expanded={memberMenuOpen}
+                      aria-haspopup="menu"
+                      title={t('switchWorktree')}
+                      onClick={() => setMemberMenuOpen(v => !v)}
+                    >
+                      <span className="member-menu-name">{path.split('/').pop()}</span>
+                      {/* Chevron = "a list drops from here" (picker
+                          convention); rotates while open. */}
+                      <svg className={`member-caret${memberMenuOpen ? ' open' : ''}`} width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
+                    </button>
                   {memberMenuOpen && (
                     <>
                       <div className="member-menu-backdrop" onClick={() => setMemberMenuOpen(false)} />
@@ -1165,6 +1178,7 @@ export default function RepoView({
                       </div>
                     </>
                   )}
+                  </div>
                 </div>
               ) : (
                 <h1 className="repo-name" title={path}>{path.split('/').pop()}</h1>
