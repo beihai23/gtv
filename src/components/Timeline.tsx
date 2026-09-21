@@ -258,7 +258,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       if (!minimapRef.current) return;
       const t = transformRef.current;
       // screen = t * scene ; scene->mini = uniform scale + letterbox (./minimap)
-      const r = viewportRect(t.k, t.x, t.y, width, height, minimapMapRef.current);
+      // LIVE container size, not the draw-time capture: the container can
+      // collapse to 0 (or recover) between draws -- panel toggles, macOS
+      // live window resize -- and the zero-window guard must judge the
+      // window that IS, or a 0-size draw poisons the rect until the next
+      // full redraw while every later pan/zoom keeps reading stale dims.
+      const w = containerRef.current?.clientWidth || width;
+      const h = containerRef.current?.clientHeight || height;
+      const r = viewportRect(t.k, t.x, t.y, w, h, minimapMapRef.current);
       d3.select(minimapRef.current).select('.mm-viewport')
         .attr('x', r.x).attr('y', r.y)
         .attr('width', r.w).attr('height', r.h);
@@ -1362,6 +1369,24 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     draw();
     window.addEventListener('resize', draw);
     return () => window.removeEventListener('resize', draw);
+  }, [draw]);
+
+  // Container-size redraws: the window resize listener only covers resizes
+  // that change the WINDOW -- panel toggles and flex re-layouts resize the
+  // container silently, and during a macOS live window drag WebKit reports
+  // transient 0x0 clientWidth/Height, so a resize-triggered draw can capture
+  // a zero window. Every closure built by that draw (minimap viewport rect,
+  // ruler backdrop, lane band, cull window) stays poisoned until an unrelated
+  // dep triggers a full redraw. Observing the container makes any size
+  // change -- including recovery from a transient zero -- re-run draw with
+  // real dimensions. (draw() writes only svg width/height attributes that
+  // CSS 100%/100% overrides, so observing cannot feed back into layout.)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [draw]);
 
   /** Fit the whole scene into the viewport (toolbar "Fit" button). */
