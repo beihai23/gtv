@@ -980,6 +980,27 @@
   }
 }
 
+/* Lens group: one-gesture selection presets over the chip row. Reuses
+   the panel-pill control so "quiet toggle pill" reads as one idiom
+   everywhere. */
+.lens-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.lens-group .panel-pill {
+  gap: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.lens-group .panel-pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .branch-select {
   padding: 6px 12px;
   background: var(--bg-input);
@@ -1054,6 +1075,13 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* Pin mark on a header chip: neutral color, the shape is the signifier
+   (same rule as the dead-row eye -- no new accent hues). */
+.chip-pin {
+  flex-shrink: 0;
+  color: var(--text-dim);
 }
 
 .filter-tag.show-more {
@@ -1485,6 +1513,34 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 
 .branch-row-solo:hover {
+  color: var(--text);
+}
+
+/* Pin button: hidden until hovered WHEN OFF, but pinned state is real
+   and visible at rest -- a pin you cannot see is not "at hand". */
+.branch-row-pin {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.branch-row:hover .branch-row-pin,
+.branch-row-pin:focus-visible,
+.branch-row-pin.on {
+  opacity: 1;
+}
+
+.branch-row-pin.on {
+  color: var(--text);
+}
+
+.branch-row-pin:hover {
   color: var(--text);
 }
 

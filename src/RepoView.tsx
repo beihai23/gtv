@@ -14,7 +14,7 @@ import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
 import type { DateRange } from './daterange';
-import { saveSelection, loadSelection, restoreSelection } from './persist';
+import { saveSelection, loadSelection, restoreSelection, savePinned, loadPinned } from './persist';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
@@ -121,6 +121,11 @@ export default function RepoView({
   const [branchList, setBranchList] = useState<BranchLane[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
+  // Pinned branches: the durable "branches I care about" marks behind the
+  // 📌 lens. Deliberately SEPARATE from selectedBranches -- the selection
+  // is the current answer, pins are the user's intent, so no selection
+  // edit (lens, panel, chip click) can clobber them.
+  const [pinnedBranches, setPinnedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
   // View-options popover (low-frequency global presentation toggles live
   // collapsed behind one trigger instead of a six-button wall).
@@ -393,6 +398,11 @@ export default function RepoView({
         if (cancelled) return;
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
+        // Pins: intersect the saved marks with what still exists (a branch
+        // deleted since last visit drops silently). Unlike the selection,
+        // an empty result is legitimate -- [] is real state, not "absent".
+        const avail = new Set(branches.map(b => b.name));
+        setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
         // M2.4: restore this repo's persisted focus set. handleFilterChange
         // itself sets selectedBranches, so no duplicate set here; null ->
         // keep the default full selection (no rebuild, no second flash).
@@ -438,6 +448,9 @@ export default function RepoView({
         if (cancelled) return;
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
+        // Re-prune the pin marks against the rebuilt lane list too.
+        const avail = new Set(branches.map(b => b.name));
+        setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
         // M2.4: restore the persisted focus set for this repo path. null ->
         // keep the default full selection; handleFilterChange sets
         // selectedBranches itself.
@@ -734,6 +747,18 @@ export default function RepoView({
     saveSelection(path, selectedBranches);
   }, [path, selectedBranches]);
 
+  // Pin marks persist unconditionally, empty set included (unpinning the
+  // last branch is real state; skipping the write would resurrect the old
+  // set on reload).
+  useEffect(() => {
+    savePinned(path, pinnedBranches);
+  }, [path, pinnedBranches]);
+
+  const togglePin = useCallback((name: string) => {
+    setPinnedBranches(prev =>
+      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  }, []);
+
   // Dead-lane chips toggle VISIBILITY ONLY: they never go through
   // toggleBranchFilter, so the lane stays inside selectedBranches and every
   // filterByBranches rebuild keeps it loaded (collapse is pure display).
@@ -818,13 +843,64 @@ export default function RepoView({
 
   const INLINE_CHIP_LIMIT = 8;
   const inlineBranches = useMemo(() => {
-    // Selected branches stay visible; fill remaining slots by list order.
-    const selected = activeBranches.filter(b => selectedBranches.includes(b.name));
-    const rest = activeBranches.filter(b => !selectedBranches.includes(b.name));
-    return [...selected, ...rest].slice(0, INLINE_CHIP_LIMIT);
-  }, [activeBranches, selectedBranches]);
+    // Pinned float first (that is the whole job of a pin), selected next,
+    // remaining slots by activity order. Array.sort is stable, so each
+    // rank keeps the activity ordering of activeBranches.
+    const rank = (b: BranchLane) =>
+      pinnedBranches.includes(b.name) ? 0 : selectedBranches.includes(b.name) ? 1 : 2;
+    return [...activeBranches].sort((a, b) => rank(a) - rank(b)).slice(0, INLINE_CHIP_LIMIT);
+  }, [activeBranches, selectedBranches, pinnedBranches]);
 
   const hasMoreTags = activeBranches.length > inlineBranches.length;
+
+  // --- lenses ----------------------------------------------------------------
+  // A lens is a one-gesture selection PRESET, not a mode: it writes the
+  // selection once, and a pill stays lit only while the current selection
+  // equals that preset -- any manual edit unlights it, honestly. "Recent"
+  // is rank-based (top N by activity) rather than time-based because the
+  // date scope already crops time; the lens keeps full history and only
+  // shrinks the lane set, which is what "browse just the active few"
+  // actually wants.
+  const RECENT_LENS_SIZE = 5;
+  const recentNames = useMemo(
+    () => activeBranches.slice(0, RECENT_LENS_SIZE).map(b => b.name),
+    [activeBranches]
+  );
+  // Pins intersected with currently-alive lanes: dormant/archived pins
+  // stay selected (dead lanes never leave the selection) but cannot light
+  // the pill.
+  const pinnedNames = useMemo(
+    () => activeBranches.filter(b => pinnedBranches.includes(b.name)).map(b => b.name),
+    [activeBranches, pinnedBranches]
+  );
+  const aliveSelection = useMemo(
+    () => selectedBranches.filter(n => !allDeadNames.has(n)),
+    [selectedBranches, allDeadNames]
+  );
+  const sameSet = (a: string[], b: string[]) =>
+    a.length === b.length && a.every(x => b.includes(x));
+  const recentLit = sameSet(aliveSelection, recentNames);
+  const allLit = sameSet(aliveSelection, activeBranches.map(b => b.name));
+  const pinnedLit = pinnedNames.length > 0 && sameSet(aliveSelection, pinnedNames);
+
+  // A lens swap never drops dead lanes from the selection: they are
+  // invisible but loaded, and dropping them would collapse lanes the user
+  // never touched.
+  const applyLens = useCallback((names: string[]) => {
+    const deadKept = selectedBranches.filter(n => allDeadNames.has(n));
+    handleFilterChange([...new Set([...names, ...deadKept])]);
+  }, [selectedBranches, allDeadNames, handleFilterChange]);
+  // The pinned lens also expands dormant/archived pins: a pin means "at
+  // hand", and a lane collapsed into the sediment is not at hand.
+  const applyPinnedLens = useCallback(() => {
+    if (pinnedNames.length === 0) return;
+    setExpandedDead(prev => {
+      const next = new Set(prev);
+      for (const n of pinnedBranches) if (allDeadNames.has(n)) next.add(n);
+      return next;
+    });
+    applyLens(pinnedNames);
+  }, [pinnedNames, pinnedBranches, allDeadNames, applyLens]);
 
   // Panel-listing domain: search narrows only what the panel SHOWS.
   const panelRows = useMemo(
@@ -1113,6 +1189,7 @@ export default function RepoView({
   // button replaces it.
   const renderBranchChip = (branch: BranchLane) => {
     const on = selectedBranches.includes(branch.name);
+    const pinned = pinnedBranches.includes(branch.name);
     return (
       <button
         key={branch.name}
@@ -1121,6 +1198,16 @@ export default function RepoView({
         title={branch.name}
       >
         <span className="chip-dot" style={{ background: branch.color }} />
+        {/* A pin mark rides the chip at rest (persistent state, no hover
+            jump): pinned lanes are recognizable without opening anything.
+            Neutral color -- the shape is the signifier, same rule as the
+            dead-row eye. */}
+        {pinned && (
+          <svg className="chip-pin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" x2="12" y1="17" y2="22" />
+            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+          </svg>
+        )}
         {truncateMiddle(branch.name)}
       </button>
     );
@@ -1145,6 +1232,20 @@ export default function RepoView({
           <circle cx="5.3" cy="5.3" r="0.8" fill="currentColor" stroke="none" />
         </svg>
       )}
+      {/* Pin sits before solo: it is persistent state (visible at rest
+          once set), while solo is a hover-only action. Interactive
+          elements inside a label do not activate it. */}
+      <button
+        type="button"
+        className={`branch-row-pin${pinnedBranches.includes(branch.name) ? ' on' : ''}`}
+        title={pinnedBranches.includes(branch.name) ? t('unpin') : t('pin')}
+        onClick={() => togglePin(branch.name)}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <line x1="12" x2="12" y1="17" y2="22" />
+          <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+        </svg>
+      </button>
       <button
         type="button"
         className="branch-row-solo"
@@ -1320,6 +1421,41 @@ export default function RepoView({
 
         {branchList.length > 0 && (
           <div className="header-chips">
+            {/* Lens group: one-gesture selection presets over the chips to
+                their right. The 📌 pill renders only once something has
+                been pinned (no dead chrome), and disables when no pin is
+                currently visible (all dormant/archived). Lit = current
+                selection equals the preset; manual edits unlight. */}
+            <div className="lens-group" role="group" aria-label={t('lensGroup')}>
+              <button
+                className={`panel-pill lens${recentLit ? ' on' : ''}`}
+                onClick={() => applyLens(recentNames)}
+                title={t('lensRecentTip')}
+              >
+                {t('lensRecent')}
+              </button>
+              {pinnedBranches.length > 0 && (
+                <button
+                  className={`panel-pill lens${pinnedLit ? ' on' : ''}`}
+                  onClick={applyPinnedLens}
+                  disabled={pinnedNames.length === 0}
+                  title={t('lensPinnedTip')}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="12" x2="12" y1="17" y2="22" />
+                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                  </svg>
+                  {t('lensPinned')}
+                </button>
+              )}
+              <button
+                className={`panel-pill lens${allLit ? ' on' : ''}`}
+                onClick={() => applyLens(activeBranches.map(b => b.name))}
+                title={t('lensAllTip')}
+              >
+                {t('lensAll')}
+              </button>
+            </div>
             <div className="filter-tags">
               {inlineBranches.map(renderBranchChip)}
             </div>

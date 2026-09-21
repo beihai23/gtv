@@ -5,6 +5,13 @@
 
 const key = (repoPath: string) => `gtv_branch_sel:${repoPath}`;
 
+// Pinned branches (the lens's durable "branches I care about" set): same
+// storage shape as the selection, separate key. ONE semantic difference --
+// an empty array is real state ("unpinned everything"), so it IS written;
+// skipping the write would resurrect the old set after the user unpins
+// their last branch and reloads.
+const pinsKey = (repoPath: string) => `gtv_branch_pins:${repoPath}`;
+
 const store = (): Storage | undefined => globalThis.localStorage;
 
 /** Persist the current selection as-is. Callers guard against writing an
@@ -42,4 +49,26 @@ export function restoreSelection(saved: string[] | null, available: string[]): s
   const intersection = available.filter(n => savedSet.has(n));
   if (intersection.length === 0 || intersection.length === available.length) return null;
   return intersection;
+}
+
+/** Persist the pin set as-is, including the empty set (see pinsKey). */
+export function savePinned(repoPath: string, names: string[]): void {
+  try {
+    store()?.setItem(pinsKey(repoPath), JSON.stringify(names));
+  } catch {
+    // Best-effort, never fatal.
+  }
+}
+
+/** Read the saved pin set; null when absent or not a JSON string[]. */
+export function loadPinned(repoPath: string): string[] | null {
+  try {
+    const raw = store()?.getItem(pinsKey(repoPath));
+    if (raw == null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some(n => typeof n !== 'string')) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
