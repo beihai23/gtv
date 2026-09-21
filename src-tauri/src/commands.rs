@@ -665,6 +665,33 @@ pub async fn get_branch_list(
     get_branch_list_impl(&state, repo_id).await
 }
 
+/// Re-enumerate one open repo's worktree family. The member menu calls
+/// this on every open: members other than the watched one can be added
+/// or removed externally at any time, and worktree_family() itself skips
+/// registrations whose path is gone (validate()) -- so a removed
+/// worktree drops out of the list instead of sitting there erroring on
+/// click.
+pub async fn list_worktree_members_impl(
+    state: &AppState,
+    repo_id: u64,
+) -> Result<Vec<WorktreeMember>, String> {
+    let path = session_path(state, repo_id)?;
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.worktree_family()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_worktree_members(
+    repo_id: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<WorktreeMember>, String> {
+    list_worktree_members_impl(&state, repo_id).await
+}
+
 pub async fn switch_branch_impl(
     state: &AppState,
     repo_id: u64,

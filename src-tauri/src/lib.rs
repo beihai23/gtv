@@ -141,6 +141,7 @@ pub fn run() {
             commands::get_pair_file_diff,
             commands::is_valid_git_repo,
             commands::get_branch_list,
+            commands::list_worktree_members,
             commands::switch_branch,
             commands::get_worktree_status,
             commands::checkout_branch,

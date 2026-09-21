@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type {
   GitData, CommitDetail, BranchLane, PatchLink, CommitStat, SearchHit, TerminalInfo,
-  WorktreeStatus, CheckoutAck, CompareDetail, OpenedRepo,
+  WorktreeStatus, CheckoutAck, CompareDetail, OpenedRepo, WorktreeMember,
 } from './types';
 
 // Multi-repo-tabs Task 5: this file is THE backend contract surface. Every
@@ -98,6 +98,14 @@ export async function isValidGitRepo(path: string): Promise<boolean> {
 
 export async function getBranchList(repoId: number): Promise<BranchLane[]> {
   return invoke<BranchLane[]>('get_branch_list', { repoId });
+}
+
+/// Fresh worktree-family snapshot for one open repo. The member menu
+/// calls this on every open: members other than the watched one can be
+/// added or removed externally, and the enumeration skips registrations
+/// whose path is gone.
+export async function listWorktreeMembers(repoId: number): Promise<WorktreeMember[]> {
+  return invoke<WorktreeMember[]>('list_worktree_members', { repoId });
 }
 
 export async function switchBranch(repoId: number, branchName: string): Promise<GitData> {

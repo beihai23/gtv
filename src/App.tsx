@@ -10,6 +10,7 @@ import {
   closeRepository,
   setActiveRepository,
   setAutoFetch,
+  listWorktreeMembers,
 } from './api';
 import {
   migrateRestore,
@@ -254,35 +255,26 @@ function App() {
     void setActiveRepository(repoId).catch(() => {});
   }, [applyTabs]);
 
-  // Family refresh on repo-changed (Task 5 choice): the payload carries
-  // no family snapshot, so App re-opens the changed repo's path --
-  // already_open semantics return the freshly re-enumerated family plus
-  // the existing view (discarded) at the cost of one canonicalize +
-  // enumerate per burst, debounced like RepoView's own refresh. App does
-  // NOT sync families when RepoView refreshes its data: openTab and this
-  // listener are the only family sources.
+  // Family refresh (Task 5 choice, simplified): one pure re-enumeration
+  // command instead of the old re-open path -- re-opening had to undo
+  // open_repository's activation side effect and guard against a leaked
+  // re-registered session, all to obtain a snapshot the command now
+  // returns directly. Two callers: the debounced repo-changed listener,
+  // and the member menu, which re-enumerates on every open because
+  // members other than the watched one can be added or removed
+  // externally at any time (a removed member must drop out of the list,
+  // not sit there erroring on click). App does NOT sync families when
+  // RepoView refreshes its data: openTab and this callback are the only
+  // family sources.
   const refreshFamily = useCallback(async (repoId: number) => {
-    const tab = tabsRef.current.find(tb => tb.repoId === repoId);
-    if (!tab) return;
+    if (!tabsRef.current.some(tb => tb.repoId === repoId)) return;
     try {
-      const opened = await openRepository(tab.path, staleRef.current);
-      // The tab may have closed while this refresh was in flight: a FRESH
-      // id here means the backend re-registered the repo after the close
-      // (its dedup found nothing) -- undo it rather than leak a session no
-      // tab owns.
-      if (!tabsRef.current.some(tb => tb.repoId === opened.repo_id) && !opened.already_open) {
-        void closeRepository(opened.repo_id).catch(() => {});
-        return;
-      }
-      setFamilies(prev => ({ ...prev, [opened.repo_id]: opened.family }));
-      // open_repository re-activates the refreshed repo as a side effect;
-      // the fetch target must stay on the tab the user is actually on.
-      const activeId = activeRepoIdRef.current;
-      if (activeId != null && activeId !== opened.repo_id) {
-        void setActiveRepository(activeId).catch(() => {});
-      }
-    } catch (err) {
-      recordFrontendError(errText(err));
+      const family = await listWorktreeMembers(repoId);
+      // Tab may have closed while the call was in flight -- write only
+      // into an existing entry so a closed tab's key is not resurrected.
+      setFamilies(prev => (prev[repoId] ? { ...prev, [repoId]: family } : prev));
+    } catch {
+      // Best effort: the menus keep the last known list on failure.
     }
   }, []);
 
@@ -573,6 +565,7 @@ function App() {
               initialData={openData[tab.repoId]}
               family={families[tab.repoId] ?? []}
               onSwitchMember={openTab}
+              onRefreshFamily={refreshFamily}
               active={tab.repoId === activeRepoId}
               showTags={showTags}
               toggleShowTags={toggleShowTags}

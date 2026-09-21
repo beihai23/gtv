@@ -45,6 +45,11 @@ interface RepoViewProps {
   /** Member switch (worktree selector): re-opens `path` through App's
    *  openTab, which re-points this family's tab at that member. */
   onSwitchMember: (path: string) => void;
+  /** Family re-enumeration (App's refreshFamily): the member menu calls
+   *  it on every open -- members other than the watched one can be
+   *  added or removed externally, and the moment the list is looked at
+   *  is the moment freshness matters. */
+  onRefreshFamily: (repoId: number) => void;
   // True while this tab is the active one. Keyboard handlers bail when
   // inactive (N kept-alive tabs must not double-fire shortcuts) and the
   // issue-report dialog renders only here (exactly one z-80 dialog, the
@@ -99,6 +104,7 @@ export default function RepoView({
   initialData,
   family,
   onSwitchMember,
+  onRefreshFamily,
   active,
   showTags,
   toggleShowTags,
@@ -179,6 +185,16 @@ export default function RepoView({
       setMemberMenuOpen(false);
     }
   }, [active]);
+
+  // The member menu re-enumerates the family on every OPEN: only the
+  // current member has a watcher, so members added or removed externally
+  // (git worktree add/remove elsewhere) are invisible until the list is
+  // looked at -- and the dropdown opening is exactly that moment. A
+  // removed member drops out here (the backend skips paths that are
+  // gone) instead of sitting in the list erroring on click.
+  useEffect(() => {
+    if (memberMenuOpen) onRefreshFamily(repoId);
+  }, [memberMenuOpen, repoId, onRefreshFamily]);
 
   // Ctrl+` toggles the bottom terminal — works with focus anywhere,
   // including inside the xterm textarea (whose keydown we do NOT bail on
