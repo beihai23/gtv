@@ -799,20 +799,21 @@ export default function RepoView({
     return visible.filter(b => b.name.toLowerCase().includes(query));
   }, [sortedBranches, searchQuery, showTags]);
 
-  // Active-only ref view: dead lanes never appear as header chips or in the
-  // Enabled/Disabled panel groups (they live in the panel's Archived/Dormant
-  // groups, which keep their own counts), so every count the header shows —
-  // "+N more", "refs shown" — derives from this list, not filteredBranches.
+  // Active-only ref view, TWO DOMAINS with one boundary: the header owns
+  // the state at rest, the panel owns the search. activeBranches
+  // deliberately does NOT see searchQuery — the old chain let the
+  // panel's search box live-filter the toolbar chips uninvited, and
+  // once matches fell under the inline limit the "+N more" entry
+  // vanished with the query never reset, stranding the toolbar in a
+  // filter the user could no longer reach or clear. Dead lanes never
+  // appear as header chips or in the live panel sections (they live in
+  // the Archived/Dormant groups, which keep their own counts), so every
+  // count the header shows derives from this list.
   const activeBranches = useMemo(
-    () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
-    [filteredBranches, allDeadNames]
-  );
-  // Panel count describes the LISTED set ("of the n rows shown, m are
-  // selected"), so it must shrink with the search box — a global selected
-  // count next to a filtered list reads as "5 of 3 selected".
-  const shownSelectedCount = useMemo(
-    () => activeBranches.filter(b => selectedBranches.includes(b.name)).length,
-    [activeBranches, selectedBranches]
+    () => sortedBranches
+      .filter(b => showTags || !b.is_tag)
+      .filter(b => !allDeadNames.has(b.name)),
+    [sortedBranches, showTags, allDeadNames]
   );
 
   const INLINE_CHIP_LIMIT = 8;
@@ -825,6 +826,19 @@ export default function RepoView({
 
   const hasMoreTags = activeBranches.length > inlineBranches.length;
 
+  // Panel-listing domain: search narrows only what the panel SHOWS.
+  const panelRows = useMemo(
+    () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
+    [filteredBranches, allDeadNames]
+  );
+  // Panel count describes the LISTED set ("of the n rows shown, m are
+  // selected"), so it must shrink with the search box — a global selected
+  // count next to a filtered list reads as "5 of 3 selected".
+  const shownSelectedCount = useMemo(
+    () => panelRows.filter(b => selectedBranches.includes(b.name)).length,
+    [panelRows, selectedBranches]
+  );
+
   // Panel sections: the list is STABLE — a row's position depends only on
   // ref class and activity order, never on selection. The old
   // Enabled/Disabled split teleported a chip between groups on every
@@ -833,12 +847,12 @@ export default function RepoView({
   // stay out — they have their own sections below and never leave
   // selectedBranches.
   const panelBranches = useMemo(
-    () => activeBranches.filter(b => !b.is_tag),
-    [activeBranches]
+    () => panelRows.filter(b => !b.is_tag),
+    [panelRows]
   );
   const panelTags = useMemo(
-    () => activeBranches.filter(b => b.is_tag),
-    [activeBranches]
+    () => panelRows.filter(b => b.is_tag),
+    [panelRows]
   );
 
   // Toolbar bulk actions operate on the rows CURRENTLY LISTED (search +
@@ -847,17 +861,17 @@ export default function RepoView({
   // ADDS to the curated set (a filter that happens to hide a lane must
   // never surprise-drop it); clear removes exactly the listed ones, and
   // with an empty filter that is the old global "None". Declared after
-  // activeBranches: a useCallback dep array is read during render, and
-  // an earlier declaration would be a TDZ error (the M1.3 landmine).
+  // panelRows: a useCallback dep array is read during render, and an
+  // earlier declaration would be a TDZ error (the M1.3 landmine).
   const selectShown = useCallback(() => {
-    const shown = activeBranches.map(b => b.name);
+    const shown = panelRows.map(b => b.name);
     const next = [...new Set([...selectedBranches, ...shown])];
     handleFilterChange(next);
-  }, [activeBranches, selectedBranches, handleFilterChange]);
+  }, [panelRows, selectedBranches, handleFilterChange]);
   const clearShown = useCallback(() => {
-    const shown = new Set(activeBranches.map(b => b.name));
+    const shown = new Set(panelRows.map(b => b.name));
     handleFilterChange(selectedBranches.filter(n => !shown.has(n)));
-  }, [activeBranches, selectedBranches, handleFilterChange]);
+  }, [panelRows, selectedBranches, handleFilterChange]);
 
   // Dead-lane panel groups (newest activity first, matching the rows
   // above). The search box filters them too: a lane collapsed into the
@@ -1535,7 +1549,7 @@ export default function RepoView({
               <span className="toolbar-spacer" />
               <button className="panel-link" onClick={selectShown}>{t('selectShown')}</button>
               <button className="panel-link" onClick={clearShown}>{t('clearShown')}</button>
-              <span className="branch-panel-count">{t('refsSelected', { n: activeBranches.length, m: shownSelectedCount })}</span>
+              <span className="branch-panel-count">{t('refsSelected', { n: panelRows.length, m: shownSelectedCount })}</span>
             </div>
             <div className="branch-panel-list">
               {panelBranches.length > 0 && (
