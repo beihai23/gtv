@@ -133,6 +133,21 @@ export default function RepoView({
   // edit (lens, panel, chip click) can clobber them.
   const [pinnedBranches, setPinnedBranches] = useState<string[]>([]);
   const [showAllTags, setShowAllTags] = useState(false);
+  // Combobox keyboard highlight: index into the panel's listed rows while
+  // the toolbar filter field drives navigation (↑/↓ move, Enter toggles).
+  const [rowHighlight, setRowHighlight] = useState(0);
+  // Transient copy feedback (bottom-center toast): { name, ok } | null.
+  const [copyToast, setCopyToast] = useState<{ name: string; ok: boolean } | null>(null);
+  const filterInputRef = useRef<HTMLInputElement>(null);
+  // One exit path for the ref panel: closing always drops the query and
+  // the keyboard highlight with it -- the query lives only as long as the
+  // panel does, so no closed panel leaves a zombie filter behind (the
+  // leak-bug lesson, applied to the new toolbar field).
+  const closePanel = useCallback(() => {
+    setShowAllTags(false);
+    setSearchQuery('');
+    setRowHighlight(0);
+  }, []);
   // View-options popover (low-frequency global presentation toggles live
   // collapsed behind one trigger instead of a six-button wall).
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -183,8 +198,9 @@ export default function RepoView({
     if (!active) {
       setViewMenuOpen(false);
       setMemberMenuOpen(false);
+      closePanel();
     }
-  }, [active]);
+  }, [active, closePanel]);
 
   // The member menu re-enumerates the family on every OPEN: only the
   // current member has a watcher, so members added or removed externally
@@ -740,6 +756,40 @@ export default function RepoView({
     return () => window.clearTimeout(timer);
   }, [switchedBranch]);
 
+  // Copy toast is even more transient (it confirms, it does not narrate).
+  useEffect(() => {
+    if (!copyToast) return;
+    const timer = window.setTimeout(() => setCopyToast(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copyToast]);
+
+  // Copy a ref name (chip right-click, panel row button). The async
+  // clipboard API can be denied inside the WKWebView embed; the legacy
+  // execCommand path covers that. Either way the toast reports the result.
+  const copyName = useCallback(async (name: string) => {
+    try {
+      await navigator.clipboard.writeText(name);
+      setCopyToast({ name, ok: true });
+      return;
+    } catch {
+      // Fall through to the legacy path.
+    }
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = name;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch {
+      // ok stays false
+    }
+    setCopyToast({ name, ok });
+  }, []);
+
   const toggleBranchFilter = useCallback((branchName: string) => {
     if (selectedBranches.includes(branchName)) {
       const newSelected = selectedBranches.filter(b => b !== branchName);
@@ -1078,6 +1128,16 @@ export default function RepoView({
     if (locateOpen) locateInputRef.current?.focus();
   }, [locateOpen]);
 
+  // Keep the keyboard-highlighted ref row inside the panel's scroll area
+  // (same contract as the locate dropdown's highlight effect above). Safe
+  // as a document query: only the active tab can hold an open panel (the
+  // deactivate effect closes everyone else's), and .hl renders only while
+  // the panel is open, so at most one match exists.
+  useEffect(() => {
+    if (!showAllTags) return;
+    document.querySelector('.branch-row.hl')?.scrollIntoView({ block: 'nearest' });
+  }, [rowHighlight, showAllTags]);
+
   // ←/→ step to the previous/next commit on the SAME lane while the
   // detail panel is open. commits are in ascending (time, topo) order —
   // i.e. visual left→right — so index ±1 is the visual neighbor.
@@ -1146,6 +1206,44 @@ export default function RepoView({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, gitData]);
 
+  // "/" focuses the lane-filter combobox (the Gmail/HE idiom: plain slash
+  // = "filter what I'm looking at"). Same guards as H: no modifiers, bail
+  // on inputs (a '/' typed into the locate box or the terminal must not
+  // move focus), active tab only. Focusing the field opens the panel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!active || !gitData) return;
+      if (e.key !== '/') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      e.preventDefault();
+      filterInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, gitData]);
+
+  // Esc closes the ref panel when focus is NOT inside the filter field --
+  // the field owns a two-step exit (clear the query first, then close), so
+  // this handler must not second-guess it. The input bail is TEXT inputs
+  // only (plus the field itself): a row checkbox is also an INPUT, and
+  // bailing on it would leave Esc dead after the very first row click.
+  // Active tab only.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!active || e.key !== 'Escape' || !showAllTags) return;
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      if (el === filterInputRef.current) return;
+      if (el.tagName === 'TEXTAREA') return;
+      if (el.tagName === 'INPUT' && (el as HTMLInputElement).type !== 'checkbox') return;
+      closePanel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, showAllTags, closePanel]);
+
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
     setLocateQuery('');
@@ -1203,6 +1301,14 @@ export default function RepoView({
   // double-click solo is gone too (each double-click burned two toggle
   // rebuilds before the solo landed); the panel's explicit per-row solo
   // button replaces it.
+  // Keyboard highlight as a NAME: the panel renders branches and tags as
+  // two groups, but ↑/↓ walk the flat "branches then tags" order (exactly
+  // the visual top-to-bottom order); names are unique keys, so name
+  // equality maps the flat index onto whichever list holds the row.
+  const highlightedRefName = showAllTags && (panelBranches.length > 0 || panelTags.length > 0)
+    ? [...panelBranches, ...panelTags][Math.min(rowHighlight, panelBranches.length + panelTags.length - 1)].name
+    : null;
+
   const renderBranchChip = (branch: BranchLane) => {
     const on = selectedBranches.includes(branch.name);
     const pinned = pinnedBranches.includes(branch.name);
@@ -1211,6 +1317,13 @@ export default function RepoView({
         key={branch.name}
         className={`filter-tag${on ? ' active' : ''}`}
         onClick={() => toggleBranchFilter(branch.name)}
+        onContextMenu={e => {
+          // Desktop convention: right-click a chip to copy its name. The
+          // chip keeps its one visible glyph budget (dot + pin) -- the copy
+          // verb hides behind the platform's own gesture instead.
+          e.preventDefault();
+          copyName(branch.name);
+        }}
         title={branch.name}
       >
         <span className="chip-dot" style={{ background: branch.color }} />
@@ -1234,7 +1347,11 @@ export default function RepoView({
   // children of a label (the solo button) do not activate it, so each
   // control stays single-purpose.
   const renderBranchRow = (branch: BranchLane) => (
-    <label key={branch.name} className="branch-row" title={branch.name}>
+    <label
+      key={branch.name}
+      className={`branch-row${highlightedRefName === branch.name ? ' hl' : ''}`}
+      title={branch.name}
+    >
       <input
         type="checkbox"
         checked={selectedBranches.includes(branch.name)}
@@ -1273,6 +1390,17 @@ export default function RepoView({
           <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       </button>
+      <button
+        type="button"
+        className="branch-row-copy"
+        title={t('copyName')}
+        onClick={() => copyName(branch.name)}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="9" y="9" width="12" height="12" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      </button>
     </label>
   );
 
@@ -1305,6 +1433,35 @@ export default function RepoView({
         <span className="branch-row-name">{truncateMiddle(branch.name)}</span>
       </div>
     );
+  };
+
+  // Combobox keys, handled in the field (focus never leaves it while
+  // navigating): ↑/↓ walk the listed rows in visual order (branches then
+  // tags), Enter toggles the highlighted row -- Space stays a space,
+  // queries can contain one -- and Esc exits in layers: clear the query
+  // first, close the panel second.
+  const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      if (searchQuery) {
+        setSearchQuery('');
+        setRowHighlight(0);
+      } else {
+        closePanel();
+        filterInputRef.current?.blur();
+      }
+      return;
+    }
+    const rows = [...panelBranches, ...panelTags];
+    if (rows.length === 0) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setRowHighlight(i =>
+        Math.min(Math.max(i + (e.key === 'ArrowDown' ? 1 : -1), 0), rows.length - 1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const row = rows[Math.min(rowHighlight, rows.length - 1)];
+      if (row) toggleBranchFilter(row.name);
+    }
   };
 
   // How many presentation options sit OFF their default. That count --
@@ -1478,11 +1635,41 @@ export default function RepoView({
             {hasMoreTags && (
               <button
                 className="filter-tag show-more"
-                onClick={() => setShowAllTags(!showAllTags)}
+                onClick={() => {
+                  if (showAllTags) closePanel();
+                  else {
+                    setShowAllTags(true);
+                    filterInputRef.current?.focus();
+                  }
+                }}
               >
                 {showAllTags ? t('closeUp') : t('more', { n: activeBranches.length - inlineBranches.length })}
               </button>
             )}
+            {/* The filter combobox: one query, one results surface. It is
+                resident (not gated behind chip overflow), so the panel --
+                with the dead-lane policy and the tag class toggle inside --
+                stays reachable even when every chip fits inline. Focus or
+                typing opens the panel below; the query drives the panel's
+                candidate rows only, never the chips (the leak-bug rule:
+                an input mutates what sits under it, not the answer display
+                elsewhere). "/" focuses it from anywhere in the tab. */}
+            <input
+              ref={filterInputRef}
+              type="text"
+              className={`filter-field${searchQuery ? ' has-query' : ''}`}
+              placeholder={t('filterRefs')}
+              title={t('filterTip')}
+              aria-label={t('filterRefs')}
+              value={searchQuery}
+              onChange={e => {
+                setSearchQuery(e.target.value);
+                setShowAllTags(true);
+                setRowHighlight(0);
+              }}
+              onFocus={() => setShowAllTags(true)}
+              onKeyDown={onFilterKeyDown}
+            />
           </div>
         )}
 
@@ -1663,23 +1850,16 @@ export default function RepoView({
       </header>
 
       {showAllTags && (
-        <div className="branch-panel-backdrop" onClick={() => setShowAllTags(false)}>
+        <div className="branch-panel-backdrop" onClick={closePanel}>
           <div className="branch-panel" onClick={e => e.stopPropagation()}>
-            {/* Head = orientation only (find, dismiss). Every mutating
-                control lives in the toolbar below, so the two rows never
-                compete for attention and each has room to be labeled. */}
+            {/* Head = dismiss only. The query input lives in the toolbar
+                (the combobox field) -- one input, one results surface --
+                and every mutating control lives in the toolbar row below,
+                so no two rows compete for attention. */}
             <div className="branch-panel-head">
-              <input
-                type="text"
-                className="search-input branch-panel-search"
-                placeholder={t('filterRefs')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                autoFocus
-              />
               <button
                 className="branch-panel-close"
-                onClick={() => setShowAllTags(false)}
+                onClick={closePanel}
                 aria-label={t('close')}
                 title={t('close')}
               >
@@ -1774,6 +1954,14 @@ export default function RepoView({
       {switchedBranch && (
         <div className="error success">
           <span className="error-msg">{t('switchedTo', { branch: switchedBranch })}</span>
+        </div>
+      )}
+
+      {/* Copy confirmation: bottom-center, pointer-transparent, gone in
+          1.6 s -- it confirms the gesture, it does not narrate. */}
+      {copyToast && (
+        <div className="copy-toast">
+          {copyToast.ok ? t('copied', { name: copyToast.name }) : t('copyRefFailed')}
         </div>
       )}
 

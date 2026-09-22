@@ -1096,6 +1096,46 @@
   color: var(--text);
 }
 
+/* Filter combobox at the end of the chip row: collapsed it is a quiet
+   affordance (ghost pill, same height/radius as the chips); focus
+   expands it and fills it, and typing opens the panel under the
+   toolbar. margin-left:auto pins it to the row's end -- the empty flex
+   space is spent before any chip ever shifts. */
+.filter-field {
+  margin-left: auto;
+  flex-shrink: 1;
+  min-width: 72px;
+  width: 170px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  transition: width 0.15s ease, background 0.15s, border-color 0.15s;
+}
+
+.filter-field::placeholder {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filter-field:focus {
+  outline: none;
+  width: 230px;
+  background: var(--bg-input);
+  border-color: var(--accent);
+}
+
+/* A query sitting in the field while focus is elsewhere (a row click
+   moved focus) still reads as "filtered": fill it, just without the
+   accent border focus adds. */
+.filter-field.has-query {
+  background: var(--bg-input);
+}
+
 .tooltip {
   position: fixed;
   background: var(--bg-tooltip);
@@ -1319,11 +1359,13 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 .collapse-chip:hover rect { fill: #3a3a3a; }
 
 /* --- branch panel (dropdown for large ref lists) --- */
+/* The backdrop is a transparent click-catcher, not a dimmer: the panel
+   is a toolbar dropdown now, and the whole point of checking rows is
+   watching the graph react behind it. */
 .branch-panel-backdrop {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.35);
 }
 .branch-panel {
   position: absolute;
@@ -1338,20 +1380,16 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   display: flex;
   flex-direction: column;
 }
-/* Head = orientation only (find + dismiss); mutations live in the
-   toolbar so each control gets room to be what it is. */
+/* Head = dismiss only (the query input is the toolbar combobox); keep
+   the strip so the panel's visual rhythm (head/toolbar/list/footer)
+   survives. */
 .branch-panel-head {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
-}
-.branch-panel-search {
-  flex: 1;
-  min-width: 0;
-  background: var(--bg-input);
-  border-color: var(--border);
 }
 .branch-panel-close {
   flex-shrink: 0;
@@ -1508,12 +1546,35 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 
 .branch-row:hover .branch-row-solo,
-.branch-row-solo:focus-visible {
+.branch-row:hover .branch-row-copy,
+.branch-row-solo:focus-visible,
+.branch-row-copy:focus-visible {
   opacity: 1;
 }
 
-.branch-row-solo:hover {
+.branch-row-solo:hover,
+.branch-row-copy:hover {
   color: var(--text);
+}
+
+/* Keyboard highlight (↑/↓ in the toolbar field) rides the same surface
+   as hover so the two never fight. Only alive rows highlight; dead rows
+   are a visibility policy reached by mouse. */
+.branch-row.hl {
+  background: var(--bg-input);
+}
+
+/* Copy button: same hover-only action idiom as solo. */
+.branch-row-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
 }
 
 /* Pin button: hidden until hovered WHEN OFF, but pinned state is real
@@ -1564,6 +1625,23 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   text-align: center;
   color: var(--text-faint);
   font-size: 12px;
+}
+
+/* Copy confirmation: floats at bottom-center over everything (panel
+   included), never intercepts the pointer, gone in 1.6 s. */
+.copy-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  padding: 6px 14px;
+  background: var(--bg-tooltip);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: none;
 }
 
 /* Expand-all button inside an Archived/Dormant group title. */
