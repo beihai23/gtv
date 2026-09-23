@@ -1658,7 +1658,7 @@ export default function RepoView({
               ref={filterInputRef}
               type="text"
               className={`filter-field${searchQuery ? ' has-query' : ''}`}
-              placeholder={t('filterRefs')}
+              placeholder={t('filterShort')}
               title={t('filterTip')}
               aria-label={t('filterRefs')}
               value={searchQuery}
