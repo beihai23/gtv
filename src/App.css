@@ -180,6 +180,10 @@
   padding: 10px 20px;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border);
+  /* Anchors the ref panel (top: 100%) -- the header's height varies with
+     the identity card, so the panel must hang off the header itself, not
+     off a fixed viewport offset (it once sliced across the toolbar). */
+  position: relative;
 }
 
 /* Region boundaries: identity | lane filters | controls get hairline
@@ -1084,18 +1088,6 @@
   color: var(--text-dim);
 }
 
-.filter-tag.show-more {
-  background: var(--bg-input);
-  border-color: var(--text-faint);
-  color: var(--text-dim);
-  flex-shrink: 0;
-}
-
-.filter-tag.show-more:hover {
-  background: var(--bg);
-  color: var(--text);
-}
-
 /* Filter combobox at the end of the chip row: collapsed it is a quiet
    affordance (ghost pill, same height/radius as the chips); focus
    expands it and fills it, and typing opens the panel under the
@@ -1369,10 +1361,14 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 .branch-panel {
   position: absolute;
-  top: 64px;
-  right: 24px;
+  top: 100%;
+  right: 12px;
+  margin-top: 6px;
   width: min(600px, 90vw);
   max-height: 55vh;
+  /* Sibling of (not child in) the backdrop: must stack above it or every
+     click would hit the click-catcher. */
+  z-index: 61;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;

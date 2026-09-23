@@ -1632,33 +1632,22 @@ export default function RepoView({
             <div className="filter-tags">
               {inlineBranches.map(renderBranchChip)}
             </div>
-            {hasMoreTags && (
-              <button
-                className="filter-tag show-more"
-                onClick={() => {
-                  if (showAllTags) closePanel();
-                  else {
-                    setShowAllTags(true);
-                    filterInputRef.current?.focus();
-                  }
-                }}
-              >
-                {showAllTags ? t('closeUp') : t('more', { n: activeBranches.length - inlineBranches.length })}
-              </button>
-            )}
-            {/* The filter combobox: one query, one results surface. It is
-                resident (not gated behind chip overflow), so the panel --
-                with the dead-lane policy and the tag class toggle inside --
-                stays reachable even when every chip fits inline. Focus or
-                typing opens the panel below; the query drives the panel's
-                candidate rows only, never the chips (the leak-bug rule:
-                an input mutates what sits under it, not the answer display
+            {/* The filter combobox: one query, one results surface, and
+                ONE entry -- it absorbed the old "+N more" overflow button
+                (the placeholder carries the hidden-chips count), so the
+                field is the panel's only trigger, resident even when every
+                chip fits inline. Focus or typing opens the panel anchored
+                below the header; the query drives the panel's candidate
+                rows only, never the chips (the leak-bug rule: an input
+                mutates what sits under it, not the answer display
                 elsewhere). "/" focuses it from anywhere in the tab. */}
             <input
               ref={filterInputRef}
               type="text"
               className={`filter-field${searchQuery ? ' has-query' : ''}`}
-              placeholder={t('filterShort')}
+              placeholder={hasMoreTags
+                ? t('moreInField', { n: activeBranches.length - inlineBranches.length })
+                : t('filterShort')}
               title={t('filterTip')}
               aria-label={t('filterRefs')}
               value={searchQuery}
@@ -1847,95 +1836,101 @@ export default function RepoView({
             </>
           )}
         </div>
+        {showAllTags && (
+          <>
+            {/* Backdrop = transparent viewport-wide click-catcher (same
+                idiom as .view-menu-backdrop), SIBLING of the panel: the
+                panel's absolute position must anchor to the HEADER
+                (position: relative) -- nested inside the fixed backdrop it
+                would anchor to the viewport instead, and the header's
+                height varies with the identity card. */}
+            <div className="branch-panel-backdrop" onClick={closePanel} />
+            <div className="branch-panel">
+              {/* Head = dismiss only. The query input lives in the toolbar
+                  (the combobox field) -- one input, one results surface --
+                  and every mutating control lives in the toolbar row below,
+                  so no two rows compete for attention. */}
+              <div className="branch-panel-head">
+                <button
+                  className="branch-panel-close"
+                  onClick={closePanel}
+                  aria-label={t('close')}
+                  title={t('close')}
+                >
+                  ×
+                </button>
+              </div>
+              {/* Toolbar = the three bulk verbs, each scoped honestly:
+                  the Tags pill gates which ref CLASS is listed; select/clear
+                  act on the rows the search + class filter currently show. */}
+              <div className="branch-panel-toolbar">
+                <button
+                  className={`panel-pill${showTags ? ' on' : ''}`}
+                  onClick={toggleShowTags}
+                  title={t('tagsTip')}
+                  aria-pressed={showTags}
+                >
+                  {t('tags')}
+                </button>
+                <span className="toolbar-spacer" />
+                <button className="panel-link" onClick={selectShown}>{t('selectShown')}</button>
+                <button className="panel-link" onClick={clearShown}>{t('clearShown')}</button>
+                <span className="branch-panel-count">{t('refsSelected', { n: panelRows.length, m: shownSelectedCount })}</span>
+              </div>
+              <div className="branch-panel-list">
+                {panelBranches.length > 0 && (
+                  <div className="branch-panel-group">
+                    <div className="branch-panel-group-title">{t('branchesSection', { n: panelBranches.length })}</div>
+                    <div className="branch-panel-rows">
+                      {panelBranches.map(renderBranchRow)}
+                    </div>
+                  </div>
+                )}
+                {panelTags.length > 0 && (
+                  <div className="branch-panel-group">
+                    <div className="branch-panel-group-title">{t('tagsSection', { n: panelTags.length })}</div>
+                    <div className="branch-panel-rows">
+                      {panelTags.map(renderBranchRow)}
+                    </div>
+                  </div>
+                )}
+                {panelArchived.length > 0 && (
+                  <div className="branch-panel-group">
+                    <div className="branch-panel-group-title">
+                      {t('archivedLanes', { n: panelArchived.length })}
+                      <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('archived')}>
+                        {traceGroupLabel('archived')}
+                      </button>
+                    </div>
+                    <div className="branch-panel-rows">
+                      {panelArchived.map(renderDeadRow)}
+                    </div>
+                  </div>
+                )}
+                {panelDormant.length > 0 && (
+                  <div className="branch-panel-group">
+                    <div className="branch-panel-group-title">
+                      {t('dormantLanes', { n: panelDormant.length })}
+                      <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('dormant')}>
+                        {traceGroupLabel('dormant')}
+                      </button>
+                    </div>
+                    <div className="branch-panel-rows">
+                      {panelDormant.map(renderDeadRow)}
+                    </div>
+                  </div>
+                )}
+                {panelBranches.length === 0 && panelTags.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
+                  <div className="branch-panel-empty">{t('noRefsMatch')}</div>
+                )}
+              </div>
+              <div className="branch-panel-footer">
+                {t('panelFooter')}
+              </div>
+            </div>
+          </>
+        )}
       </header>
-
-      {showAllTags && (
-        <div className="branch-panel-backdrop" onClick={closePanel}>
-          <div className="branch-panel" onClick={e => e.stopPropagation()}>
-            {/* Head = dismiss only. The query input lives in the toolbar
-                (the combobox field) -- one input, one results surface --
-                and every mutating control lives in the toolbar row below,
-                so no two rows compete for attention. */}
-            <div className="branch-panel-head">
-              <button
-                className="branch-panel-close"
-                onClick={closePanel}
-                aria-label={t('close')}
-                title={t('close')}
-              >
-                ×
-              </button>
-            </div>
-            {/* Toolbar = the three bulk verbs, each scoped honestly:
-                the Tags pill gates which ref CLASS is listed; select/clear
-                act on the rows the search + class filter currently show. */}
-            <div className="branch-panel-toolbar">
-              <button
-                className={`panel-pill${showTags ? ' on' : ''}`}
-                onClick={toggleShowTags}
-                title={t('tagsTip')}
-                aria-pressed={showTags}
-              >
-                {t('tags')}
-              </button>
-              <span className="toolbar-spacer" />
-              <button className="panel-link" onClick={selectShown}>{t('selectShown')}</button>
-              <button className="panel-link" onClick={clearShown}>{t('clearShown')}</button>
-              <span className="branch-panel-count">{t('refsSelected', { n: panelRows.length, m: shownSelectedCount })}</span>
-            </div>
-            <div className="branch-panel-list">
-              {panelBranches.length > 0 && (
-                <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">{t('branchesSection', { n: panelBranches.length })}</div>
-                  <div className="branch-panel-rows">
-                    {panelBranches.map(renderBranchRow)}
-                  </div>
-                </div>
-              )}
-              {panelTags.length > 0 && (
-                <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">{t('tagsSection', { n: panelTags.length })}</div>
-                  <div className="branch-panel-rows">
-                    {panelTags.map(renderBranchRow)}
-                  </div>
-                </div>
-              )}
-              {panelArchived.length > 0 && (
-                <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">
-                    {t('archivedLanes', { n: panelArchived.length })}
-                    <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('archived')}>
-                      {traceGroupLabel('archived')}
-                    </button>
-                  </div>
-                  <div className="branch-panel-rows">
-                    {panelArchived.map(renderDeadRow)}
-                  </div>
-                </div>
-              )}
-              {panelDormant.length > 0 && (
-                <div className="branch-panel-group">
-                  <div className="branch-panel-group-title">
-                    {t('dormantLanes', { n: panelDormant.length })}
-                    <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('dormant')}>
-                      {traceGroupLabel('dormant')}
-                    </button>
-                  </div>
-                  <div className="branch-panel-rows">
-                    {panelDormant.map(renderDeadRow)}
-                  </div>
-                </div>
-              )}
-              {panelBranches.length === 0 && panelTags.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
-                <div className="branch-panel-empty">{t('noRefsMatch')}</div>
-              )}
-            </div>
-            <div className="branch-panel-footer">
-              {t('panelFooter')}
-            </div>
-          </div>
-        </div>
-      )}
 
       {error && (
         <div className="error">
