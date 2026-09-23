@@ -1649,48 +1649,15 @@ export default function RepoView({
 
         {branchList.length > 0 && (
           <div className="header-chips">
-            {/* Lens group: one-gesture selection presets over the chips to
-                their right. The 📌 pill renders only once something has
-                been pinned (no dead chrome), and disables when no pin is
-                currently visible (all dormant/archived). Lit = current
-                selection equals the preset; manual edits unlight. */}
-            <div className="lens-group" role="group" aria-label={t('lensGroup')}>
-              <button
-                className={`panel-pill lens${recentLit ? ' on' : ''}`}
-                onClick={() => applyLens(recentNames)}
-                title={t('lensRecentTip')}
-              >
-                {t('lensRecent')}
-              </button>
-              {pinnedBranches.length > 0 && (
-                <button
-                  className={`panel-pill lens${pinnedLit ? ' on' : ''}`}
-                  onClick={applyPinnedLens}
-                  disabled={pinnedNames.length === 0}
-                  title={t('lensPinnedTip')}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <line x1="12" x2="12" y1="17" y2="22" />
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                  </svg>
-                  {t('lensPinned')}
-                </button>
-              )}
-              <button
-                className={`panel-pill lens${allLit ? ' on' : ''}`}
-                onClick={() => applyLens(activeBranches.map(b => b.name))}
-                title={t('lensAllTip')}
-              >
-                {t('lensAll')}
-              </button>
-            </div>
-            {/* Date scope: the OTHER data-slice axis, so it lives with the
-                lane presets rather than among the view actions -- the two
-                controls together answer "which slices of the repo am I
-                looking at" (lanes x time), while everything to the right
-                of the field only changes how the slice is drawn or
-                navigated. State stays visible at rest: a silently active
-                date filter would shrink the map with no visible cause. */}
+            {/* Date scope HEADS the data-slice cluster: one stable,
+                self-contained axis ("when") anchored before the lane
+                presets, so the preset row can grow after it without the
+                date control ever moving -- and so the whole lane
+                subsystem (presets -> filter field -> status pill) stays
+                contiguous to its right, uninterrupted. Changes what data
+                is LOADED, unlike the view actions further right; state
+                stays visible at rest because a silently active date
+                filter would shrink the map with no visible cause. */}
             <div className="header-scope">
               <select
                 className="view-btn date-select"
@@ -1745,6 +1712,43 @@ export default function RepoView({
                   />
                 </>
               )}
+            </div>
+            {/* Lens group: one-gesture lane-selection presets. The 📌
+                pill renders only once something has been pinned (no dead
+                chrome), and disables when no pin is currently visible
+                (all dormant/archived). Lit = current selection equals
+                the preset; manual edits unlight. The row is expected to
+                grow -- it sits after the date scope precisely so new
+                presets append without reshuffling the cluster. */}
+            <div className="lens-group" role="group" aria-label={t('lensGroup')}>
+              <button
+                className={`panel-pill lens${recentLit ? ' on' : ''}`}
+                onClick={() => applyLens(recentNames)}
+                title={t('lensRecentTip')}
+              >
+                {t('lensRecent')}
+              </button>
+              {pinnedBranches.length > 0 && (
+                <button
+                  className={`panel-pill lens${pinnedLit ? ' on' : ''}`}
+                  onClick={applyPinnedLens}
+                  disabled={pinnedNames.length === 0}
+                  title={t('lensPinnedTip')}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="12" x2="12" y1="17" y2="22" />
+                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                  </svg>
+                  {t('lensPinned')}
+                </button>
+              )}
+              <button
+                className={`panel-pill lens${allLit ? ' on' : ''}`}
+                onClick={() => applyLens(activeBranches.map(b => b.name))}
+                title={t('lensAllTip')}
+              >
+                {t('lensAll')}
+              </button>
             </div>
             {/* The filter combobox: one query, one results surface, and
                 ONE entry -- it absorbed the old "+N more" overflow button,

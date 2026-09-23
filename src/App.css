@@ -699,17 +699,26 @@
 /* Date scope group: it changes what data is LOADED (vs the presentation
    toggles, which only change how it is drawn), so it stays visible at
    rest -- a silently active date filter would shrink the map with no
-   visible cause. Lives beside the lane lenses -- lanes x time are the
-   two data-slice axes -- and the border separates time from lane
-   presets. Never shrinks: a clipped select is unreadable, and the
-   filter field to its right is the designated flex giver. */
+   visible cause. HEADS the data-slice cluster (stable "when" axis; the
+   lane presets grow after it). Never shrinks: a clipped select is
+   unreadable, and the filter field to its right is the designated flex
+   giver. */
 .header-scope {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  /* Minor separator (inside the controls group): lighter spacing than
-     the major region borders, so hierarchy still reads. */
+}
+
+/* Lens group: one-gesture lane-selection presets after the date scope.
+   Reuses the panel-pill control so "quiet toggle pill" reads as one
+   idiom everywhere. Carries the minor separator (lighter than the major
+   region borders): time axis | lane axis. */
+.lens-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
   padding-left: 10px;
   border-left: 1px solid var(--border);
 }
@@ -977,16 +986,6 @@
   justify-content: flex-start;
   gap: 8px;
   container-type: inline-size;
-}
-
-/* Lens group: one-gesture selection presets beside the filter field.
-   Reuses the panel-pill control so "quiet toggle pill" reads as one
-   idiom everywhere. */
-.lens-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
 }
 
 .lens-group .panel-pill {
