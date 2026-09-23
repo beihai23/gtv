@@ -1450,6 +1450,18 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   overflow-y: auto;
 }
 
+/* Sections must never COMPRESS when the panel's max-height clamps the
+   list: dead groups can be hundreds of rows (tens of thousands of px),
+   and with default flex-shrink the shrink pressure they induce -- which
+   they themselves cannot absorb (min-height: auto floors them at their
+   min-content height) -- lands on the zones grid instead, crushing it to
+   its 96px min-height while the zone cells still overflow visibly. The
+   archived group then paints straight through the overflowing chips.
+   Overflow belongs to the scroll container alone. */
+.branch-panel-list > * {
+  flex-shrink: 0;
+}
+
 .branch-panel-group-title {
   font-size: 11px;
   color: var(--text-dim);
