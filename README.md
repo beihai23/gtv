@@ -14,7 +14,7 @@ which lines are alive, where they came from, and where they landed.
 </p>
 <p align="center">
   <img src="docs/assets/screenshot-light.png" width="49%" alt="gtv timeline (GitHub Light theme)"/>
-  <img src="docs/assets/screenshot-branches.png" width="49%" alt="branch panel: search, All/None, solo a branch"/>
+  <img src="docs/assets/screenshot-branches.png" width="49%" alt="ref panel: two-zone chip picker with Archived/Dormant groups"/>
 </p>
 <p align="center">
   <img src="docs/assets/screenshot-settings.png" width="60%" alt="settings (⌘,): Chinese/English, preset themes, About"/>
@@ -44,16 +44,30 @@ from the commit graph itself.
 - Node size encodes change volume; HEAD is marked
 - Time-proportional x-axis with a sticky, zoom-adaptive ruler
   (`2026` → `2026-07` → `2026-07-17` → `… 15:04` → `… 15:04:05` — adjacent ticks
-  never repeat)
+  never repeat); dead gaps over 45 days fold into fixed-width axis breaks
 
 **Handling big repos**
 - Smart compression: by default only key commits render (lane births, tips, merge
   endpoints, tagged commits, HEAD); click a `+N` chip on a lane bar to expand
 - Viewport culling: only what you see is in the render tree
 - Lane names pinned to the left edge as constant-size chips; click to focus a lane
-  (dims everything else), right-click for lane actions
-- Branch panel: search, newest-first ordering, All / None, double-click a chip to
-  solo that branch
+  (dims everything else), right-click for lane actions ("related branches only",
+  switch branch, compare with HEAD, …)
+- Ref panel (`/`): a two-zone chip picker — position carries the state, selected
+  lanes on the right, dragging a chip across the divider toggles it; hover for
+  pin / "only this", right-click copies the name; a Tags tab plus Archived /
+  Dormant groups whose eye-rows toggle a lane's visibility
+
+**Slicing the data**
+- Header scope cluster: a date scope (week / month / quarter / year / custom —
+  lanes that empty out sink into the trace rows) ahead of the lane presets
+  (Recent / Pinned / All)
+- While a lane subset is selected, a status pill in the header shows `n / m
+  lanes`; click the count to reopen the picker, click × to show every lane again
+- Full-history commit search (`Cmd/Ctrl+F`) over message / author / hash, with
+  ancestry jump-to for hits outside the loaded range
+- `Ctrl/Cmd+click` two commits (or a lane menu entry) to compare them: per-file
+  `+/-` counts and line-level diffs in a side-by-side detail view
 
 **Interaction**
 - Trackpad-native: two-finger scroll pans, pinch zooms around the cursor
@@ -121,6 +135,7 @@ src-tauri/src/
 src/
   components/Timeline.tsx      D3 timeline: lanes, edges, badges, minimap, ruler
   components/CommitDetails.tsx commit detail panel
+  components/DiffView.tsx      line-level diffs, shared by detail & compare views
 docs/
   roadmap.md          where gtv goes next
   design-v2.md        lane algorithm + rendering spec
@@ -130,9 +145,12 @@ docs/
 
 ## Roadmap
 
-Near-term: anomaly-gap compression for the time axis, inactive-lane collapsing,
-related-branch filtering, date-range filter, jump-to-commit search, two-commit
-diff. See [docs/roadmap.md](docs/roadmap.md).
+The 2026-08/09 wave shipped: inactive-lane collapsing, anomaly-gap compression
+for the time axis, full-history commit search, date-range scoping,
+related-branch filtering, two-commit compare, branch switch with dirty-tree
+confirmation, and multi-repo tabs. Next up is a visual-language pass —
+double-line lanes, node state encoding, a HEAD home icon, ahead/behind badges.
+See [docs/roadmap.md](docs/roadmap.md).
 
 ## Acknowledgments
 
