@@ -1116,7 +1116,14 @@
 
 .filter-field:focus {
   outline: none;
-  width: 230px;
+  /* width alone is only a PREFERENCE to a shrinkable flex item -- the
+     tight chip row crushed the 230px right back to ~110px and the
+     expansion animation never showed. While typing the width is a hard
+     constraint: the chip row yields instead (clips chips, a temporary
+     state restored on blur). Capped by container width for narrow
+     windows; 60cqw of a ~400px row still gives a comfortable 240px. */
+  width: min(240px, 60cqw);
+  flex-shrink: 0;
   background: var(--bg-input);
   border-color: var(--accent);
 }
