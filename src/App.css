@@ -699,12 +699,15 @@
 /* Date scope group: it changes what data is LOADED (vs the presentation
    toggles, which only change how it is drawn), so it stays visible at
    rest -- a silently active date filter would shrink the map with no
-   visible cause. The border separates "configure" from the orientation
-   actions (fit, terminal) to its left. */
+   visible cause. Lives beside the lane lenses -- lanes x time are the
+   two data-slice axes -- and the border separates time from lane
+   presets. Never shrinks: a clipped select is unreadable, and the
+   filter field to its right is the designated flex giver. */
 .header-scope {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
   /* Minor separator (inside the controls group): lighter spacing than
      the major region borders, so hierarchy still reads. */
   padding-left: 10px;

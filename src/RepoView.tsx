@@ -1684,6 +1684,68 @@ export default function RepoView({
                 {t('lensAll')}
               </button>
             </div>
+            {/* Date scope: the OTHER data-slice axis, so it lives with the
+                lane presets rather than among the view actions -- the two
+                controls together answer "which slices of the repo am I
+                looking at" (lanes x time), while everything to the right
+                of the field only changes how the slice is drawn or
+                navigated. State stays visible at rest: a silently active
+                date filter would shrink the map with no visible cause. */}
+            <div className="header-scope">
+              <select
+                className="view-btn date-select"
+                value={dateRangeValue}
+                onChange={e => {
+                  const v = e.target.value;
+                  // Switching to Custom keeps whatever dates the inputs
+                  // hold (empty strings take the fallbacks in customRange).
+                  if (v === 'custom') setDateRange(customRange(customFrom, customTo));
+                  else if (v === 'all') setDateRange({ kind: 'all' });
+                  else setDateRange({ kind: 'preset', days: Number(v) });
+                  // Re-cropping re-anchors the canvas: reset the viewport.
+                  setViewResetKey(k => k + 1);
+                }}
+              >
+                <option value="all">{t('dateAll')}</option>
+                <option value="7">{t('dateWeek')}</option>
+                <option value="30">{t('dateMonth')}</option>
+                <option value="90">{t('date3m')}</option>
+                <option value="365">{t('dateYear')}</option>
+                <option value="custom">{t('dateCustom')}</option>
+              </select>
+              {dateRange.kind === 'custom' && (
+                <>
+                  <input
+                    type="date"
+                    className="view-btn date-input"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    title={t('dateFrom')}
+                    aria-label={t('dateFrom')}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setCustomFrom(v);
+                      setDateRange(customRange(v, customTo));
+                      setViewResetKey(k => k + 1);
+                    }}
+                  />
+                  <input
+                    type="date"
+                    className="view-btn date-input"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    title={t('dateTo')}
+                    aria-label={t('dateTo')}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setCustomTo(v);
+                      setDateRange(customRange(customFrom, v));
+                      setViewResetKey(k => k + 1);
+                    }}
+                  />
+                </>
+              )}
+            </div>
             {/* The filter combobox: one query, one results surface, and
                 ONE entry -- it absorbed the old "+N more" overflow button,
                 so the field is the panel's only trigger. Focus or typing
@@ -1746,11 +1808,10 @@ export default function RepoView({
           </div>
         )}
 
-        {/* Right controls ordered by role and frequency: the orientation
-            pair (fit, terminal) first, then the date scope in its own
-            separated group -- it changes what data is loaded, so its state
-            must stay visible at rest -- then the five low-frequency
-            presentation toggles collapsed behind one trigger. */}
+        {/* Right controls are purely "how it is drawn / navigated": the
+            orientation pair (fit, terminal), then the five low-frequency
+            presentation toggles collapsed behind one trigger. The data
+            scopes (lanes, time) live with the lens group to the left. */}
         <div className="header-right">
           {gitData && (
             <>
@@ -1782,61 +1843,6 @@ export default function RepoView({
                   </svg>
                 </button>
               )}
-              <div className="header-scope">
-                <select
-                  className="view-btn date-select"
-                  value={dateRangeValue}
-                  onChange={e => {
-                    const v = e.target.value;
-                    // Switching to Custom keeps whatever dates the inputs
-                    // hold (empty strings take the fallbacks in customRange).
-                    if (v === 'custom') setDateRange(customRange(customFrom, customTo));
-                    else if (v === 'all') setDateRange({ kind: 'all' });
-                    else setDateRange({ kind: 'preset', days: Number(v) });
-                    // Re-cropping re-anchors the canvas: reset the viewport.
-                    setViewResetKey(k => k + 1);
-                  }}
-                >
-                  <option value="all">{t('dateAll')}</option>
-                  <option value="7">{t('dateWeek')}</option>
-                  <option value="30">{t('dateMonth')}</option>
-                  <option value="90">{t('date3m')}</option>
-                  <option value="365">{t('dateYear')}</option>
-                  <option value="custom">{t('dateCustom')}</option>
-                </select>
-                {dateRange.kind === 'custom' && (
-                  <>
-                    <input
-                      type="date"
-                      className="view-btn date-input"
-                      value={customFrom}
-                      max={customTo || undefined}
-                      title={t('dateFrom')}
-                      aria-label={t('dateFrom')}
-                      onChange={e => {
-                        const v = e.target.value;
-                        setCustomFrom(v);
-                        setDateRange(customRange(v, customTo));
-                        setViewResetKey(k => k + 1);
-                      }}
-                    />
-                    <input
-                      type="date"
-                      className="view-btn date-input"
-                      value={customTo}
-                      min={customFrom || undefined}
-                      title={t('dateTo')}
-                      aria-label={t('dateTo')}
-                      onChange={e => {
-                        const v = e.target.value;
-                        setCustomTo(v);
-                        setDateRange(customRange(customFrom, v));
-                        setViewResetKey(k => k + 1);
-                      }}
-                    />
-                  </>
-                )}
-              </div>
               <div className="view-menu-anchor">
                 <button
                   className={`view-btn view-menu-btn${viewMenuOpen ? ' active' : ''}`}
