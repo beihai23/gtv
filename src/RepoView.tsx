@@ -790,17 +790,10 @@ export default function RepoView({
     setCopyToast({ name, ok });
   }, []);
 
-  const toggleBranchFilter = useCallback((branchName: string) => {
-    if (selectedBranches.includes(branchName)) {
-      const newSelected = selectedBranches.filter(b => b !== branchName);
-      setSelectedBranches(newSelected);
-      handleFilterChange(newSelected);
-    } else {
-      const newSelected = [...selectedBranches, branchName];
-      setSelectedBranches(newSelected);
-      handleFilterChange(newSelected);
-    }
-  }, [selectedBranches, handleFilterChange]);
+  // (Header lane chips are gone: the canvas labels already carry lane
+  // identity and the ref panel owns per-lane control, so the header no
+  // longer needs a per-lane toggle -- the panel's applyZoneToggle is the
+  // one selection verb now.)
 
   // M2.4 focus-set persistence: mirror every selection change into
   // localStorage under the repo path (click cadence, no debounce needed).
@@ -825,8 +818,8 @@ export default function RepoView({
       prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
   }, []);
 
-  // Dead-lane chips toggle VISIBILITY ONLY: they never go through
-  // toggleBranchFilter, so the lane stays inside selectedBranches and every
+  // Dead-lane chips toggle VISIBILITY ONLY: they never touch the lane
+  // selection, so the lane stays inside selectedBranches and every
   // filterByBranches rebuild keeps it loaded (collapse is pure display).
   const toggleDeadLane = useCallback((name: string) => {
     setExpandedDead(prev => {
@@ -897,9 +890,10 @@ export default function RepoView({
   // once matches fell under the inline limit the "+N more" entry
   // vanished with the query never reset, stranding the toolbar in a
   // filter the user could no longer reach or clear. Dead lanes never
-  // appear as header chips or in the live panel sections (they live in
-  // the Archived/Dormant groups, which keep their own counts), so every
-  // count the header shows derives from this list.
+  // appear in the live panel sections (they live in the Archived/
+  // Dormant groups, which keep their own counts), so every count the
+  // header shows — the filter-status pill's subset count included —
+  // derives from this list.
   const activeBranches = useMemo(
     () => sortedBranches
       .filter(b => showTags || !b.is_tag)
@@ -907,17 +901,6 @@ export default function RepoView({
     [sortedBranches, showTags, allDeadNames]
   );
 
-  const INLINE_CHIP_LIMIT = 8;
-  const inlineBranches = useMemo(() => {
-    // Pinned float first (that is the whole job of a pin), selected next,
-    // remaining slots by activity order. Array.sort is stable, so each
-    // rank keeps the activity ordering of activeBranches.
-    const rank = (b: BranchLane) =>
-      pinnedBranches.includes(b.name) ? 0 : selectedBranches.includes(b.name) ? 1 : 2;
-    return [...activeBranches].sort((a, b) => rank(a) - rank(b)).slice(0, INLINE_CHIP_LIMIT);
-  }, [activeBranches, selectedBranches, pinnedBranches]);
-
-  const hasMoreTags = activeBranches.length > inlineBranches.length;
 
   // --- lenses ----------------------------------------------------------------
   // A lens is a one-gesture selection PRESET, not a mode: it writes the
@@ -1386,38 +1369,6 @@ export default function RepoView({
     ? [...zoneCandidates, ...zoneSelected][Math.min(rowHighlight, zoneCandidates.length + zoneSelected.length - 1)].name
     : null;
 
-  const renderBranchChip = (branch: BranchLane) => {
-    const on = selectedBranches.includes(branch.name);
-    const pinned = pinnedBranches.includes(branch.name);
-    return (
-      <button
-        key={branch.name}
-        className={`filter-tag${on ? ' active' : ''}`}
-        onClick={() => toggleBranchFilter(branch.name)}
-        onContextMenu={e => {
-          // Desktop convention: right-click a chip to copy its name. The
-          // chip keeps its one visible glyph budget (dot + pin) -- the copy
-          // verb hides behind the platform's own gesture instead.
-          e.preventDefault();
-          copyName(branch.name);
-        }}
-        title={branch.name}
-      >
-        <span className="chip-dot" style={{ background: branch.color }} />
-        {/* A pin mark rides the chip at rest (persistent state, no hover
-            jump): pinned lanes are recognizable without opening anything.
-            Neutral color -- the shape is the signifier, same rule as the
-            dead-row eye. */}
-        {pinned && (
-          <svg className="chip-pin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="12" x2="12" y1="17" y2="22" />
-            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-          </svg>
-        )}
-        {truncateMiddle(branch.name)}
-      </button>
-    );
-  };
 
   // Panel chip for a live ref. The chip IS the toggle (click or drag
   // across the divider); the checkbox idiom is gone because position
@@ -1733,25 +1684,18 @@ export default function RepoView({
                 {t('lensAll')}
               </button>
             </div>
-            <div className="filter-tags">
-              {inlineBranches.map(renderBranchChip)}
-            </div>
             {/* The filter combobox: one query, one results surface, and
-                ONE entry -- it absorbed the old "+N more" overflow button
-                (the placeholder carries the hidden-chips count), so the
-                field is the panel's only trigger, resident even when every
-                chip fits inline. Focus or typing opens the panel anchored
-                below the header; the query drives the panel's candidate
-                rows only, never the chips (the leak-bug rule: an input
-                mutates what sits under it, not the answer display
+                ONE entry -- it absorbed the old "+N more" overflow button,
+                so the field is the panel's only trigger. Focus or typing
+                opens the panel anchored below the header; the query drives
+                the panel's candidate rows only (the leak-bug rule: an
+                input mutates what sits under it, not the answer display
                 elsewhere). "/" focuses it from anywhere in the tab. */}
             <input
               ref={filterInputRef}
               type="text"
               className={`filter-field${showAllTags ? ' open' : ''}`}
-              placeholder={hasMoreTags
-                ? t('moreInField', { n: activeBranches.length - inlineBranches.length })
-                : t('filterShort')}
+              placeholder={t('filterShort')}
               title={t('filterTip')}
               aria-label={t('filterRefs')}
               value={searchQuery}
@@ -1763,6 +1707,42 @@ export default function RepoView({
               onFocus={() => setShowAllTags(true)}
               onKeyDown={onFilterKeyDown}
             />
+            {/* Selection status pill: the header's replacement for the
+                per-lane chips. Lane identity already lives on the canvas
+                labels and per-lane control lives in the panel, so the one
+                thing the header still owed the user is the honest
+                at-a-glance answer to "am I looking at everything?" -- the
+                subset count, plus the one verb the header never had: a
+                single click back to all lanes. Rendered only while a
+                filter is actually narrowing the canvas (all-shown needs
+                no badge; "0 of N" shows and is exactly the state the ×
+                rescues). */}
+            {selectedActiveCount < activeBranches.length && (
+              <div className="filter-status" title={t('filterStatusTip')}>
+                <button
+                  type="button"
+                  className="filter-status-main"
+                  onClick={() => filterInputRef.current?.focus()}
+                >
+                  {t('filterStatusCount', {
+                    n: selectedActiveCount,
+                    m: activeBranches.length,
+                  })}
+                </button>
+                <button
+                  type="button"
+                  className="filter-status-x"
+                  title={t('filterStatusClear')}
+                  aria-label={t('filterStatusClear')}
+                  onClick={() => applyLens(activeBranches.map(b => b.name))}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         )}
 

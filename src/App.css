@@ -976,17 +976,9 @@
   container-type: inline-size;
 }
 
-/* When the window is too narrow for even one whole chip, drop the chip row
-   and keep just the "+N more" button instead of showing a cut-off sliver. */
-@container (max-width: 140px) {
-  .header-chips .filter-tags {
-    display: none;
-  }
-}
-
-/* Lens group: one-gesture selection presets over the chip row. Reuses
-   the panel-pill control so "quiet toggle pill" reads as one idiom
-   everywhere. */
+/* Lens group: one-gesture selection presets beside the filter field.
+   Reuses the panel-pill control so "quiet toggle pill" reads as one
+   idiom everywhere. */
 .lens-group {
   display: flex;
   align-items: center;
@@ -1031,69 +1023,61 @@
   color: var(--text-dim);
 }
 
-.filter-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  min-width: 0;
-  /* One-row clipping: chips that don't fit wrap onto a hidden second row,
-     so they're hidden whole instead of being cut mid-label. */
-  max-height: 26px;
+/* Selection status pill: the header's replacement for the old per-lane
+   chip row. Lane identity lives on the canvas labels and per-lane
+   control lives in the ref panel; what the header still owes is the
+   at-a-glance "am I looking at everything?" answer plus a one-click way
+   back to all lanes. Two verbs, one constant-width pill: the count opens
+   the picker, the x resets to the full lane set. Quiet by default --
+   absent entirely while everything is shown. */
+.filter-status {
+  display: inline-flex;
+  align-items: stretch;
+  height: 22px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 11px;
   overflow: hidden;
+  background: var(--bg-input);
 }
 
-/* Neutral chip surface: lane identity rides on the dot only, and the
-   on/off state is the chip's own fill — selected = filled, off = ghost.
-   The old solid lane-color fill stacked identity and state at the same
-   intensity and turned a row of chips into unrelated saturated hues. */
-.filter-tag {
-  height: 26px;
+.filter-status-main {
+  border: none;
+  background: transparent;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-status-main:hover {
+  color: var(--text);
+}
+
+.filter-status-x {
+  width: 20px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 11px;
-  border: 1px solid transparent;
-  border-radius: 12px;
+  justify-content: center;
+  color: var(--text-faint);
   cursor: pointer;
-  color: var(--text-dim);
-  background: transparent;
-  white-space: nowrap;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.filter-tag.active {
-  background: var(--bg-input);
-  border-color: var(--border);
+.filter-status-x:hover {
   color: var(--text);
+  background: var(--border);
 }
 
-.filter-tag:hover {
-  color: var(--text);
-  border-color: var(--text-faint);
-}
-
-.chip-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* Pin mark on a header chip: neutral color, the shape is the signifier
-   (same rule as the dead-row eye -- no new accent hues). */
-.chip-pin {
-  flex-shrink: 0;
-  color: var(--text-dim);
-}
-
-/* Filter combobox at the end of the chip row: collapsed it is a quiet
-   affordance (ghost pill, same height/radius as the chips); the open
-   PANEL expands it and fills it (not focus -- see .filter-field.open),
-   and typing opens the panel under the toolbar. margin-left:auto pins
-   it to the row's end -- the empty flex space is spent before any chip
-   ever shifts. */
+/* Filter combobox at the end of the header's control row: collapsed it
+   is a quiet affordance (ghost pill); the open PANEL expands it and
+   fills it (not focus -- see .filter-field.open), and typing opens the
+   panel under the toolbar. margin-left:auto pins it to the row's end --
+   the empty flex space is spent before the field or the status pill
+   after it ever shifts. */
 .filter-field {
   margin-left: auto;
   flex-shrink: 1;
@@ -1121,8 +1105,8 @@
    typing into. The panel opens on focus and closes via its own paths
    (close button, backdrop, Esc), so .open is exactly "panel is up".
    Width is a HARD constraint while open -- width alone is only a
-   preference to a shrinkable flex item and the chip row would crush it
-   right back. Capped by container width for narrow windows. */
+   preference to a shrinkable flex item and neighboring controls could
+   crush it right back. Capped by container width for narrow windows. */
 .filter-field.open {
   width: min(240px, 60cqw);
   flex-shrink: 0;
