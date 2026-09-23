@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
@@ -982,59 +982,114 @@ export default function RepoView({
     return activeBranches.filter(b => selected.has(b.name)).length;
   }, [activeBranches, selectedBranches]);
 
-  // Panel sections: the list is STABLE — a row's position depends only on
-  // ref class and activity order, never on selection. The old
-  // Enabled/Disabled split teleported a chip between groups on every
-  // toggle, reflowing the list under the cursor; state now changes in
-  // place (the checkbox) like every checklist-style filter UI. Dead lanes
-  // stay out — they have their own sections below and never leave
-  // selectedBranches.
-  const panelBranches = useMemo(
-    () => panelRows.filter(b => !b.is_tag),
-    [panelRows]
+  // Zone split: position IS the state — unselected candidates on the
+  // left, the curated selection on the right (the transfer/shuttle
+  // convention: moving right joins the selection). Both zones keep the
+  // activity order, so a chip's neighbors are stable; toggling moves it
+  // across the divider with a FLIP animation (see withFlip), so the eye
+  // can follow the chip that changed instead of rescanning two lists.
+  // Dead lanes stay out — they keep their own visibility sections below.
+  const zoneCandidates = useMemo(
+    () => panelRows.filter(b => !selectedBranches.includes(b.name)),
+    [panelRows, selectedBranches]
   );
-  const panelTags = useMemo(
-    () => panelRows.filter(b => b.is_tag),
-    [panelRows]
+  const zoneSelected = useMemo(
+    () => panelRows.filter(b => selectedBranches.includes(b.name)),
+    [panelRows, selectedBranches]
   );
 
-  // Group-header bulk checkbox (the Gmail / file-manager select-all
-  // idiom): acts on the rows that group CURRENTLY lists (search + class
-  // filter applied), so "select everything matching release/*" composes
-  // from the toolbar query. Check ADDS to the curated set (a filter that
-  // happens to hide a lane must never surprise-drop it); uncheck removes
-  // exactly the listed ones. Declared after panelRows: a useCallback dep
-  // array is read during render, and an earlier declaration would be a
-  // TDZ error (the M1.3 landmine).
-  const toggleGroupListed = useCallback((rows: BranchLane[]) => {
-    const listed = new Set(rows.map(b => b.name));
-    const allSelected = rows.length > 0
-      && rows.every(b => selectedBranches.includes(b.name));
-    const next = allSelected
-      ? selectedBranches.filter(n => !listed.has(n))
-      : [...new Set([...selectedBranches, ...listed])];
-    handleFilterChange(next);
+  // FLIP move: capture every chip's rect BEFORE a selection change, then
+  // after commit animate each chip from its old position to the new one
+  // (Web Animations, so there is no transition state to clean up). A
+  // toggled chip visibly flies across the divider and displaced
+  // neighbors slide to make room -- position IS the state now, so the
+  // motion is what keeps the eye on the chip that changed.
+  const chipEls = useRef(new Map<string, HTMLElement>());
+  const flipBefore = useRef<Map<string, DOMRect> | null>(null);
+  const withFlip = (mutate: () => void) => {
+    const rects = new Map<string, DOMRect>();
+    chipEls.current.forEach((el, name) => rects.set(name, el.getBoundingClientRect()));
+    flipBefore.current = rects;
+    mutate();
+  };
+  useLayoutEffect(() => {
+    const before = flipBefore.current;
+    if (!before) return;
+    // Chips gone (panel closed / refs re-filtered away): cancel the
+    // pending snapshot, nothing can animate.
+    if (chipEls.current.size === 0) {
+      flipBefore.current = null;
+      return;
+    }
+    // A selection toggle rides an async backend round-trip, so commits
+    // can land BETWEEN the snapshot and the state change (loading
+    // states, unrelated updates). A commit where NOTHING moved is not
+    // the toggle's commit -- retain the snapshot for the one that is.
+    const plays: Array<() => void> = [];
+    let moved = false;
+    chipEls.current.forEach((el, name) => {
+      const prev = before.get(name);
+      const now = el.getBoundingClientRect();
+      if (!prev) {
+        moved = true;
+        plays.push(() => el.animate(
+          [{ opacity: 0, transform: 'scale(.8)' }, { opacity: 1, transform: 'none' }],
+          { duration: 150, easing: 'ease-out' },
+        ));
+        return;
+      }
+      const dx = prev.left - now.left;
+      const dy = prev.top - now.top;
+      if (dx || dy) {
+        moved = true;
+        plays.push(() => el.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+          { duration: 220, easing: 'cubic-bezier(.2,.8,.25,1)' },
+        ));
+      }
+    });
+    before.forEach((_rect, name) => {
+      if (!chipEls.current.has(name)) moved = true;
+    });
+    if (!moved) return;
+    flipBefore.current = null;
+    plays.forEach(play => play());
+  });
+
+  // Zone toggle (chip click / drag-drop / zone bulk): select ADDS to the
+  // curated set, deselect removes exactly the named rows. Bulk verbs act
+  // on the rows the zone CURRENTLY lists (search + class filter
+  // applied), so "select everything matching release/*" composes from
+  // the toolbar query. Declared after panelRows: a useCallback dep array
+  // is read during render, and an earlier declaration would be a TDZ
+  // error (the M1.3 landmine).
+  const applyZoneToggle = useCallback((names: string[], select: boolean) => {
+    withFlip(() => {
+      if (select) {
+        handleFilterChange([...new Set([...selectedBranches, ...names])]);
+      } else {
+        const drop = new Set(names);
+        handleFilterChange(selectedBranches.filter(n => !drop.has(n)));
+      }
+    });
   }, [selectedBranches, handleFilterChange]);
 
-  // Selectable groups (Branches / Tags) front a tri-state checkbox: all
-  // checked, none checked, or indeterminate while the group is mixed.
-  // Dead groups keep their expand button instead — visibility is a
-  // different verb than selection.
-  const groupBulkTitle = (rows: BranchLane[], label: string) => {
-    const selectedCount = rows.filter(b => selectedBranches.includes(b.name)).length;
-    const all = rows.length > 0 && selectedCount === rows.length;
-    return (
-      <label className="branch-panel-group-title has-bulk" title={t('groupBulkTip')}>
-        <input
-          type="checkbox"
-          checked={all}
-          ref={el => { if (el) el.indeterminate = selectedCount > 0 && !all; }}
-          onChange={() => toggleGroupListed(rows)}
-        />
-        <span>{label}</span>
-      </label>
-    );
-  };
+  // HTML5 drag between zones: the payload is the plain ref name (never
+  // trusted on drop -- it must exist in panelRows), the zones highlight
+  // only while a crossing drop would land.
+  const [dragName, setDragName] = useState<string | null>(null);
+  const [hoverZone, setHoverZone] = useState<'cand' | 'sel' | null>(null);
+  const dropOnZone = useCallback((zone: 'cand' | 'sel') => (e: React.DragEvent) => {
+    e.preventDefault();
+    setHoverZone(null);
+    setDragName(null);
+    const name = e.dataTransfer.getData('text/plain');
+    const lane = panelRows.find(b => b.name === name);
+    if (!lane) return;
+    const isSel = selectedBranches.includes(lane.name);
+    const wantsSel = zone === 'sel';
+    if (isSel !== wantsSel) applyZoneToggle([lane.name], wantsSel);
+  }, [panelRows, selectedBranches, applyZoneToggle]);
 
   // Dead-lane panel groups (newest activity first, matching the rows
   // above). The search box filters them too: a lane collapsed into the
@@ -1156,7 +1211,7 @@ export default function RepoView({
   // the panel is open, so at most one match exists.
   useEffect(() => {
     if (!showAllTags) return;
-    document.querySelector('.branch-row.hl')?.scrollIntoView({ block: 'nearest' });
+    document.querySelector('.zone-chip.hl')?.scrollIntoView({ block: 'nearest' });
   }, [rowHighlight, showAllTags]);
 
   // ←/→ step to the previous/next commit on the SAME lane while the
@@ -1322,12 +1377,13 @@ export default function RepoView({
   // double-click solo is gone too (each double-click burned two toggle
   // rebuilds before the solo landed); the panel's explicit per-row solo
   // button replaces it.
-  // Keyboard highlight as a NAME: the panel renders branches and tags as
-  // two groups, but ↑/↓ walk the flat "branches then tags" order (exactly
-  // the visual top-to-bottom order); names are unique keys, so name
-  // equality maps the flat index onto whichever list holds the row.
-  const highlightedRefName = showAllTags && (panelBranches.length > 0 || panelTags.length > 0)
-    ? [...panelBranches, ...panelTags][Math.min(rowHighlight, panelBranches.length + panelTags.length - 1)].name
+  // Keyboard highlight as a NAME: ↑/↓ walk the flat "candidates then
+  // selected" order (the zones' visual left-to-right reading order);
+  // names are unique keys, so name equality maps the flat index onto
+  // whichever zone holds the chip -- and the highlight FOLLOWS a chip
+  // across the divider when Enter moves it.
+  const highlightedRefName = showAllTags && (zoneCandidates.length > 0 || zoneSelected.length > 0)
+    ? [...zoneCandidates, ...zoneSelected][Math.min(rowHighlight, zoneCandidates.length + zoneSelected.length - 1)].name
     : null;
 
   const renderBranchChip = (branch: BranchLane) => {
@@ -1363,67 +1419,85 @@ export default function RepoView({
     );
   };
 
-  // Panel row for a live ref: a stable checklist row — position never
-  // depends on selection, the checkbox flips in place. Interactive
-  // children of a label (the solo button) do not activate it, so each
-  // control stays single-purpose.
-  const renderBranchRow = (branch: BranchLane) => (
-    <label
-      key={branch.name}
-      className={`branch-row${highlightedRefName === branch.name ? ' hl' : ''}`}
-      title={branch.name}
-    >
-      <input
-        type="checkbox"
-        checked={selectedBranches.includes(branch.name)}
-        onChange={() => toggleBranchFilter(branch.name)}
-      />
-      <span className="branch-row-dot" style={{ background: branch.color }} />
-      <span className="branch-row-name">{truncateMiddle(branch.name)}</span>
-      {branch.is_tag && (
-        <svg className="branch-row-tag-ico" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
-          <circle cx="5.3" cy="5.3" r="0.8" fill="currentColor" stroke="none" />
-        </svg>
-      )}
-      {/* Pin sits before solo: it is persistent state (visible at rest
-          once set), while solo is a hover-only action. Interactive
-          elements inside a label do not activate it. */}
-      <button
-        type="button"
-        className={`branch-row-pin${pinnedBranches.includes(branch.name) ? ' on' : ''}`}
-        title={pinnedBranches.includes(branch.name) ? t('unpin') : t('pin')}
-        onClick={() => togglePin(branch.name)}
+  // Panel chip for a live ref. The chip IS the toggle (click or drag
+  // across the divider); the checkbox idiom is gone because position
+  // now carries the state. Hover actions sit in a reserved trailing
+  // slot (opacity swap, no layout shift): pin toggle + "only this".
+  // Right-click copies the name -- the same desktop convention as the
+  // toolbar chips. Pin also rides at rest as a front glyph, matching
+  // the toolbar chip, so pinned lanes are visible without hovering.
+  const renderLaneChip = (branch: BranchLane) => {
+    const on = selectedBranches.includes(branch.name);
+    const pinned = pinnedBranches.includes(branch.name);
+    return (
+      <div
+        key={branch.name}
+        ref={el => { if (el) chipEls.current.set(branch.name, el); else chipEls.current.delete(branch.name); }}
+        className={`zone-chip${on ? ' sel' : ''}${highlightedRefName === branch.name ? ' hl' : ''}${dragName === branch.name ? ' dragging' : ''}`}
+        draggable
+        role="checkbox"
+        aria-checked={on}
+        title={`${branch.name} · ${t('chipHint')}`}
+        onClick={() => applyZoneToggle([branch.name], !on)}
+        onContextMenu={e => {
+          e.preventDefault();
+          copyName(branch.name);
+        }}
+        onDragStart={e => {
+          e.dataTransfer.setData('text/plain', branch.name);
+          e.dataTransfer.effectAllowed = 'move';
+          setDragName(branch.name);
+        }}
+        onDragEnd={() => {
+          setDragName(null);
+          setHoverZone(null);
+        }}
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <line x1="12" x2="12" y1="17" y2="22" />
-          <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        className="branch-row-solo"
-        title={t('onlyThis')}
-        onClick={() => handleFilterChange([branch.name])}
-      >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-          <circle cx="8" cy="8" r="5" />
-          <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        className="branch-row-copy"
-        title={t('copyName')}
-        onClick={() => copyName(branch.name)}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="9" y="9" width="12" height="12" rx="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </svg>
-      </button>
-    </label>
-  );
+        <span className="zone-chip-dot" style={{ background: branch.color }} />
+        {pinned && (
+          <svg className="zone-chip-pin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" x2="12" y1="17" y2="22" />
+            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+          </svg>
+        )}
+        {branch.is_tag && (
+          <svg className="branch-row-tag-ico" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
+            <circle cx="5.3" cy="5.3" r="0.8" fill="currentColor" stroke="none" />
+          </svg>
+        )}
+        <span className="zone-chip-name">{truncateMiddle(branch.name)}</span>
+        <span className="zone-chip-actions">
+          <button
+            type="button"
+            className="zone-chip-act"
+            draggable={false}
+            title={pinned ? t('unpin') : t('pin')}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); togglePin(branch.name); }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" x2="12" y1="17" y2="22" />
+              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="zone-chip-act"
+            draggable={false}
+            title={t('onlyThis')}
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); handleFilterChange([branch.name]); }}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <circle cx="8" cy="8" r="5" />
+              <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+        </span>
+      </div>
+    );
+  };
 
   // Dead-lane row: an EYE, not a checkbox — clicking changes VISIBILITY
   // only (the lane stays selected on the backend side), a different verb
@@ -1457,9 +1531,10 @@ export default function RepoView({
   };
 
   // Combobox keys, handled in the field (focus never leaves it while
-  // navigating): ↑/↓ walk the listed rows in visual order (branches then
-  // tags), Enter toggles the highlighted row -- Space stays a space,
-  // queries can contain one -- and Esc exits in layers: clear the query
+  // navigating): ↑/↓ walk the chips in visual order (candidates zone
+  // then selected zone), Enter moves the highlighted chip across the
+  // divider -- the highlight then jumps WITH the chip, so a second
+  // Enter moves it back -- and Esc exits in layers: clear the query
   // first, close the panel second.
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
@@ -1472,7 +1547,7 @@ export default function RepoView({
       }
       return;
     }
-    const rows = [...panelBranches, ...panelTags];
+    const rows = [...zoneCandidates, ...zoneSelected];
     if (rows.length === 0) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -1481,7 +1556,15 @@ export default function RepoView({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const row = rows[Math.min(rowHighlight, rows.length - 1)];
-      if (row) toggleBranchFilter(row.name);
+      if (!row) return;
+      const willSelect = !selectedBranches.includes(row.name);
+      applyZoneToggle([row.name], willSelect);
+      // The chip just changed zones: recompute the walk order the memos
+      // will hold after the toggle and pin the index to the SAME chip.
+      const sel = new Set(selectedBranches);
+      if (willSelect) sel.add(row.name); else sel.delete(row.name);
+      const next = [...panelRows.filter(b => !sel.has(b.name)), ...panelRows.filter(b => sel.has(b.name))];
+      setRowHighlight(Math.max(next.findIndex(b => b.name === row.name), 0));
     }
   };
 
@@ -1665,7 +1748,7 @@ export default function RepoView({
             <input
               ref={filterInputRef}
               type="text"
-              className={`filter-field${searchQuery ? ' has-query' : ''}`}
+              className={`filter-field${showAllTags ? ' open' : ''}`}
               placeholder={hasMoreTags
                 ? t('moreInField', { n: activeBranches.length - inlineBranches.length })
                 : t('filterShort')}
@@ -1892,22 +1975,83 @@ export default function RepoView({
                 </button>
               </div>
               <div className="branch-panel-list">
-                {panelBranches.length > 0 && (
-                  <div className="branch-panel-group">
-                    {groupBulkTitle(panelBranches, t('branchesSection', { n: panelBranches.length }))}
-                    <div className="branch-panel-rows">
-                      {panelBranches.map(renderBranchRow)}
+                {/* The two zones: candidates left, selection right (the
+                    transfer convention -- moving right joins). Each zone
+                    header carries ONE quiet bulk verb acting on what the
+                    query currently lists there; the empty-zone hints keep
+                    the drop target alive so a drag still lands. */}
+                <div className="lane-zones">
+                  <div
+                    className={`lane-zone${hoverZone === 'cand' ? ' over' : ''}`}
+                    onDragOver={e => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      setHoverZone('cand');
+                    }}
+                    onDragLeave={e => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverZone(z => (z === 'cand' ? null : z));
+                    }}
+                    onDrop={dropOnZone('cand')}
+                  >
+                    <div className="lane-zone-head">
+                      <span className="lane-zone-title">{t('zoneCandidates', { n: zoneCandidates.length })}</span>
+                      {zoneCandidates.length > 0 && (
+                        <button
+                          type="button"
+                          className="lane-zone-bulk"
+                          title={t('zoneSelectAll')}
+                          onClick={() => applyZoneToggle(zoneCandidates.map(b => b.name), true)}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M18 6 7 17l-5-5" />
+                            <path d="m22 10-7.5 7.5L13 16" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    <div className="lane-zone-body">
+                      {zoneCandidates.map(renderLaneChip)}
+                      {zoneCandidates.length === 0 && (
+                        <span className="lane-zone-empty">{t('zoneAllSelected')}</span>
+                      )}
                     </div>
                   </div>
-                )}
-                {panelTags.length > 0 && (
-                  <div className="branch-panel-group">
-                    {groupBulkTitle(panelTags, t('tagsSection', { n: panelTags.length }))}
-                    <div className="branch-panel-rows">
-                      {panelTags.map(renderBranchRow)}
+                  <div
+                    className={`lane-zone selz${hoverZone === 'sel' ? ' over' : ''}`}
+                    onDragOver={e => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      setHoverZone('sel');
+                    }}
+                    onDragLeave={e => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverZone(z => (z === 'sel' ? null : z));
+                    }}
+                    onDrop={dropOnZone('sel')}
+                  >
+                    <div className="lane-zone-head">
+                      <span className="lane-zone-title">{t('zoneSelected', { n: zoneSelected.length })}</span>
+                      {zoneSelected.length > 0 && (
+                        <button
+                          type="button"
+                          className="lane-zone-bulk"
+                          title={t('zoneClearAll')}
+                          onClick={() => applyZoneToggle(zoneSelected.map(b => b.name), false)}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M18 6 6 18" />
+                            <path d="m6 6 12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    <div className="lane-zone-body">
+                      {zoneSelected.map(renderLaneChip)}
+                      {zoneSelected.length === 0 && (
+                        <span className="lane-zone-empty">{t('zoneNoneSelected')}</span>
+                      )}
                     </div>
                   </div>
-                )}
+                </div>
                 {panelArchived.length > 0 && (
                   <div className="branch-panel-group">
                     <div className="branch-panel-group-title">
@@ -1934,7 +2078,7 @@ export default function RepoView({
                     </div>
                   </div>
                 )}
-                {panelBranches.length === 0 && panelTags.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
+                {zoneCandidates.length === 0 && zoneSelected.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
                   <div className="branch-panel-empty">{t('noRefsMatch')}</div>
                 )}
               </div>

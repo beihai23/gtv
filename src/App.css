@@ -1089,10 +1089,11 @@
 }
 
 /* Filter combobox at the end of the chip row: collapsed it is a quiet
-   affordance (ghost pill, same height/radius as the chips); focus
-   expands it and fills it, and typing opens the panel under the
-   toolbar. margin-left:auto pins it to the row's end -- the empty flex
-   space is spent before any chip ever shifts. */
+   affordance (ghost pill, same height/radius as the chips); the open
+   PANEL expands it and fills it (not focus -- see .filter-field.open),
+   and typing opens the panel under the toolbar. margin-left:auto pins
+   it to the row's end -- the empty flex space is spent before any chip
+   ever shifts. */
 .filter-field {
   margin-left: auto;
   flex-shrink: 1;
@@ -1114,25 +1115,23 @@
   text-overflow: ellipsis;
 }
 
-.filter-field:focus {
-  outline: none;
-  /* width alone is only a PREFERENCE to a shrinkable flex item -- the
-     tight chip row crushed the 230px right back to ~110px and the
-     expansion animation never showed. While typing the width is a hard
-     constraint: the chip row yields instead (clips chips, a temporary
-     state restored on blur). Capped by container width for narrow
-     windows; 60cqw of a ~400px row still gives a comfortable 240px. */
+/* Expanded state follows the PANEL's lifecycle, not DOM focus: clicking
+   a chip inside the panel moves focus away, and the field must not
+   collapse then -- the user would come back and lose the input they were
+   typing into. The panel opens on focus and closes via its own paths
+   (close button, backdrop, Esc), so .open is exactly "panel is up".
+   Width is a HARD constraint while open -- width alone is only a
+   preference to a shrinkable flex item and the chip row would crush it
+   right back. Capped by container width for narrow windows. */
+.filter-field.open {
   width: min(240px, 60cqw);
   flex-shrink: 0;
   background: var(--bg-input);
-  border-color: var(--accent);
 }
 
-/* A query sitting in the field while focus is elsewhere (a row click
-   moved focus) still reads as "filtered": fill it, just without the
-   accent border focus adds. */
-.filter-field.has-query {
-  background: var(--bg-input);
+.filter-field:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .tooltip {
@@ -1371,8 +1370,11 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   top: 100%;
   right: 12px;
   margin-top: 6px;
-  width: min(600px, 90vw);
-  max-height: 55vh;
+  /* Wider since the picker went two-zone: candidates | selection. The
+     inline-size container lets the zones stack on narrow windows. */
+  width: min(880px, 92vw);
+  max-height: 65vh;
+  container-type: inline-size;
   /* Sibling of (not child in) the backdrop: must stack above it or every
      click would hit the click-catcher. */
   z-index: 61;
@@ -1383,9 +1385,6 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   display: flex;
   flex-direction: column;
 }
-/* Head = dismiss only (the query input is the toolbar combobox); keep
-   the strip so the panel's visual rhythm (head/toolbar/list/footer)
-   survives. */
 /* Head = class chip (left) + dismiss (right). */
 .branch-panel-head {
   display: flex;
@@ -1459,22 +1458,163 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   margin-bottom: 6px;
 }
 
-/* Bulk groups (Branches / Tags) front a tri-state checkbox -- the
-   select-all idiom, scoped to the rows the group currently lists. The
-   label wraps text + checkbox, so either is clickable. */
-.branch-panel-group-title.has-bulk {
+/* Two-zone picker: unselected candidates LEFT, curated selection RIGHT
+   (the transfer convention -- moving right joins the selection).
+   Position carries the state, so no per-chip checkbox exists; toggling
+   animates the chip across the divider (JS FLIP, see withFlip in
+   RepoView). Zones stack vertically when the panel gets narrow. */
+.lane-zones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 96px;
+}
+.lane-zone {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px;
+}
+.lane-zone + .lane-zone {
+  border-left: 1px solid var(--border);
+}
+@container (max-width: 680px) {
+  .lane-zones {
+    grid-template-columns: 1fr;
+  }
+  .lane-zone + .lane-zone {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+}
+.lane-zone-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-bottom: 6px;
+  min-height: 20px;
+}
+.lane-zone-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.lane-zone-bulk {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
   cursor: pointer;
 }
-.branch-panel-group-title.has-bulk:hover {
+.lane-zone-bulk:hover {
   color: var(--text);
+  background: var(--bg-input);
 }
-.branch-panel-group-title.has-bulk input[type='checkbox'] {
+.lane-zone-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+  /* Keeps the drop target (and the empty hint inside it) reachable even
+     when the zone holds nothing. */
+  min-height: 52px;
+}
+.lane-zone-empty {
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+/* Drop feedback: the zone a crossing drag would land in tints. */
+.lane-zone.over {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-radius: 8px;
+}
+
+/* A chip IS the toggle: click or drag moves it between zones. Hover
+   actions (pin, only-this) live in a reserved trailing slot whose width
+   never changes -- opacity swap only, so neighbors never jitter. */
+.zone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+.zone-chip:hover {
+  border-color: var(--text-faint);
+  background: var(--bg-input);
+}
+/* Chips in the right zone sit filled: a glance answers "what's on the
+   canvas" without reading position. */
+.zone-chip.sel {
+  background: var(--bg-input);
+  border-color: var(--text-faint);
+}
+.zone-chip.hl {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.zone-chip.dragging {
+  opacity: 0.4;
+}
+.zone-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   flex-shrink: 0;
-  margin: 0;
-  accent-color: var(--accent);
+}
+.zone-chip-pin {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.zone-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zone-chip-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.zone-chip-act {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.zone-chip:hover .zone-chip-act,
+.zone-chip-act:focus-visible {
+  opacity: 1;
+}
+.zone-chip-act:hover {
+  color: var(--text);
+  background: var(--border);
 }
 
 .branch-panel-rows {
@@ -1483,10 +1623,9 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   gap: 2px;
 }
 
-/* Stable checklist row: checkbox = selection, dot = lane identity,
-   name truncates, and the "only this" button appears on hover (kept
-   out of the resting row so scan lines stay clean). Dead rows swap the
-   checkbox for an eye -- visibility, a different verb than selection. */
+/* Dead-row list (Archived/Dormant sections): an eye, not a checkbox --
+   clicking changes VISIBILITY only, a different verb than the zone
+   picker's chips, so it keeps the row idiom. */
 .branch-row {
   display: flex;
   align-items: center;
@@ -1499,12 +1638,6 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 
 .branch-row:hover {
   background: var(--bg-input);
-}
-
-.branch-row input[type='checkbox'] {
-  flex-shrink: 0;
-  margin: 0;
-  accent-color: var(--accent);
 }
 
 .branch-row-dot {
@@ -1527,79 +1660,6 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 .branch-row-tag-ico {
   flex-shrink: 0;
   color: var(--text-dim);
-}
-
-.branch-row-solo {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 2px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-}
-
-.branch-row:hover .branch-row-solo,
-.branch-row:hover .branch-row-copy,
-.branch-row-solo:focus-visible,
-.branch-row-copy:focus-visible {
-  opacity: 1;
-}
-
-.branch-row-solo:hover,
-.branch-row-copy:hover {
-  color: var(--text);
-}
-
-/* Keyboard highlight (↑/↓ in the toolbar field) rides the same surface
-   as hover so the two never fight. Only alive rows highlight; dead rows
-   are a visibility policy reached by mouse. */
-.branch-row.hl {
-  background: var(--bg-input);
-}
-
-/* Copy button: same hover-only action idiom as solo. */
-.branch-row-copy {
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 2px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-}
-
-/* Pin button: hidden until hovered WHEN OFF, but pinned state is real
-   and visible at rest -- a pin you cannot see is not "at hand". */
-.branch-row-pin {
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 2px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-}
-
-.branch-row:hover .branch-row-pin,
-.branch-row-pin:focus-visible,
-.branch-row-pin.on {
-  opacity: 1;
-}
-
-.branch-row-pin.on {
-  color: var(--text);
-}
-
-.branch-row-pin:hover {
-  color: var(--text);
 }
 
 /* Dead row: visible lanes stay faintly marked so the section's state
