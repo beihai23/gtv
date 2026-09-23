@@ -973,13 +973,14 @@ export default function RepoView({
     () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
     [filteredBranches, allDeadNames]
   );
-  // Panel count describes the LISTED set ("of the n rows shown, m are
-  // selected"), so it must shrink with the search box — a global selected
-  // count next to a filtered list reads as "5 of 3 selected".
-  const shownSelectedCount = useMemo(
-    () => panelRows.filter(b => selectedBranches.includes(b.name)).length,
-    [panelRows, selectedBranches]
-  );
+  // Footer count = the GLOBAL answer ("how many lanes is the canvas
+  // drawing"), so it deliberately ignores the panel query. Dead lanes
+  // never render as lanes (they live in their own groups and only
+  // surface through trace expansion), so they are excluded here.
+  const selectedActiveCount = useMemo(() => {
+    const selected = new Set(selectedBranches);
+    return activeBranches.filter(b => selected.has(b.name)).length;
+  }, [activeBranches, selectedBranches]);
 
   // Panel sections: the list is STABLE — a row's position depends only on
   // ref class and activity order, never on selection. The old
@@ -997,23 +998,43 @@ export default function RepoView({
     [panelRows]
   );
 
-  // Toolbar bulk actions operate on the rows CURRENTLY LISTED (search +
-  // tag-class filter applied) — the select-all-shown idiom, so "select
-  // everything matching release/*" composes from the search box. Select
-  // ADDS to the curated set (a filter that happens to hide a lane must
-  // never surprise-drop it); clear removes exactly the listed ones, and
-  // with an empty filter that is the old global "None". Declared after
-  // panelRows: a useCallback dep array is read during render, and an
-  // earlier declaration would be a TDZ error (the M1.3 landmine).
-  const selectShown = useCallback(() => {
-    const shown = panelRows.map(b => b.name);
-    const next = [...new Set([...selectedBranches, ...shown])];
+  // Group-header bulk checkbox (the Gmail / file-manager select-all
+  // idiom): acts on the rows that group CURRENTLY lists (search + class
+  // filter applied), so "select everything matching release/*" composes
+  // from the toolbar query. Check ADDS to the curated set (a filter that
+  // happens to hide a lane must never surprise-drop it); uncheck removes
+  // exactly the listed ones. Declared after panelRows: a useCallback dep
+  // array is read during render, and an earlier declaration would be a
+  // TDZ error (the M1.3 landmine).
+  const toggleGroupListed = useCallback((rows: BranchLane[]) => {
+    const listed = new Set(rows.map(b => b.name));
+    const allSelected = rows.length > 0
+      && rows.every(b => selectedBranches.includes(b.name));
+    const next = allSelected
+      ? selectedBranches.filter(n => !listed.has(n))
+      : [...new Set([...selectedBranches, ...listed])];
     handleFilterChange(next);
-  }, [panelRows, selectedBranches, handleFilterChange]);
-  const clearShown = useCallback(() => {
-    const shown = new Set(panelRows.map(b => b.name));
-    handleFilterChange(selectedBranches.filter(n => !shown.has(n)));
-  }, [panelRows, selectedBranches, handleFilterChange]);
+  }, [selectedBranches, handleFilterChange]);
+
+  // Selectable groups (Branches / Tags) front a tri-state checkbox: all
+  // checked, none checked, or indeterminate while the group is mixed.
+  // Dead groups keep their expand button instead — visibility is a
+  // different verb than selection.
+  const groupBulkTitle = (rows: BranchLane[], label: string) => {
+    const selectedCount = rows.filter(b => selectedBranches.includes(b.name)).length;
+    const all = rows.length > 0 && selectedCount === rows.length;
+    return (
+      <label className="branch-panel-group-title has-bulk" title={t('groupBulkTip')}>
+        <input
+          type="checkbox"
+          checked={all}
+          ref={el => { if (el) el.indeterminate = selectedCount > 0 && !all; }}
+          onChange={() => toggleGroupListed(rows)}
+        />
+        <span>{label}</span>
+      </label>
+    );
+  };
 
   // Dead-lane panel groups (newest activity first, matching the rows
   // above). The search box filters them too: a lane collapsed into the
@@ -1846,11 +1867,21 @@ export default function RepoView({
                 height varies with the identity card. */}
             <div className="branch-panel-backdrop" onClick={closePanel} />
             <div className="branch-panel">
-              {/* Head = dismiss only. The query input lives in the toolbar
-                  (the combobox field) -- one input, one results surface --
-                  and every mutating control lives in the toolbar row below,
-                  so no two rows compete for attention. */}
+              {/* Head = class scope + dismiss. The Tags chip (pressed = tag
+                  rows listed) is the one scope control the panel needs --
+                  version tags can flood the list, branches cannot, so the
+                  class toggle is one-directional by design. It moved up
+                  from the old toolbar row, which shrank the panel by a row
+                  and left bulk verbs on the group headers where they act. */}
               <div className="branch-panel-head">
+                <button
+                  className={`panel-pill${showTags ? ' on' : ''}`}
+                  onClick={toggleShowTags}
+                  title={t('tagsTip')}
+                  aria-pressed={showTags}
+                >
+                  {t('tags')}
+                </button>
                 <button
                   className="branch-panel-close"
                   onClick={closePanel}
@@ -1860,27 +1891,10 @@ export default function RepoView({
                   ×
                 </button>
               </div>
-              {/* Toolbar = the three bulk verbs, each scoped honestly:
-                  the Tags pill gates which ref CLASS is listed; select/clear
-                  act on the rows the search + class filter currently show. */}
-              <div className="branch-panel-toolbar">
-                <button
-                  className={`panel-pill${showTags ? ' on' : ''}`}
-                  onClick={toggleShowTags}
-                  title={t('tagsTip')}
-                  aria-pressed={showTags}
-                >
-                  {t('tags')}
-                </button>
-                <span className="toolbar-spacer" />
-                <button className="panel-link" onClick={selectShown}>{t('selectShown')}</button>
-                <button className="panel-link" onClick={clearShown}>{t('clearShown')}</button>
-                <span className="branch-panel-count">{t('refsSelected', { n: panelRows.length, m: shownSelectedCount })}</span>
-              </div>
               <div className="branch-panel-list">
                 {panelBranches.length > 0 && (
                   <div className="branch-panel-group">
-                    <div className="branch-panel-group-title">{t('branchesSection', { n: panelBranches.length })}</div>
+                    {groupBulkTitle(panelBranches, t('branchesSection', { n: panelBranches.length }))}
                     <div className="branch-panel-rows">
                       {panelBranches.map(renderBranchRow)}
                     </div>
@@ -1888,7 +1902,7 @@ export default function RepoView({
                 )}
                 {panelTags.length > 0 && (
                   <div className="branch-panel-group">
-                    <div className="branch-panel-group-title">{t('tagsSection', { n: panelTags.length })}</div>
+                    {groupBulkTitle(panelTags, t('tagsSection', { n: panelTags.length }))}
                     <div className="branch-panel-rows">
                       {panelTags.map(renderBranchRow)}
                     </div>
@@ -1925,7 +1939,7 @@ export default function RepoView({
                 )}
               </div>
               <div className="branch-panel-footer">
-                {t('panelFooter')}
+                {t('lanesOnCanvas', { n: selectedActiveCount })} · {t('panelFooter')}
               </div>
             </div>
           </>

@@ -1386,16 +1386,18 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 /* Head = dismiss only (the query input is the toolbar combobox); keep
    the strip so the panel's visual rhythm (head/toolbar/list/footer)
    survives. */
+/* Head = class chip (left) + dismiss (right). */
 .branch-panel-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
 }
 .branch-panel-close {
   flex-shrink: 0;
+  margin-left: auto;
   width: 26px;
   height: 26px;
   display: inline-flex;
@@ -1413,19 +1415,8 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   color: var(--text);
   background: var(--bg-input);
 }
-/* Toolbar = the three bulk verbs. The Tags pill is a pressed-state
-   toggle (aria-pressed), links are quiet text actions. */
-.branch-panel-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-dim);
-}
-.toolbar-spacer {
-  flex: 1;
-}
+/* Pressed-state toggle pill (aria-pressed) -- the header lens pills and
+   the panel head's Tags chip. */
 .panel-pill {
   height: 22px;
   padding: 0 10px;
@@ -1445,21 +1436,6 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 .panel-pill:hover {
   color: var(--text);
   border-color: var(--text-faint);
-}
-.panel-link {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--link);
-  font-size: 11px;
-  cursor: pointer;
-}
-.panel-link:hover {
-  text-decoration: underline;
-}
-.branch-panel-count {
-  white-space: nowrap;
-  font-size: 11px;
 }
 .branch-panel-footer {
   padding: 8px 14px;
@@ -1481,6 +1457,24 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 6px;
+}
+
+/* Bulk groups (Branches / Tags) front a tri-state checkbox -- the
+   select-all idiom, scoped to the rows the group currently lists. The
+   label wraps text + checkbox, so either is clickable. */
+.branch-panel-group-title.has-bulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.branch-panel-group-title.has-bulk:hover {
+  color: var(--text);
+}
+.branch-panel-group-title.has-bulk input[type='checkbox'] {
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .branch-panel-rows {
