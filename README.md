@@ -10,14 +10,9 @@ life left-to-right, and folds back into its parent at a merge. One glance tells 
 which lines are alive, where they came from, and where they landed.
 
 <p align="center">
-  <img src="docs/assets/screenshot-timeline.png" alt="gtv timeline view (Midnight theme)"/>
-</p>
-<p align="center">
-  <img src="docs/assets/screenshot-light.png" width="49%" alt="gtv timeline (GitHub Light theme)"/>
-  <img src="docs/assets/screenshot-branches.png" width="49%" alt="ref panel: two-zone chip picker with Archived/Dormant groups"/>
-</p>
-<p align="center">
-  <img src="docs/assets/screenshot-settings.png" width="60%" alt="settings (⌘,): Chinese/English, preset themes, About"/>
+  <img src="docs/assets/screenshot-hero.png" alt="gtv timeline: 21 branch lanes over six months — forks, merges, tags, hotfixes and releases at a glance"/>
+  <br/>
+  <sub>Six months of a busy repository on one screen. Click to zoom — the image is 2× retina.</sub>
 </p>
 
 ## Why gtv
@@ -53,12 +48,14 @@ from the commit graph itself.
 - Lane names pinned to the left edge as constant-size chips; click to focus a lane
   (dims everything else), right-click for lane actions ("related branches only",
   switch branch, compare with HEAD, …)
+- Merged and long-quiet lanes collapse into Archived / Dormant groups instead of
+  cluttering the canvas; one click on a group row expands them back
+
+**Slicing the data**
 - Ref panel (`/`): a two-zone chip picker — position carries the state, selected
   lanes on the right, dragging a chip across the divider toggles it; hover for
   pin / "only this", right-click copies the name; a Tags tab plus Archived /
   Dormant groups whose eye-rows toggle a lane's visibility
-
-**Slicing the data**
 - Header scope cluster: a date scope (week / month / quarter / year / custom —
   lanes that empty out sink into the trace rows) ahead of the lane presets
   (Recent / Pinned / All)
@@ -67,7 +64,7 @@ from the commit graph itself.
 - Full-history commit search (`Cmd/Ctrl+F`) over message / author / hash, with
   ancestry jump-to for hits outside the loaded range
 - `Ctrl/Cmd+click` two commits (or a lane menu entry) to compare them: per-file
-  `+/-` counts and line-level diffs in a side-by-side detail view
+  `+/-` counts and line-level diffs in a side panel
 
 **Interaction**
 - Trackpad-native: two-finger scroll pans, pinch zooms around the cursor
@@ -75,29 +72,55 @@ from the commit graph itself.
   parent, `Shift+click` jumps to the child
 - Minimap with live viewport rectangle and click-to-jump
 - Commit detail panel: author, full message, refs, changed files with `+/-` stats
-  and per-file diffs
+  and per-file line diffs
 - Settings (`⌘,`): Chinese/English UI, five preset themes (Midnight, Nord,
   Dracula, Solarized Dark, GitHub Light)
 - Multi-repo tabs: several repositories side by side in one window — the
-  tab set and the active tab are restored on the next launch (in-tab view
-  state and the terminal panel are deliberately not auto-restored),
-  worktree families group into second-level tabs, and dropping a repository
-  folder anywhere on the window opens it
+  tab set and the active tab are restored on the next launch, worktree families
+  group into second-level tabs, and dropping a repository folder anywhere on the
+  window opens it
+- Integrated terminal docked at the bottom: a real login shell in a PTY that
+  stays alive while hidden, so you can run git commands without leaving the
+  timeline
 
-**Read-only, two deliberate exceptions.** gtv does not modify your
-repository — the only writes it ever performs are a branch switch you
-explicitly confirm (compatible uncommitted changes are carried over safely,
-and if they conflict with the target branch the switch fails cleanly,
-before writing anything; a branch already checked out by another worktree
-of the same family is refused up front) and a background auto-fetch of the
-active tab's remotes every 60 s, which updates tracking refs
-(+auto-followed tags) & objects & FETCH_HEAD only — never your worktree,
-local branches, HEAD, or stash. Nothing is discarded or force-overwritten.
-The fetch shells out to your system `git`, so your credential helpers,
-ssh-agent, and proxy settings apply as-is; when it fails (offline, private
-HTTPS without credentials) it stays silent and tries again on the next
-tick. The integrated terminal is a plain shell where you type your own
-commands; that is you working, not gtv writing.
+## More views
+
+<p align="center">
+  <img src="docs/assets/screenshot-detail.png" width="49%" alt="commit detail panel: author, message, changed files with +/− and an expanded line diff"/>
+  <img src="docs/assets/screenshot-compare.png" width="49%" alt="two-commit compare panel: base → target summaries, per-file +/−, line diffs"/>
+</p>
+<p align="center">
+  <sub>Click any commit for its full story (left). <code>Ctrl/Cmd+click</code> two commits to diff them (right).</sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshot-refs.png" width="49%" alt="ref panel: two-zone chip picker with Archived/Dormant groups"/>
+  <img src="docs/assets/screenshot-settings.png" width="49%" alt="settings (⌘,): Chinese/English, five preset themes, About"/>
+</p>
+<p align="center">
+  <sub>The ref panel (<code>/</code>) keeps 20+ lanes manageable (left). Five themes, two languages (right).</sub>
+</p>
+
+All screenshots above use the built-in GitHub Light theme.
+
+## Read-only by design
+
+gtv does not modify your repository — with exactly two deliberate exceptions:
+
+- **Branch switch you explicitly confirm.** Compatible uncommitted changes are
+  carried over safely; if they conflict with the target branch the switch fails
+  cleanly before writing anything; a branch already checked out by another
+  worktree of the same family is refused up front.
+- **Background auto-fetch of the active tab's remotes** (every 60 s), which
+  updates tracking refs (+auto-followed tags) & objects & FETCH_HEAD only —
+  never your worktree, local branches, HEAD, or stash. It shells out to your
+  system `git`, so your credential helpers, ssh-agent, and proxy settings apply
+  as-is; failures (offline, missing credentials) stay silent and retry on the
+  next tick.
+
+Nothing is ever discarded or force-overwritten. The integrated terminal is a
+plain shell where you type your own commands — that is you working, not gtv
+writing.
 
 ## Download
 
@@ -119,22 +142,28 @@ xattr -d com.apple.quarantine /Applications/Git\ Timeline\ Viewer.app/
 ```bash
 npm install
 npm run tauri dev            # run the app
+npm test                     # frontend pure-function tests (vitest)
 cd src-tauri && cargo test   # lane engine tests + real-repo benchmark
 ```
 
 ## Architecture
 
-Tauri 2 + React 19 + D3. The backend reads the repo with git2; the lane engine is
-a pure, unit-tested module with no git dependencies.
+Tauri 2 + React 19 + D3. The Rust backend reads the repo with git2; the lane
+engine is a pure, unit-tested module with no git dependencies.
 
 ```
 src-tauri/src/
   layout.rs       lane-propagation engine (pure functions, hand-built graph tests)
-  git_reader.rs   git2 access: refs, revwalk from all branch tips, diff stats
-  commands.rs     Tauri commands
+  git_reader.rs   git2 access: refs, chunked revwalk from branch tips, diff stats,
+                  SAFE branch checkout, two-commit compare
+  commands.rs     Tauri commands + multi-repo registry
+  terminal.rs     integrated-terminal engine (portable-pty)
+  watcher.rs      repo-change poller, emits "repo-changed"
+  fetcher.rs      60 s auto-fetch of the active tab's remotes
 src/
   components/Timeline.tsx      D3 timeline: lanes, edges, badges, minimap, ruler
   components/CommitDetails.tsx commit detail panel
+  components/CompareDetails.tsx two-commit compare panel
   components/DiffView.tsx      line-level diffs, shared by detail & compare views
 docs/
   roadmap.md          where gtv goes next
