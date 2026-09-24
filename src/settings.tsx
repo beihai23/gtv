@@ -183,6 +183,9 @@ const en: Record<string, string> = {
   fileModeToggle: 'File list layout',
   fileModeFlat: 'Flat list',
   fileModeTree: 'Tree view',
+  diffNumsTip: 'Toggle line numbers',
+  diffUnifiedTip: 'Unified view (single column)',
+  diffSplitTip: 'Side-by-side view',
 };
 
 const zh: Record<string, string> = {
@@ -348,6 +351,9 @@ const zh: Record<string, string> = {
   fileModeToggle: '文件列表排布方式',
   fileModeFlat: '平铺列表',
   fileModeTree: '树状展开',
+  diffNumsTip: '显示/隐藏行号',
+  diffUnifiedTip: '单栏显示',
+  diffSplitTip: '左右对比显示',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

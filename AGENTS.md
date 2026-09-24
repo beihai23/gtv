@@ -145,15 +145,18 @@ src/
   components/DiffSplitView.tsx  full-width left/right split view for reading
                                 file changes (both panels' wide mode): summary
                                 + file list on the left, the selected file's
-                                patch on the right; the timeline hides but
-                                stays mounted, Esc collapses
+                                patch on the right with a toolbar (line-number
+                                toggle gtv_diff_nums, unified/side-by-side
+                                gtv_diff_mode); the timeline hides but stays
+                                mounted, Esc collapses
   components/FileChangeList.tsx changed-files list with flat/tree layout
                                 toggle (gtv_file_mode), shared by DiffSplitView
                                 and both narrow panels; tree built by
                                 filetree.ts (single-child dir chains compress)
   components/CheckoutDialog.tsx dirty-worktree confirm dialog for the branch
                                 switch (three-state copy by status counts)
-  components/DiffView.tsx       line-diff renderer, used by DiffSplitView
+  components/DiffView.tsx       line-diff renderer (unified or side-by-side,
+                                optional line numbers) over diffparse.ts
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
@@ -190,10 +193,11 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 121 cases across 11 files: `src/inactive.test.ts`,
+(`npm test`, 132 cases across 12 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
 `src/compare.test.ts`, `src/tabs.test.ts`, `src/filetree.test.ts`,
+`src/diffparse.test.ts`,
 `src/components/minimap.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy

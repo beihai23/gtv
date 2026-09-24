@@ -499,13 +499,98 @@
 }
 .diff-split-right {
   flex: 1;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-canvas);
 }
-.diff-split-right .file-diff {
+/* Toolbar: file path on the left, line-number + unified/split toggles on
+   the right. Fixed height; the scroll area below owns the rest. */
+.diff-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.diff-filepath {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-toolbar-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.diff-toolbar-actions button {
+  width: 24px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+}
+.diff-toolbar-actions button:first-child { border-radius: 4px 0 0 4px; }
+.diff-toolbar-actions button:last-child { border-radius: 0 4px 4px 0; }
+.diff-toolbar-actions button:not(:first-child) { margin-left: -1px; }
+.diff-toolbar-actions button.active {
+  color: var(--text);
+  background: rgba(var(--link-rgb), 0.15);
+  border-color: var(--link);
+  z-index: 1;
+}
+/* The scroll area fills everything under the toolbar, and the diff box
+   itself stretches to at least the full visible height -- a short patch
+   no longer leaves a boxed island floating on empty canvas. */
+.diff-scroll {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.diff-scroll .file-diff {
   margin: 16px;
+  flex: 1 0 auto;
+  max-height: none;
   overflow-x: auto;
 }
+/* Numbered diff rows: fixed-width right-aligned number cells, a sign
+   column, then the code. Numbers are non-selectable chrome. */
+.file-diff .diff-line { display: flex; }
+.diff-num {
+  width: 44px;
+  flex-shrink: 0;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--text-faint);
+  user-select: none;
+}
+.diff-sign {
+  width: 14px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.diff-code { flex: 1; white-space: pre; }
+.diff-line-meta .diff-code { color: var(--text-faint); }
+/* Side-by-side mode: two half-width panes; hunk/meta rows span both. */
+.split-row { display: flex; }
+.split-cell {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+.split-cell + .split-cell { border-left: 1px solid var(--border); }
+.split-cell .diff-code { padding: 0 4px; }
 .diff-split-right .file-diff-loading,
 .diff-split-right .file-diff-error {
   display: inline-block;
