@@ -135,6 +135,7 @@ pub fn run() {
             commands::set_auto_fetch,
             commands::set_include_stale,
             commands::refresh_repository,
+            commands::fetch_repository,
             commands::get_commit_detail,
             commands::get_file_diff,
             commands::get_compare_detail,

@@ -6,8 +6,8 @@
 //! exactly the moved repos.
 
 use gtv_lib::commands::{
-    close_repository_impl, filter_by_branches_impl, get_branch_list_impl, get_commit_detail_impl,
-    jump_to_commit_impl, load_older_commits_impl, open_repository_impl,
+    close_repository_impl, fetch_repository_impl, filter_by_branches_impl, get_branch_list_impl,
+    get_commit_detail_impl, jump_to_commit_impl, load_older_commits_impl, open_repository_impl,
     refresh_repository_impl, set_active_repository_impl, set_auto_fetch_impl,
     set_include_stale_impl, spawn_terminal_in_repo, terminal_write_impl, AppState,
 };
@@ -709,6 +709,41 @@ fn only_the_active_repo_is_fetched() {
     // active tab (spec 4.3).
     assert_eq!(git_sha(&clone_a, "refs/remotes/origin/main"), tip_a);
     assert_ne!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
+
+    std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");
+    std::fs::remove_dir_all(seed_b.parent().unwrap()).expect("clean up temp dir b");
+}
+
+/// The Fetch button's command (fetch_repository): caller-targeted (NOT the
+/// active tab), and gated by neither the auto_fetch setting nor the
+/// fetcher's busy flag -- the user asked explicitly. Same write surface as
+/// the auto-fetch tick: tracking refs move, HEAD/local branch/worktree do
+/// not (covered by fetch_remotes_updates_tracking_refs_only above).
+#[test]
+fn fetch_button_fetches_the_callers_repo_ungated() {
+    let (seed_a, upstream_a, clone_a) = build_fetch_fixture("btn-a");
+    let (seed_b, upstream_b, clone_b) = build_fetch_fixture("btn-b");
+    let state = AppState::default();
+    let a = open(&state, &clone_a);
+    let b = open(&state, &clone_b); // opening makes B the active tab
+    // Neither gate applies to an explicit user click.
+    set_auto_fetch_impl(&state, false).expect("disable auto-fetch");
+    state.fetching.store(true, Ordering::SeqCst); // an auto-fetch "in flight"
+
+    let tip_a = advance_upstream(&seed_a, &upstream_a, "up-a", &day(7));
+    let tip_b = advance_upstream(&seed_b, &upstream_b, "up-b", &day(7));
+
+    // A's button fetches A even though B is active, auto_fetch is off, and
+    // the fetcher flag says busy.
+    let summary = run(fetch_repository_impl(&state, a.repo_id)).expect("fetch a");
+    assert!(summary.is_none(), "clean fetch reports no summary: {:?}", summary);
+    assert_eq!(git_sha(&clone_a, "refs/remotes/origin/main"), tip_a);
+    assert_ne!(git_sha(&clone_b, "refs/remotes/origin/main"), tip_b);
+    // The fetcher-owned busy flag is untouched by the manual path.
+    assert!(state.fetching.load(Ordering::SeqCst));
+
+    // Unknown repo ids get the registry's standard error, not a panic.
+    assert!(run(fetch_repository_impl(&state, b.repo_id + 1000)).is_err());
 
     std::fs::remove_dir_all(seed_a.parent().unwrap()).expect("clean up temp dir a");
     std::fs::remove_dir_all(seed_b.parent().unwrap()).expect("clean up temp dir b");

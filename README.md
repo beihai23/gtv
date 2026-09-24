@@ -33,7 +33,8 @@ from the commit graph itself.
 **The graph**
 - Branch lanes reconstructed from DAG structure (first-parent lane propagation,
   merged-branches-first priority, tip protection)
-- Fork points drawn as right-angle birth lines; merges as thin curves, both labeled
+- Fork points drawn as rounded elbow curves dropping out of the birth commit;
+  merges as mirrored curves gliding into the merge commit, both labeled
 - Tags and branch refs as stacked badges pinned to their commit — collision-resolved,
   never overlapping
 - Node size encodes change volume; HEAD is marked
@@ -65,6 +66,8 @@ from the commit graph itself.
   ancestry jump-to for hits outside the loaded range
 - `Ctrl/Cmd+click` two commits (or a lane menu entry) to compare them: per-file
   `+/-` counts and line-level diffs in a side panel
+- A **Fetch** button in the header pulls the current tab's remotes on demand
+  and refreshes the view (plus a silent 60 s auto-fetch in the background)
 
 **Interaction**
 - Trackpad-native: two-finger scroll pans, pinch zooms around the cursor
@@ -111,12 +114,14 @@ gtv does not modify your repository — with exactly two deliberate exceptions:
   carried over safely; if they conflict with the target branch the switch fails
   cleanly before writing anything; a branch already checked out by another
   worktree of the same family is refused up front.
-- **Background auto-fetch of the active tab's remotes** (every 60 s), which
-  updates tracking refs (+auto-followed tags) & objects & FETCH_HEAD only —
-  never your worktree, local branches, HEAD, or stash. It shells out to your
-  system `git`, so your credential helpers, ssh-agent, and proxy settings apply
-  as-is; failures (offline, missing credentials) stay silent and retry on the
-  next tick.
+- **Fetching remotes.** A background auto-fetch of the active tab runs every
+  60 s, and the header's **Fetch** button does the same on demand for the tab
+  you're looking at and refreshes the view. Fetching updates tracking refs
+  (+auto-followed tags) & objects & FETCH_HEAD only — never your worktree,
+  local branches, HEAD, or stash. It shells out to your system `git`, so your
+  credential helpers, ssh-agent, and proxy settings apply as-is; background
+  failures (offline, missing credentials) stay silent and retry on the next
+  tick, and a failed manual fetch just shows its one-line reason in a toast.
 
 Nothing is ever discarded or force-overwritten. The integrated terminal is a
 plain shell where you type your own commands — that is you working, not gtv

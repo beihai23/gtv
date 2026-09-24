@@ -12,11 +12,13 @@ gtv is **read-only by design, with exactly two sanctioned writes**: a branch
 switch the user explicitly confirms (`checkout_branch` — SAFE mode: compatible
 uncommitted changes are carried over, never forced; a merge/cherry-pick/revert
 in progress is refused; a branch already checked out by a sibling worktree of
-the same family is refused up front) and a background auto-fetch of the active
-tab's remotes (`fetch_remotes` — updates tracking refs (+auto-followed tags)
-& objects & FETCH_HEAD only, never the worktree/local branches/HEAD/stash).
-Those two exceptions are the entire write surface. Do not add any other path
-that mutates the repository.
+the same family is refused up front) and fetching remotes (`fetch_remotes` —
+updates tracking refs (+auto-followed tags) & objects & FETCH_HEAD only,
+never the worktree/local branches/HEAD/stash), which runs in two user-visible
+forms: a background auto-fetch of the active tab every 60 s and the header's
+**Fetch** button (`fetch_repository` — same code path, caller-targeted,
+ungated by the auto_fetch setting). Those two exceptions are the entire write
+surface. Do not add any other path that mutates the repository.
 
 ## Tech stack
 
@@ -60,7 +62,9 @@ src-tauri/src/
                   repo_id -> RepoSession with view + pagination
                   ViewSession + terminal, plus active/auto_fetch);
                   rebuild_view is the shared refresh path and never writes
-                  include_stale
+                  include_stale; fetch_repository is the Fetch button's
+                  manual fetch (same fetch_remotes write surface as the
+                  auto-fetch tick, caller-targeted, ungated)
   terminal.rs     integrated-terminal engine: portable-pty spawn/write/resize,
                   reader + flusher threads (8ms output coalescing), login-shell
                   resolution; spawn_pty takes plain callbacks so tests run
@@ -81,7 +85,8 @@ src-tauri/tests/
   multi_repo.rs   the multi-repo registry: repo_id routing isolation,
                   canonical-path dedup (symlink, races), worktree families,
                   close/active semantics, auto-fetch ticks over file://
-                  remotes (write-surface whitelist acceptance), the
+                  remotes (write-surface whitelist acceptance), the Fetch
+                  button's manual fetch (caller-targeted, ungated), the
                   include_stale single-writer pin, and the watcher CAS race
   terminal_multi.rs  per-repo terminals: spawn routing/idempotency, output
                   isolation, close-linked kill, unknown ids
@@ -244,17 +249,21 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
   written; `force` appears nowhere in the codebase), it refuses while a
   merge/cherry-pick/revert is in progress, and it refuses a branch already
   checked out by a sibling worktree (git's own occupancy rule, mirrored). The
-  second write is the fetcher's auto-fetch of the active tab's remotes:
-  `git -C <path> fetch --all --quiet` as a subprocess with the inherited
-  environment — the ONE place gtv shells out to `git` (2026-09-18 user
-  decision: the user's credential helpers/ssh-agent/proxy apply verbatim,
-  and libgit2's transports would add openssl-sys/libssh2 native deps). Its
-  write surface is tracking refs (+auto-followed tags) & objects &
-  FETCH_HEAD only; `--prune` is deliberately absent, and failures are one
-  silent log line. Outside those two paths, `GitReader` only opens repos
-  and walks history/diffs; there is intentionally no other write path. Do
-  not add commands that mutate the user's repository — that red line is
-  unchanged and absolute. All other git access stays inside git2.
+  second write is fetching remotes: `git -C <path> fetch --all --quiet` as a
+  subprocess with the inherited environment — the ONE place gtv shells out to
+  `git` (2026-09-18 user decision: the user's credential helpers/ssh-agent/
+  proxy apply verbatim, and libgit2's transports would add openssl-sys/
+  libssh2 native deps). It runs as the fetcher's auto-fetch of the active
+  tab every 60 s (failures are one silent log line) and as the header's
+  Fetch button (`fetch_repository`: same `GitReader::fetch_remotes` path,
+  targeted at the caller's repo, ungated by the auto_fetch setting or the
+  fetcher busy flag, its failure summary shown in a toast). Its write
+  surface is tracking refs (+auto-followed tags) & objects & FETCH_HEAD
+  only; `--prune` is deliberately absent. Outside those two paths,
+  `GitReader` only opens repos and walks history/diffs; there is
+  intentionally no other write path. Do not add commands that mutate the
+  user's repository — that red line is unchanged and absolute. All other
+  git access stays inside git2.
 - The integrated terminal (`terminal.rs` + `TerminalPanel.tsx`) is the other
   deliberate exception: a **user-driven login shell** in a PTY. The user typing
   write commands there is the feature itself — gtv never feeds commands into it

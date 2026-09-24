@@ -8,7 +8,7 @@ import { CheckoutDialog } from './components/CheckoutDialog';
 import TerminalPanel from './components/TerminalPanel';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
-import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
+import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, fetchRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -138,6 +138,10 @@ export default function RepoView({
   const [rowHighlight, setRowHighlight] = useState(0);
   // Transient copy feedback (bottom-center toast): { name, ok } | null.
   const [copyToast, setCopyToast] = useState<{ name: string; ok: boolean } | null>(null);
+  // Fetch button: in-flight flag + transient result toast (failure summary
+  // or the quiet "up to date" confirmation).
+  const [fetching, setFetching] = useState(false);
+  const [fetchToast, setFetchToast] = useState<{ ok: boolean; text: string } | null>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
   // One exit path for the ref panel: closing always drops the query and
   // the keyboard highlight with it -- the query lives only as long as the
@@ -551,6 +555,31 @@ export default function RepoView({
     }
   }, [repoId, selectedCommit, loadDiffStats]);
 
+  // Manual fetch (header button): one explicit `git fetch --all` against
+  // THIS tab's repo -- the same write surface as the 60 s auto-fetch,
+  // user-initiated. A clean result refreshes the view immediately through
+  // the shared refresh path (the watcher's poll would catch the moved
+  // tracking refs a moment later anyway; refreshing here is what makes
+  // the button feel alive). A failure summary becomes a transient toast
+  // instead of the error strip: offline is expected, not an app error.
+  const handleFetch = useCallback(async () => {
+    if (fetching) return;
+    setFetching(true);
+    try {
+      const summary = await fetchRepository(repoId);
+      if (summary) {
+        setFetchToast({ ok: false, text: t('fetchFailed', { summary }) });
+      } else {
+        await handleRepoRefresh();
+        setFetchToast({ ok: true, text: t('fetchDone') });
+      }
+    } catch (err) {
+      recordFrontendError(errText(err));
+    } finally {
+      setFetching(false);
+    }
+  }, [fetching, repoId, handleRepoRefresh, t]);
+
   // Debounce "repo-changed" bursts (rebase/fetch fire several) into one
   // refresh. Events are filtered on payload.repo_id (T1 review Low-2):
   // sibling tabs run their own listeners, and no emit ORDER is assumed --
@@ -762,6 +791,14 @@ export default function RepoView({
     const timer = window.setTimeout(() => setCopyToast(null), 1600);
     return () => window.clearTimeout(timer);
   }, [copyToast]);
+
+  // Fetch toast: failures linger a little longer (they carry git's one-line
+  // reason), the clean confirmation matches the copy toast's brevity.
+  useEffect(() => {
+    if (!fetchToast) return;
+    const timer = window.setTimeout(() => setFetchToast(null), fetchToast.ok ? 1600 : 5000);
+    return () => window.clearTimeout(timer);
+  }, [fetchToast]);
 
   // Copy a ref name (chip right-click, panel row button). The async
   // clipboard API can be denied inside the WKWebView embed; the legacy
@@ -1820,6 +1857,18 @@ export default function RepoView({
           {gitData && (
             <>
               <button
+                className="view-btn fetch-btn"
+                onClick={handleFetch}
+                disabled={fetching}
+                title={t('fetchTip')}
+              >
+                <svg className={fetching ? 'fetch-spin' : undefined} width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <polyline points="21 3 21 9 15 9" />
+                </svg>
+                {fetching ? t('fetching') : t('fetch')}
+              </button>
+              <button
                 className="view-btn"
                 onClick={() => setFitSignal(n => n + 1)}
                 title={t('fitTip')}
@@ -2108,6 +2157,14 @@ export default function RepoView({
         </div>
       )}
 
+      {/* Fetch result: same bottom-center shape; failures carry git's
+          one-line summary and linger 5 s, the clean confirmation 1.6 s. */}
+      {fetchToast && (
+        <div className={`copy-toast${fetchToast.ok ? '' : ' error'}`}>
+          {fetchToast.text}
+        </div>
+      )}
+
       <main className="main">
         {/* gitData is seeded from initialData, so this null branch is a
             defensive loading/error shape only -- the no-tabs welcome state
@@ -2144,6 +2201,7 @@ export default function RepoView({
               onCompareClick={handleCompareClick}
               compareBaseId={compareBaseId}
               onComparePair={handleComparePair}
+              onCopyName={copyName}
             />
             {locateOpen && (
               <div className="locate-float">

@@ -77,6 +77,9 @@ interface TimelineProps {
   /** "Compare with HEAD" (lane context menu, M3.2): App stores the
    *  ready-made complete pair produced by headToLaneTip. */
   onComparePair: (pair: ComparePair) => void;
+  /** Lane context menu "Copy name": RepoView owns the clipboard write and
+   *  the confirmation toast (same channel as the ref-panel chips). */
+  onCopyName: (name: string) => void;
 }
 
 const MINIMAP_W = 280;
@@ -112,7 +115,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -626,11 +629,39 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     // indistinguishable from it. Horizontal travel is only allowed before
     // the lane's first commit (fork edges, approaching the lane birth) or
     // after its last commit (merge edges, leaving a lane that folds back).
-    // Everything else routes as an S-curve with vertical tangents, which
-    // only ever touches the two endpoint commits.
-    const sCurveV = (x1: number, y1: number, x2: number, y2: number): string => {
-      const midY = (y1 + y2) / 2;
-      return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+    // Everything else routes as a forward-flow curve whose x coordinate
+    // advances monotonically from the EARLIER commit to the LATER one, so
+    // every connector reads left-to-right like the time axis itself.
+    //
+    // diagCurve: diagonal (~45°) tangents at both ends. The curve departs
+    // its lane line immediately (never rides it, upholding the rule above),
+    // and the control x's stay strictly between the endpoints (k is capped
+    // at 45% of |dx|), so x(t) is monotone: the eye can always tell which
+    // commit came first. Authored direction is unchanged per edge type —
+    // the flow overlay's dot march keys off it. Time-inverted pairs
+    // (rebase/amend clock skew, dx < 0) get the mirrored shape: the line
+    // trending backward is then the TRUTH about the data.
+    const diagCurve = (x1: number, y1: number, x2: number, y2: number): string => {
+      const dx = x2 - x1, dy = y2 - y1;
+      if (dx === 0 || dy === 0) return `M ${x1} ${y1} L ${x2} ${y2}`;
+      const k = Math.min(Math.abs(dy), Math.abs(dx) * 0.9) * 0.5;
+      const sx = Math.sign(dx), sy = Math.sign(dy);
+      return `M ${x1} ${y1} C ${x1 + sx * k} ${y1 + sy * k}, ${x2 - sx * k} ${y2 - sy * k}, ${x2} ${y2}`;
+    };
+    // Rounded elbow: leave (x1,y1) with a VERTICAL tangent and arrive at
+    // (x2,y2) with a HORIZONTAL one — the fork/merge route (drop or climb
+    // time-aligned with the endpoint commit, then glide in along empty
+    // track) with the old 90° kink smoothed away. The control points sit
+    // inside the endpoints' rectangle, so the curve itself stays inside it
+    // (convex hull) and the no-horizontal-on-a-live-lane invariant holds
+    // exactly as it did for the polyline.
+    const elbowVH = (x1: number, y1: number, x2: number, y2: number): string => {
+      const dx = x2 - x1, dy = y2 - y1;
+      if (dx === 0 || dy === 0) return `M ${x1} ${y1} L ${x2} ${y2}`;
+      // Corner sharpness scales with the SHORTER leg: tiny hops stay soft,
+      // and a long drop keeps most of its time-aligned vertical run.
+      const k = Math.min(Math.abs(dx), Math.abs(dy)) * 0.5;
+      return `M ${x1} ${y1} C ${x1} ${y1 + Math.sign(dy) * k}, ${x2 - Math.sign(dx) * k} ${y2}, ${x2} ${y2}`;
     };
     const edgePath = (d: CommitEdge): string => {
       const from = commitMap.get(d.from);
@@ -640,32 +671,31 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
       }
       if (d.edge_type === 'Merge') {
-        // Merge link: mirrored fork routing — run along the merged lane PAST
-        // its tip (empty track), then straight up into the merge commit.
-        // Only legal when the parent really is the lane's last commit: if
-        // the merged branch lives on (or time runs inverted), the
-        // horizontal leg would overlap a live lane.
+        // Merge link: mirrored fork routing — climb out of the merged lane's
+        // tip, then glide left into the merge commit along the target lane's
+        // EMPTY tail track. Only legal when the parent really is the lane's
+        // last commit: if the merged branch lives on (or time runs
+        // inverted), the horizontal approach would overlap a live lane.
         const span = laneSpan.get(to.lane);
         const laneEndsAtParent = !!span && to.x >= span.max - 0.5;
         if (to.x <= from.x && laneEndsAtParent) {
-          return `M ${from.x} ${from.y} L ${from.x} ${to.y} L ${to.x} ${to.y}`;
+          return elbowVH(from.x, from.y, to.x, to.y);
         }
-        return sCurveV(from.x, from.y, to.x, to.y);
+        return diagCurve(from.x, from.y, to.x, to.y);
       }
-      // fork (Branch): drop straight down from the fork-point commit to the
-      // child lane, then run along the child lane into its first commit.
-      // One 90° turn; nothing rides on top of the parent lane, and the drop
-      // is time-aligned with the commit the branch was born at. Only legal
+      // fork (Branch): drop out of the fork-point commit (time-aligned with
+      // the commit the branch was born at), then glide right into the child
+      // lane's first commit along its EMPTY pre-birth track. Only legal
       // when the child really is the lane's leftmost commit (otherwise the
-      // horizontal leg overlaps the already-live child lane).
+      // horizontal approach overlaps the already-live child lane).
       const span = laneSpan.get(from.lane);
       const laneBornAtChild = !!span && from.x <= span.min + 0.5;
       if (to.x <= from.x && laneBornAtChild) {
-        return `M ${to.x} ${to.y} L ${to.x} ${from.y} L ${from.x} ${from.y}`;
+        return elbowVH(to.x, to.y, from.x, from.y);
       }
       // Time-inverted fork (child commit timestamps earlier than the fork
       // commit — rebase/amend artifacts) or displaced lane birth.
-      return sCurveV(to.x, to.y, from.x, from.y);
+      return diagCurve(to.x, to.y, from.x, from.y);
     };
     const isHotEdge = (d: CommitEdge) =>
       edgeHighlight !== null && edgeHighlight.from === d.from && edgeHighlight.to === d.to;
@@ -750,14 +780,16 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('pointer-events', 'none');
 
     // --- patch links: cherry-pick / rebase copies ------------------------------
-    // Dashed S-curves between commits carrying the same patch (Copies
-    // toggle). Cyan = rebase run, orange = cherry-pick. Under the nodes.
+    // Dashed forward-flow curves between commits carrying the same patch
+    // (Copies toggle). Cyan = rebase run, orange = cherry-pick. Under the
+    // nodes. Drawn earlier -> later (the copy lands after the original), so
+    // the link reads left-to-right like every other connector.
     const patchLinkData = patchLinks.filter(l => visibleIds.has(l.from) && visibleIds.has(l.to));
     const patchLinkPath = (l: PatchLink): string => {
       const a = commitMap.get(l.from)!;
       const b = commitMap.get(l.to)!;
-      const midY = (a.y + b.y) / 2;
-      return `M ${a.x} ${a.y} C ${a.x} ${midY}, ${b.x} ${midY}, ${b.x} ${b.y}`;
+      const [p, q] = a.x <= b.x ? [a, b] : [b, a];
+      return diagCurve(p.x, p.y, q.x, q.y);
     };
     g.selectAll('.patch-link')
       .data(patchLinkData)
@@ -1572,6 +1604,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           style={{ left: laneMenu.x, top: laneMenu.y }}
           onClick={e => e.stopPropagation()}
         >
+          <button onClick={() => { onCopyName(laneMenu.lane.name); setLaneMenu(null); }}>
+            {t('copyName')}
+          </button>
           <button onClick={() => { setFocusedLane(f => f === laneMenu.lane.name ? null : laneMenu.lane.name); setLaneMenu(null); }}>
             {focusedLane === laneMenu.lane.name ? t('unfocusLane') : t('focusLane')}
           </button>

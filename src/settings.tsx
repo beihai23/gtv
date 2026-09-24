@@ -172,6 +172,11 @@ const en: Record<string, string> = {
   compareTarget: 'Target',
   currentBranchTip: 'Current branch',
   nodeCompareTip: 'Ctrl+click another commit to compare',
+  fetch: 'Fetch',
+  fetchTip: 'Fetch this repo\'s remotes now and refresh the view (writes refs/remotes and objects only)',
+  fetching: 'Fetching…',
+  fetchDone: 'Fetched — view is up to date',
+  fetchFailed: 'Fetch failed: {summary}',
 };
 
 const zh: Record<string, string> = {
@@ -326,6 +331,11 @@ const zh: Record<string, string> = {
   compareTarget: '目标',
   currentBranchTip: '当前分支',
   nodeCompareTip: 'Ctrl+点击另一提交进行对比',
+  fetch: '获取',
+  fetchTip: '立即获取此仓库的远端更新并刷新视图（仅写入 refs/remotes 与 objects）',
+  fetching: '正在获取…',
+  fetchDone: '已获取，视图已是最新',
+  fetchFailed: '获取失败：{summary}',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

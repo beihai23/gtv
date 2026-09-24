@@ -280,6 +280,11 @@
         }
         case 'set_active_repository': return null; // recorded, ack only
         case 'set_auto_fetch': return null;        // recorded, ack only
+        // The mock cannot run git: a manual fetch is a no-op that reports a
+        // clean result (null), same shape as the real command's Ok(None).
+        // viewOfId runs first so an unknown repoId still throws like the
+        // real routing check.
+        case 'fetch_repository': viewOfId(args?.repoId); return null;
 
         // -- view rebuilds under an existing session (Task 5) ----------------
         case 'set_include_stale': return viewOfId(args?.repoId);

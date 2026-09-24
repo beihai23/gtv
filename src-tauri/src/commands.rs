@@ -468,6 +468,43 @@ pub async fn refresh_repository(
     refresh_repository_impl(&state, repo_id).await
 }
 
+/// User-initiated fetch of ONE repo's remotes (the Fetch button). Same
+/// write surface as the fetcher thread's auto-fetch -- `git fetch --all`
+/// against the session's canonical path, updating tracking refs
+/// (+auto-followed tags) & objects & FETCH_HEAD only -- but targeted at
+/// the CALLER's repo rather than the active tab, and gated by nothing but
+/// the button: it deliberately ignores the auto_fetch setting (the user
+/// asked explicitly) and the fetcher's busy flag (a stacked manual fetch
+/// just waits on git's own locks; the flag stays fetcher-owned so the
+/// tick's busy-skip accounting is undisturbed). The view refresh itself
+/// is NOT done here: the frontend calls refresh_repository after a clean
+/// fetch, and the watcher's next poll catches any ref movement either way
+/// -- the single refresh path stays single.
+/// Returns Ok(None) when every remote fetched cleanly, Ok(Some(line))
+/// with git's one-line failure summary otherwise (offline, dead remote,
+/// spawn failure) -- display material for the button's toast, never an
+/// Err, so a flaky network never surfaces as a command failure.
+pub async fn fetch_repository_impl(
+    state: &AppState,
+    repo_id: u64,
+) -> Result<Option<String>, String> {
+    let path = session_path(state, repo_id)?;
+    task::spawn_blocking(move || {
+        let reader = GitReader::new(&path)?;
+        reader.fetch_remotes()
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+pub async fn fetch_repository(
+    repo_id: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    fetch_repository_impl(&state, repo_id).await
+}
+
 pub async fn get_commit_detail_impl(
     state: &AppState,
     repo_id: u64,

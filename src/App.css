@@ -1269,6 +1269,12 @@
   cursor: pointer;
 }
 .view-btn:hover { border-color: var(--text-faint); color: var(--text); }
+/* Fetch button: icon+label inline; the icon spins while a fetch is in
+   flight and the button stays disabled so fetches never stack. */
+.fetch-btn { display: inline-flex; align-items: center; gap: 5px; }
+.fetch-btn:disabled { cursor: default; opacity: 0.75; }
+.fetch-btn .fetch-spin { animation: fetch-rotate 0.9s linear infinite; }
+@keyframes fetch-rotate { to { transform: rotate(360deg); } }
 /* Passive status pill (older-history paging), not clickable. */
 span.view-btn.loading-older { cursor: default; }
 span.view-btn.loading-older:hover { border-color: var(--border); color: var(--text-dim); }
@@ -1698,6 +1704,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   font-size: 12px;
   pointer-events: none;
 }
+.copy-toast.error { color: #ff6b6b; border-color: #ff4444; }
 
 /* Expand-all button inside an Archived/Dormant group title. */
 .branch-panel-group-title .dead-group-btn {

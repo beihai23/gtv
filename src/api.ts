@@ -72,6 +72,15 @@ export async function refreshRepository(repoId: number): Promise<GitData> {
   return invoke<GitData>('refresh_repository', { repoId });
 }
 
+/// User-initiated fetch of this repo's remotes (the Fetch button). Same
+/// write surface as the 60s auto-fetch (tracking refs + objects +
+/// FETCH_HEAD only) but caller-targeted and never gated by the auto_fetch
+/// setting. Resolves null on a clean fetch, or git's one-line failure
+/// summary (offline, dead remote) for the button's toast.
+export async function fetchRepository(repoId: number): Promise<string | null> {
+  return invoke<string | null>('fetch_repository', { repoId });
+}
+
 export async function getCommitDetail(repoId: number, commitId: string): Promise<CommitDetail> {
   return invoke<CommitDetail>('get_commit_detail', { repoId, commitId });
 }
