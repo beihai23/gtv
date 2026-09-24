@@ -582,15 +582,34 @@
 }
 .diff-code { flex: 1; white-space: pre; }
 .diff-line-meta .diff-code { color: var(--text-faint); }
-/* Side-by-side mode: two half-width panes; hunk/meta rows span both. */
-.split-row { display: flex; }
-.split-cell {
+/* Side-by-side mode: two independent panes — each scrolls horizontally
+   on its own, rows are one line each in both, so the panes stay aligned
+   under the single outer vertical scrollbar. The 2px divider plus the
+   right pane's inset shadow keeps the boundary visible even under wide
+   code. */
+.file-diff.mode-split { display: flex; padding: 0; }
+.split-pane {
   flex: 1;
-  display: flex;
   min-width: 0;
+  overflow-x: auto;
+  padding: 8px 0;
 }
-.split-cell + .split-cell { border-left: 1px solid var(--border); }
-.split-cell .diff-code { padding: 0 4px; }
+.split-pane + .split-pane {
+  border-left: 2px solid var(--border);
+  box-shadow: inset 6px 0 8px -8px var(--shadow);
+}
+.split-pane .diff-line {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+}
+.split-pane .diff-code {
+  flex: 0 0 auto;
+  padding: 0 16px 0 4px;
+}
+/* The blank half of a pure insertion/deletion pair: faint neutral fill
+   so the pairing reads instead of looking like missing content. */
+.split-empty { background: rgba(128, 128, 128, 0.07); }
 .diff-split-right .file-diff-loading,
 .diff-split-right .file-diff-error {
   display: inline-block;

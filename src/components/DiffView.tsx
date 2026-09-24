@@ -51,29 +51,31 @@ function UnifiedRows({ lines, showNums }: { lines: DiffLine[]; showNums: boolean
 
 function SplitRows({ lines, showNums }: { lines: DiffLine[]; showNums: boolean }) {
   const rows = useMemo(() => toSplitRows(lines), [lines]);
+  // Two independent panes: each scrolls horizontally on its own (long
+  // aligned code never bleeds across the divider), every pane renders the
+  // same row count at one line each, so left/right rows stay vertically
+  // aligned under the single outer vertical scrollbar.
+  const cell = (r: (typeof rows)[number], side: 'left' | 'right') => {
+    const l = side === 'left' ? r.left : r.right;
+    if (r.kind === 'hunk') {
+      return <div className="diff-line diff-line-hunk"><span className="diff-code">{r.left!.text}</span></div>;
+    }
+    if (r.kind === 'meta') {
+      return <div className="diff-line diff-line-meta"><span className="diff-code">{r.left!.text || ' '}</span></div>;
+    }
+    const changed = side === 'left' ? l?.kind === 'del' : l?.kind === 'add';
+    const cls = changed ? (side === 'left' ? ' diff-line-del' : ' diff-line-add') : '';
+    return (
+      <div className={`diff-line${cls}${l ? '' : ' split-empty'}`}>
+        {showNums && <NumCell n={l ? (side === 'left' ? l.oldNo : l.newNo) : null} />}
+        <span className="diff-code">{l?.text ?? ''}</span>
+      </div>
+    );
+  };
   return (
     <>
-      {rows.map((r, i) => {
-        if (r.kind === 'hunk') {
-          return <div key={i} className="diff-line diff-line-hunk split-span"><span className="diff-code">{r.left!.text}</span></div>;
-        }
-        if (r.kind === 'meta') {
-          return <div key={i} className="diff-line diff-line-meta split-span"><span className="diff-code">{r.left!.text || ' '}</span></div>;
-        }
-        const l = r.left, rr = r.right;
-        return (
-          <div key={i} className="diff-line split-row">
-            <div className={`split-cell${l?.kind === 'del' ? ' diff-line-del' : ''}`}>
-              {showNums && <NumCell n={l?.oldNo ?? null} />}
-              <span className="diff-code">{l?.text ?? ''}</span>
-            </div>
-            <div className={`split-cell${rr?.kind === 'add' ? ' diff-line-add' : ''}`}>
-              {showNums && <NumCell n={rr?.newNo ?? null} />}
-              <span className="diff-code">{rr?.text ?? ''}</span>
-            </div>
-          </div>
-        );
-      })}
+      <div className="split-pane">{rows.map((r, i) => <div key={i}>{cell(r, 'left')}</div>)}</div>
+      <div className="split-pane">{rows.map((r, i) => <div key={i}>{cell(r, 'right')}</div>)}</div>
     </>
   );
 }
