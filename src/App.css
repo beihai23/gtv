@@ -613,7 +613,7 @@
   font-size: 12px;
   background: var(--bg-input);
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 /* Compare panel (M3.2): the base/target summary stacks short hash,
@@ -635,7 +635,7 @@
 .tag {
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 10px;
+  border-radius: 999px;
   font-weight: 500;
 }
 
@@ -685,7 +685,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 3px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
 }
@@ -925,7 +925,7 @@
   padding: 3px 10px 3px 12px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 16px;
   font-weight: 600;
@@ -1125,7 +1125,7 @@
   height: 22px;
   flex-shrink: 0;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 999px;
   overflow: hidden;
   background: var(--bg-input);
 }
@@ -1178,7 +1178,7 @@
   color: var(--text);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 13px;
+  border-radius: 999px;
   transition: width 0.15s ease, background 0.15s, border-color 0.15s;
 }
 
@@ -1350,7 +1350,7 @@
   background: rgba(var(--bg-canvas-rgb), 0.85);
   color: var(--text-dim);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 999px;
   padding: 3px 12px;
   font-size: 11px;
   cursor: pointer;
@@ -1500,7 +1500,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   padding: 0 10px;
   font-size: 11px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -1600,7 +1600,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -1639,7 +1639,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   height: 24px;
   padding: 0 4px 0 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text);
   font-size: 12px;
