@@ -445,7 +445,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         const brkEnter = brk.enter().append('g').attr('class', 'rbreak');
         brkEnter.append('text')
           .attr('y', -8).attr('text-anchor', 'middle')
-          .attr('fill', '#a06a3a').attr('font-size', '9px');
+          .attr('fill', cssVar('--gap-break', '#a06a3a')).attr('font-size', '9px');
         brkEnter.merge(brk)
           .attr('transform', d => `translate(${t.applyX((d.x_start + d.x_end) / 2)},0)`)
           .select('text')
@@ -468,7 +468,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .attr('x2', (d: TimeGap) => (d.x_start + d.x_end) / 2)
         .attr('y1', minY)
         .attr('y2', maxY)
-        .attr('stroke', '#a06a3a')
+        .attr('stroke', cssVar('--gap-break', '#a06a3a'))
         .attr('stroke-width', 1)
         .attr('stroke-dasharray', '6,5')
         .attr('opacity', 0.35);
@@ -708,9 +708,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('d', edgePath)
       .attr('fill', 'none')
       .attr('stroke', (d: CommitEdge) => {
-        if (isHotEdge(d)) return '#FFD166';
+        if (isHotEdge(d)) return cssVar('--edge-hot', '#FFD166');
         const from = commitMap.get(d.from);
-        return from ? ownerColor(from.lane_owner) : '#888';
+        return from ? ownerColor(from.lane_owner) : cssVar('--text-faint', '#888888');
       })
       .attr('stroke-width', (d: CommitEdge) => {
         if (isHotEdge(d)) return 4;
@@ -773,7 +773,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         `edge-flow ${d.edge_type === 'Branch' ? 'flow-fwd' : 'flow-rev'}`)
       .attr('d', edgePath)
       .attr('fill', 'none')
-      .attr('stroke', '#FFF3C4')
+      .attr('stroke', cssVar('--edge-flow', '#FFF3C4'))
       .attr('stroke-width', 5)
       .attr('stroke-linecap', 'round')
       .attr('stroke-dasharray', '0 18')
@@ -798,7 +798,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .attr('class', 'patch-link')
       .attr('d', patchLinkPath)
       .attr('fill', 'none')
-      .attr('stroke', (l: PatchLink) => (l.kind === 'rebase' ? '#26C6DA' : '#FFA726'))
+      .attr('stroke', (l: PatchLink) => (l.kind === 'rebase' ? cssVar('--patch-rebase', '#26C6DA') : cssVar('--patch-cherry', '#FFA726')))
       .attr('stroke-width', 1.5)
       .attr('stroke-dasharray', '5,4')
       .attr('opacity', 0.75)
@@ -828,14 +828,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .attr('x', -18).attr('y', -9)
         .attr('width', 36).attr('height', 18)
         .attr('rx', 9)
-        .attr('fill', '#2a2a2a')
+        .attr('fill', cssVar('--bg-input', '#2a2a2a'))
         .attr('stroke', d => d.lane.color)
         .attr('stroke-width', 1);
       chips.append('text')
         .attr('text-anchor', 'middle')
         .attr('dy', 3)
         .attr('font-size', '9px')
-        .attr('fill', '#bbb')
+        .attr('fill', cssVar('--text-dim', '#bbbbbb'))
         .text(d => `+${d.hidden}`);
       chips.append('title').text(d => `${d.hidden} commits collapsed — click to expand`);
     }
@@ -918,13 +918,13 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     headNodes.append('circle')
       .attr('r', (d: CommitNode) => nodeRadius(d) + 5)
       .attr('fill', 'none')
-      .attr('stroke', '#4CAF50')
+      .attr('stroke', cssVar('--success', '#4CAF50'))
       .attr('stroke-width', 2);
     headNodes.append('text')
       .attr('y', (d: CommitNode) => -nodeRadius(d) - 10)
       .attr('font-size', '10px')
       .attr('font-weight', 'bold')
-      .attr('fill', '#4CAF50')
+      .attr('fill', cssVar('--success', '#4CAF50'))
       .attr('text-anchor', 'middle')
       .text('HEAD');
 
@@ -935,7 +935,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .append('circle')
         .attr('r', (d: CommitNode) => nodeRadius(d) + 6)
         .attr('fill', 'none')
-        .attr('stroke', '#FFD166')
+        .attr('stroke', cssVar('--edge-hot', '#FFD166'))
         .attr('stroke-width', 2.5)
         .attr('pointer-events', 'none');
     }
@@ -1014,7 +1014,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           grp.append('line')
             .attr('x1', 0).attr('y1', 4)
             .attr('x2', 0).attr('y2', dropY)
-            .attr('stroke', '#888')
+            .attr('stroke', cssVar('--text-faint', '#888888'))
             .attr('stroke-width', 1)
             .attr('stroke-dasharray', '2,2')
             .attr('opacity', 0.65);
@@ -1026,7 +1026,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
             .attr('x', 0).attr('y', -13)
             .attr('width', w).attr('height', 16)
             .attr('rx', 8)
-            .attr('fill', n.is_tag ? '#9C27B0' : n.name.startsWith('+') ? '#555' : ownerColor(s.c.lane_owner))
+            .attr('fill', n.is_tag ? cssVar('--tag-pill', '#9C27B0') : n.name.startsWith('+') ? cssVar('--text-faint', '#555555') : ownerColor(s.c.lane_owner))
             .attr('opacity', 0.92);
           item.append('text')
             .attr('x', w / 2).attr('y', -2)
@@ -1129,9 +1129,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         visibleCommits.filter(c => c.merge_branch_name),
         c => [{
           text: `🔀 ${c.merge_branch_name}`,
-          color: laneColorOf(c.merge_branch_name ?? '', '#E91E63'),
+          color: laneColorOf(c.merge_branch_name ?? '', cssVar('--accent', '#E91E63')),
         }],
-        '#E91E63',
+        cssVar('--accent', '#E91E63'),
         c => c.y - nodeRadius(c) - 8,
         -1,
       );
@@ -1253,7 +1253,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           .attr('x1', mx(span.min))
           .attr('x2', Math.max(mx(span.max), mx(span.min) + 2))
           .attr('y1', y).attr('y2', y)
-          .attr('stroke', isHeadLane ? '#4CAF50' : b.color)
+          .attr('stroke', isHeadLane ? cssVar('--success', '#4CAF50') : b.color)
           .attr('stroke-width', isHeadLane ? 4 : 3)
           .attr('stroke-linecap', 'round')
           .attr('opacity', dimOthers(b.name) ? 0.15 : (isHeadLane ? 1 : 0.9));
@@ -1289,18 +1289,18 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       const tMax = Math.max(...data.commits.map(c => c.timestamp));
       mm.append('text')
         .attr('x', 3).attr('y', MINIMAP_H - 4)
-        .attr('font-size', '9px').attr('fill', '#777')
+        .attr('font-size', '9px').attr('fill', cssVar('--text-faint', '#777777'))
         .text(fmtMY(tMin));
       mm.append('text')
         .attr('x', MINIMAP_W - 3).attr('y', MINIMAP_H - 4)
-        .attr('font-size', '9px').attr('fill', '#777')
+        .attr('font-size', '9px').attr('fill', cssVar('--text-faint', '#777777'))
         .attr('text-anchor', 'end')
         .text(fmtMY(tMax));
 
       mm.append('rect')
         .attr('class', 'mm-viewport')
         .attr('fill', 'rgba(125, 184, 240, 0.16)')
-        .attr('stroke', '#8ec6ff')
+        .attr('stroke', cssVar('--link', '#8ec6ff'))
         .attr('stroke-width', 1.5)
         .attr('rx', 2)
         .attr('pointer-events', 'none');
@@ -1318,7 +1318,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           .attr('cx', mx(headNode.x))
           .attr('cy', my(headNode.y))
           .attr('r', 3.5)
-          .attr('fill', '#4CAF50')
+          .attr('fill', cssVar('--success', '#4CAF50'))
           .attr('stroke', 'rgba(0, 0, 0, 0.45)')
           .attr('stroke-width', 1)
           .attr('pointer-events', 'none');
