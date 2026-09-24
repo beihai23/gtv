@@ -843,7 +843,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 32px var(--shadow);
 }
 
 .view-menu-title {
@@ -975,7 +975,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 32px var(--shadow);
 }
 
 .member-menu-title {
@@ -1216,7 +1216,7 @@
   max-width: 300px;
   z-index: 1000;
   pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 12px var(--shadow);
 }
 
 .tooltip-hash {
@@ -1315,7 +1315,7 @@
   background: rgba(var(--bg-canvas-rgb), 0.55);
   backdrop-filter: blur(12px) saturate(1.5);
   -webkit-backdrop-filter: blur(12px) saturate(1.5);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 2px 10px var(--shadow);
   pointer-events: auto;
   cursor: pointer;
   user-select: none;
@@ -1398,7 +1398,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   bottom: 16px; background: rgba(var(--bg-canvas-rgb), 0.96);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 4px 20px var(--shadow);
   z-index: 15;
   cursor: crosshair;
 }
@@ -1410,7 +1410,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--shadow);
   display: flex;
   flex-direction: column;
   min-width: 170px;
@@ -1460,7 +1460,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 32px var(--shadow);
   display: flex;
   flex-direction: column;
 }
@@ -1838,7 +1838,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 12px 40px var(--shadow);
   display: flex;
   flex-direction: column;
 }
@@ -1972,7 +1972,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 12px 40px var(--shadow);
   display: flex;
   flex-direction: column;
 }
@@ -2072,7 +2072,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 .locate-input {
   width: 320px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 24px var(--shadow);
 }
 .locate-dropdown {
   position: absolute;
@@ -2084,7 +2084,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 24px var(--shadow);
   z-index: 120;
   display: flex;
   flex-direction: column;
