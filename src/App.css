@@ -265,7 +265,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #4caf50;
+  background: var(--success);
   flex-shrink: 0;
 }
 
@@ -310,7 +310,7 @@
 
 .error {
   padding: 12px 20px;
-  background: #ff4444;
+  background: var(--danger);
   color: white;
   display: flex;
   align-items: center;
@@ -363,7 +363,7 @@
    (hardcoded like the red it mirrors -- the theme system has no green
    token; auto-dismissed by the App timer effect). */
 .error.success {
-  background: #2ea043;
+  background: var(--success);
 }
 
 .main {
@@ -637,11 +637,11 @@
 
 .tag-branch {
   background: var(--link);
-  color: white;
+  color: var(--on-link);
 }
 
 .tag-tag {
-  background: #9C27B0;
+  background: var(--tag-pill);
   color: white;
 }
 
@@ -687,17 +687,17 @@
 }
 
 .file-row .status.a {
-  background: #4CAF50;
+  background: var(--success);
   color: white;
 }
 
 .file-row .status.d {
-  background: #f44336;
+  background: var(--danger);
   color: white;
 }
 
 .file-row .status.m {
-  background: #FF9800;
+  background: var(--warning);
   color: white;
 }
 
@@ -747,17 +747,17 @@
 }
 
 .file-diff .diff-line-add {
-  color: #7ee787;
-  background: rgba(76, 175, 80, 0.08);
+  color: var(--diff-add-fg);
+  background: var(--diff-add-bg);
 }
 
 .file-diff .diff-line-del {
-  color: #ff7b72;
-  background: rgba(244, 67, 54, 0.08);
+  color: var(--diff-del-fg);
+  background: var(--diff-del-bg);
 }
 
 .file-diff .diff-line-hunk {
-  color: #79c0ff;
+  color: var(--diff-hunk-fg);
 }
 
 .file-diff-loading,
@@ -767,7 +767,7 @@
 }
 
 .file-diff-error {
-  color: #ff7b72;
+  color: var(--diff-del-fg);
 }
 
 .header-right {
@@ -1255,17 +1255,17 @@
 
 .tooltip-tag.tag-branch {
   background: var(--link);
-  color: white;
+  color: var(--on-link);
 }
 
 .tooltip-tag.tag-tag {
-  background: #9C27B0;
+  background: var(--tag-pill);
   color: white;
 }
 
 .diff-total { font-weight: normal; font-size: 12px; }
-.diff-add { color: #4CAF50; }
-.diff-del { color: #F44336; }
+.diff-add { color: var(--diff-add-fg); }
+.diff-del { color: var(--diff-del-fg); }
 .lane-label { user-select: none; }
 
 /* --- lane rail: frosted-glass chips pinned to the left edge, topmost layer --- */
@@ -1330,7 +1330,7 @@
   content: '●';
   margin-right: 5px;
   font-size: 9px;
-  color: #4CAF50;
+  color: var(--success);
 }
 
 /* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
@@ -1368,8 +1368,8 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 }
 .view-btn.focused {
   color: #fff;
-  border-color: #E91E63;
-  background: rgba(233, 30, 99, 0.25);
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.25);
 }
 
 /* --- date-range select + custom inputs (M2.2) --- */
@@ -1787,7 +1787,7 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   font-size: 12px;
   pointer-events: none;
 }
-.copy-toast.error { color: #ff6b6b; border-color: #ff4444; }
+.copy-toast.error { color: var(--danger); border-color: var(--danger); }
 
 /* Expand-all button inside an Archived/Dormant group title. */
 .branch-panel-group-title .dead-group-btn {
