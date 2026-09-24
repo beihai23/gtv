@@ -445,7 +445,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         const brkEnter = brk.enter().append('g').attr('class', 'rbreak');
         brkEnter.append('text')
           .attr('y', -8).attr('text-anchor', 'middle')
-          .attr('fill', cssVar('--gap-break', '#a06a3a')).attr('font-size', '9px');
+          .attr('fill', cssVar('--gap-break', '#a06a3a')).attr('font-size', '10px');
         brkEnter.merge(brk)
           .attr('transform', d => `translate(${t.applyX((d.x_start + d.x_end) / 2)},0)`)
           .select('text')
@@ -834,7 +834,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       chips.append('text')
         .attr('text-anchor', 'middle')
         .attr('dy', 3)
-        .attr('font-size', '9px')
+        .attr('font-size', '10px')
         .attr('fill', cssVar('--text-dim', '#bbbbbb'))
         .text(d => `+${d.hidden}`);
       chips.append('title').text(d => `${d.hidden} commits collapsed — click to expand`);
@@ -1031,7 +1031,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           item.append('text')
             .attr('x', w / 2).attr('y', -2)
             .attr('text-anchor', 'middle')
-            .attr('font-size', '9px')
+            .attr('font-size', '10px')
             .attr('fill', '#fff')
             .text(n.name);
         });
@@ -1289,11 +1289,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       const tMax = Math.max(...data.commits.map(c => c.timestamp));
       mm.append('text')
         .attr('x', 3).attr('y', MINIMAP_H - 4)
-        .attr('font-size', '9px').attr('fill', cssVar('--text-faint', '#777777'))
+        .attr('font-size', '10px').attr('fill', cssVar('--text-faint', '#777777'))
         .text(fmtMY(tMin));
       mm.append('text')
         .attr('x', MINIMAP_W - 3).attr('y', MINIMAP_H - 4)
-        .attr('font-size', '9px').attr('fill', cssVar('--text-faint', '#777777'))
+        .attr('font-size', '10px').attr('fill', cssVar('--text-faint', '#777777'))
         .attr('text-anchor', 'end')
         .text(fmtMY(tMax));
 

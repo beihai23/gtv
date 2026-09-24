@@ -370,7 +370,7 @@ export const THEMES: ThemeDef[] = [
     nameKey: 'themeMidnight',
     vars: {
       '--bg': '#1a1a2e', '--bg-header': '#16213e', '--bg-panel': '#16213e',
-      '--bg-input': '#0f3460', '--bg-canvas': '#1a1a2e',
+      '--bg-input': '#101c33', '--bg-canvas': '#1a1a2e',
       '--bg-canvas-rgb': '26, 26, 46', '--bg-tooltip': 'rgba(22, 33, 62, 0.95)',
       '--border': '#0f3460', '--text': '#e0e0e0', '--text-dim': '#888888',
       '--text-faint': '#666666', '--accent': '#e94560', '--accent-hover': '#d13650',
@@ -447,7 +447,7 @@ export const THEMES: ThemeDef[] = [
       '--bg': '#002b36', '--bg-header': '#073642', '--bg-panel': '#073642',
       '--bg-input': '#0a3d4b', '--bg-canvas': '#002b36',
       '--bg-canvas-rgb': '0, 43, 54', '--bg-tooltip': 'rgba(0, 43, 54, 0.95)',
-      '--border': '#0f4b5c', '--text': '#93a1a1', '--text-dim': '#839496',
+      '--border': '#0f4b5c', '--text': '#a9bdbd', '--text-dim': '#839496',
       '--text-faint': '#586e75', '--accent': '#dc322f', '--accent-hover': '#c22b28',
       '--link': '#268bd2', '--link-rgb': '38, 139, 210',
       '--ruler-line': '#0a3d4b', '--tick-line': '#0f4b5c',

@@ -1333,7 +1333,7 @@
 .lane-chip.head-lane::before {
   content: '●';
   margin-right: 5px;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--success);
 }
 
