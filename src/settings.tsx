@@ -419,7 +419,7 @@ export const THEMES: ThemeDef[] = [
     id: 'dracula',
     nameKey: 'themeDracula',
     vars: {
-      '--bg': '#282a36', '--bg-header': '#21222c', '--bg-panel': '#21222c',
+      '--bg': '#282a36', '--bg-header': '#343746', '--bg-panel': '#343746',
       '--bg-input': '#44475a', '--bg-canvas': '#282a36',
       '--bg-canvas-rgb': '40, 42, 54', '--bg-tooltip': 'rgba(40, 42, 54, 0.95)',
       '--border': '#44475a', '--text': '#f8f8f2', '--text-dim': '#8d93a8',
