@@ -210,7 +210,11 @@
   font-size: 18px;
   font-weight: 600;
   line-height: 1.2;
-  color: var(--accent);
+  /* Identity text, not decoration: --text passes contrast in every theme,
+     where --accent failed it in Nord (2.46:1) and Solarized (2.81:1) and
+     muddled the accent's interactive meaning. Prominence comes from size
+     and weight, not hue. */
+  color: var(--text);
 }
 
 /* Identity group, stacked under the name: position pill + commit count
