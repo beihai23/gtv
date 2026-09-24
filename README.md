@@ -65,7 +65,11 @@ from the commit graph itself.
 - Full-history commit search (`Cmd/Ctrl+F`) over message / author / hash, with
   ancestry jump-to for hits outside the loaded range
 - `Ctrl/Cmd+click` two commits (or a lane menu entry) to compare them: per-file
-  `+/-` counts and line-level diffs in a side panel
+  `+/-` counts and line-level diffs
+- File changes open in a **full-width split view** — summary and file list on
+  the left, the selected file's line diff across the whole main area on the
+  right (the sidebar keeps just the summary; `Esc` or the collapse button
+  returns to the graph)
 - A **Fetch** button in the header pulls the current tab's remotes on demand
   and refreshes the view (plus a silent 60 s auto-fetch in the background)
 
@@ -75,7 +79,7 @@ from the commit graph itself.
   parent, `Shift+click` jumps to the child
 - Minimap with live viewport rectangle and click-to-jump
 - Commit detail panel: author, full message, refs, changed files with `+/-` stats
-  and per-file line diffs
+  — clicking a file reads its diff in the split view
 - Settings (`⌘,`): Chinese/English UI, five preset themes (Midnight, Nord,
   Dracula, Solarized Dark, GitHub Light)
 - Multi-repo tabs: several repositories side by side in one window — the

@@ -468,6 +468,89 @@
   overflow: hidden;
 }
 
+/* Wide split view (DiffSplitView): the panel takes the whole main area
+   (the timeline hides behind it); left column = summary + file list,
+   right column = the selected file's patch at full width. */
+.commit-details.wide {
+  width: auto;
+  flex: 1;
+  border-left: none;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.diff-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.diff-split-left {
+  width: 340px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 16px;
+  border-right: 1px solid var(--border);
+}
+.diff-split-right {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-canvas);
+}
+.diff-split-right .file-diff {
+  margin: 16px;
+  overflow-x: auto;
+}
+.diff-split-right .file-diff-loading,
+.diff-split-right .file-diff-error {
+  display: inline-block;
+}
+.diff-split-empty {
+  padding: 32px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+/* Flat / tree toggle on the changed-files header (FileChangeList). */
+.file-mode-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+  font-weight: normal;
+}
+.file-mode-toggle button {
+  width: 22px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 0;
+}
+.file-mode-toggle button:first-child { border-radius: 4px 0 0 4px; }
+.file-mode-toggle button:last-child { border-radius: 0 4px 4px 0; }
+.file-mode-toggle button.active {
+  color: var(--text);
+  background: rgba(var(--link-rgb), 0.15);
+  border-color: var(--link);
+}
+.dir-row .dir-caret {
+  flex-shrink: 0;
+  width: 10px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.dir-row .dir-name {
+  color: var(--text);
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .commit-details-header {
   display: flex;
   justify-content: space-between;

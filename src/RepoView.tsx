@@ -169,6 +169,11 @@ export default function RepoView({
   // complete pair and the CompareDetails panel takes over the
   // CommitDetails slot.
   const [comparePair, setComparePair] = useState<ComparePair | null>(null);
+  // Details/compare wide split view (DiffSplitView): the toggle lives in
+  // the panel components, but the timeline must hide behind it -- the
+  // panels report through onWideChange. Only honored while a panel is
+  // actually open (splitOpen below).
+  const [detailsWide, setDetailsWide] = useState(false);
   // Integrated terminal (bottom panel). `termOpen` is deliberately not
   // persisted: auto-restoring it would silently spawn a login shell on
   // every launch — a terminal should be an explicit user action.
@@ -653,6 +658,7 @@ export default function RepoView({
 
   const handleCloseDetails = useCallback(() => {
     setSelectedCommit(null);
+    setDetailsWide(false);
   }, []);
 
   // Plain NODE click (Timeline only) = exit compare + open single-commit
@@ -681,6 +687,7 @@ export default function RepoView({
 
   const handleCloseCompare = useCallback(() => {
     setComparePair(null);
+    setDetailsWide(false);
   }, []);
 
   // Half-pair marker for the canvas: the pending base is ringed only
@@ -1269,18 +1276,20 @@ export default function RepoView({
   // untouched, and no global Esc-for-single-details behavior is added
   // (none exists today). A half-pair (target '') is not an open panel --
   // Esc leaves it for a plain click or the next ctrl+click to resolve.
-  // Inputs keep their own Esc handling (locate dropdown), so typing in
-  // one never closes the panel behind it. Active tab only.
+  // While the wide split view is open, Esc belongs to IT (collapse to the
+  // narrow panel first; the next Esc closes the panel). Inputs keep their
+  // own Esc handling (locate dropdown), so typing in one never closes the
+  // panel behind it. Active tab only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!active || e.key !== 'Escape' || !comparePair || comparePair.target === '') return;
+      if (!active || e.key !== 'Escape' || detailsWide || !comparePair || comparePair.target === '') return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
       setComparePair(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, comparePair]);
+  }, [active, comparePair, detailsWide]);
 
   // H = "go home" (Age of Empires): snap the camera back to HEAD. Plain H
   // only — with Cmd/Ctrl it means something else (Cmd+H hides the window,
@@ -2171,6 +2180,11 @@ export default function RepoView({
             lives in App (Task 5: "no tab" is shell-level, not view-level). */}
         {!gitData ? null : (
           <>
+            {/* Wide split view (DiffSplitView) takes over the main area:
+                the timeline hides via display:none -- unmounting would
+                throw away its zoom/selection state, exactly like the
+                terminal panel's keep-alive rule. */}
+            <div style={{ display: detailsWide && (comparePair?.target || selectedCommit) ? 'none' : 'contents' }}>
             <Timeline
               data={view?.data ?? gitData}
               onCommitClick={handleNodeClick}
@@ -2203,6 +2217,7 @@ export default function RepoView({
               onComparePair={handleComparePair}
               onCopyName={copyName}
             />
+            </div>
             {locateOpen && (
               <div className="locate-float">
                 <input
@@ -2274,12 +2289,13 @@ export default function RepoView({
                 view. Arrow-key stepping only moves selectedCommit, so the
                 pair survives underneath -- by design. */}
             {comparePair && comparePair.target !== '' ? (
-              <CompareDetails repoId={repoId} pair={comparePair} onClose={handleCloseCompare} />
+              <CompareDetails repoId={repoId} pair={comparePair} onClose={handleCloseCompare} onWideChange={setDetailsWide} />
             ) : (
               <CommitDetails
                 repoId={repoId}
                 commit={selectedCommit}
                 onClose={handleCloseDetails}
+                onWideChange={setDetailsWide}
               />
             )}
           </>

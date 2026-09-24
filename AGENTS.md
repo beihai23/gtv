@@ -138,13 +138,22 @@ src/
                   header/toolbar, panels, per-tab terminal
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
-  components/CommitDetails.tsx  commit detail panel
+  components/CommitDetails.tsx  commit detail panel (narrow summary; file
+                                rows open the split view)
   components/CompareDetails.tsx two-commit compare panel (Ctrl+click pairing):
-                                side summaries, per-file +/− counts, line diffs
+                                side summaries, per-file +/− counts
+  components/DiffSplitView.tsx  full-width left/right split view for reading
+                                file changes (both panels' wide mode): summary
+                                + file list on the left, the selected file's
+                                patch on the right; the timeline hides but
+                                stays mounted, Esc collapses
+  components/FileChangeList.tsx changed-files list with flat/tree layout
+                                toggle (gtv_file_mode), shared by DiffSplitView
+                                and both narrow panels; tree built by
+                                filetree.ts (single-child dir chains compress)
   components/CheckoutDialog.tsx dirty-worktree confirm dialog for the branch
                                 switch (three-state copy by status counts)
-  components/DiffView.tsx       per-file expandable line diff, shared by
-                                CommitDetails and CompareDetails
+  components/DiffView.tsx       line-diff renderer, used by DiffSplitView
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
@@ -181,10 +190,10 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 105 cases across 10 files: `src/inactive.test.ts`,
+(`npm test`, 121 cases across 11 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
-`src/compare.test.ts`, `src/tabs.test.ts`,
+`src/compare.test.ts`, `src/tabs.test.ts`, `src/filetree.test.ts`,
 `src/components/minimap.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy

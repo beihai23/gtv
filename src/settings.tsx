@@ -177,6 +177,12 @@ const en: Record<string, string> = {
   fetching: 'Fetching…',
   fetchDone: 'Fetched — view is up to date',
   fetchFailed: 'Fetch failed: {summary}',
+  expandViewTip: 'Read file changes in the full-width split view',
+  collapseViewTip: 'Back to the graph',
+  selectFileHint: 'Select a file on the left to read its changes',
+  fileModeToggle: 'File list layout',
+  fileModeFlat: 'Flat list',
+  fileModeTree: 'Tree view',
 };
 
 const zh: Record<string, string> = {
@@ -336,6 +342,12 @@ const zh: Record<string, string> = {
   fetching: '正在获取…',
   fetchDone: '已获取，视图已是最新',
   fetchFailed: '获取失败：{summary}',
+  expandViewTip: '在全宽分栏视图中阅读文件变更',
+  collapseViewTip: '返回分支图',
+  selectFileHint: '在左侧选择文件以查看变更内容',
+  fileModeToggle: '文件列表排布方式',
+  fileModeFlat: '平铺列表',
+  fileModeTree: '树状展开',
 };
 
 const DICTS: Record<Lang, Record<string, string>> = { en, zh };

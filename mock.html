@@ -295,10 +295,37 @@
         case 'get_commit_detail': { // build from the repo's view
           const c = viewOfId(args?.repoId).commits.find(x => x.id === args?.commitId);
           if (!c) return null;
+          // CONTRACT APPROXIMATION of git_reader.rs lazy diff stats: the
+          // mock cannot run git, so the file list is static synthesis
+          // (same stance as get_compare_detail below) -- otherwise the
+          // changed-files section and the wide split view have nothing to
+          // render against. Totals mirror the rows.
+          const files = [
+            { path: 'src/app/main.ts', additions: 18, deletions: 6, status: 'M' },
+            { path: 'src/app/util.ts', additions: 9, deletions: 0, status: 'A' },
+            { path: 'README.md', additions: 3, deletions: 5, status: 'M' },
+          ];
           return { id: c.id, short_id: c.short_id, message: c.message.split('\n')[0],
             full_message: c.message, author_name: c.author_name, author_email: c.author_email,
             timestamp: c.timestamp, parents: c.parents, branch_refs: c.branch_refs,
-            files: [], total_additions: c.additions ?? 0, total_deletions: c.deletions ?? 0 };
+            files, total_additions: 30, total_deletions: 11 };
+        }
+        case 'get_file_diff': {
+          // CONTRACT APPROXIMATION (get_pair_file_diff's sibling): one
+          // hand-written patch served for any file of any commit.
+          viewOfId(args?.repoId);
+          const p = String(args?.path ?? 'file');
+          return [
+            `diff --git a/${p} b/${p}`,
+            `--- a/${p}`,
+            `+++ b/${p}`,
+            '@@ -10,6 +10,8 @@',
+            ' context line',
+            '-removed line',
+            '+added line one',
+            '+added line two',
+            ' trailing context',
+          ].join('\n');
         }
         case 'get_patch_links': return viewOfId(args?.repoId)._patch_links ?? [];
         case 'jump_to_commit': return viewOfId(args?.repoId);
