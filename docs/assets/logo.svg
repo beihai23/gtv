@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1E33"/>
+      <stop offset="1" stop-color="#12152A"/>
+    </linearGradient>
+    <filter id="laneGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="nodeGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <!-- app-icon tile -->
+  <rect x="88" y="88" width="848" height="848" rx="200" fill="url(#bg)"/>
+
+  <!-- ======================= lanes (crisp) ======================= -->
+  <!-- connectors first so lane bars and nodes paint over them -->
+
+  <!-- pink: fork from main@420 down to y=520, merge back up into main@830 -->
+  <path d="M 420 330 C 420 390, 500 520, 560 520" fill="none" stroke="#E83E8C" stroke-width="26" stroke-linecap="round"/>
+  <path d="M 700 520 L 790 520 C 830 520, 830 460, 830 330" fill="none" stroke="#E83E8C" stroke-width="26" stroke-linecap="round"/>
+
+  <!-- orange: fork from main@225 down to y=720, runs open (unmerged tip) -->
+  <path d="M 225 330 C 225 440, 300 720, 390 720" fill="none" stroke="#F5A623" stroke-width="26" stroke-linecap="round"/>
+
+  <!-- lane bars -->
+  <line x1="88" y1="330" x2="936" y2="330" stroke="#4C8DFF" stroke-width="30" stroke-linecap="round"/>
+  <line x1="560" y1="520" x2="700" y2="520" stroke="#E83E8C" stroke-width="30" stroke-linecap="round"/>
+  <line x1="390" y1="720" x2="830" y2="720" stroke="#F5A623" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- ======================= lane glows ======================= -->
+  <g filter="url(#laneGlow)" opacity="0.55">
+    <path d="M 420 330 C 420 390, 500 520, 560 520" fill="none" stroke="#E83E8C" stroke-width="26" stroke-linecap="round"/>
+    <path d="M 700 520 L 790 520 C 830 520, 830 460, 830 330" fill="none" stroke="#E83E8C" stroke-width="26" stroke-linecap="round"/>
+    <path d="M 225 330 C 225 440, 300 720, 390 720" fill="none" stroke="#F5A623" stroke-width="26" stroke-linecap="round"/>
+    <line x1="88" y1="330" x2="936" y2="330" stroke="#4C8DFF" stroke-width="30" stroke-linecap="round"/>
+    <line x1="560" y1="520" x2="700" y2="520" stroke="#E83E8C" stroke-width="30" stroke-linecap="round"/>
+    <line x1="390" y1="720" x2="830" y2="720" stroke="#F5A623" stroke-width="30" stroke-linecap="round"/>
+  </g>
+
+  <!-- ======================= node halos ======================= -->
+  <g filter="url(#nodeGlow)">
+    <circle cx="225" cy="330" r="40" fill="#4C8DFF"/>
+    <circle cx="420" cy="330" r="40" fill="#4C8DFF"/>
+    <circle cx="620" cy="330" r="40" fill="#4C8DFF"/>
+    <circle cx="830" cy="330" r="40" fill="#4C8DFF"/>
+    <circle cx="560" cy="520" r="40" fill="#E83E8C"/>
+    <circle cx="700" cy="520" r="40" fill="#E83E8C"/>
+    <circle cx="420" cy="720" r="40" fill="#F5A623"/>
+    <circle cx="620" cy="720" r="40" fill="#F5A623"/>
+    <circle cx="830" cy="720" r="40" fill="#F5A623"/>
+  </g>
+
+  <!-- ======================= node rings ======================= -->
+  <g fill="#161932">
+    <circle cx="225" cy="330" r="33" stroke="#7FB0FF" stroke-width="16"/>
+    <circle cx="420" cy="330" r="33" stroke="#7FB0FF" stroke-width="16"/>
+    <circle cx="620" cy="330" r="33" stroke="#7FB0FF" stroke-width="16"/>
+    <circle cx="830" cy="330" r="33" stroke="#7FB0FF" stroke-width="16"/>
+    <circle cx="560" cy="520" r="33" stroke="#FF6BB0" stroke-width="16"/>
+    <circle cx="700" cy="520" r="33" stroke="#FF6BB0" stroke-width="16"/>
+    <circle cx="420" cy="720" r="33" stroke="#FFC65E" stroke-width="16"/>
+    <circle cx="620" cy="720" r="33" stroke="#FFC65E" stroke-width="16"/>
+    <circle cx="830" cy="720" r="33" stroke="#FFC65E" stroke-width="16"/>
+  </g>
+</svg>
