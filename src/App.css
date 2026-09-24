@@ -1714,6 +1714,16 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   gap: 2px;
 }
 
+/* One keyboard-focus language for the whole app: every focusable element
+   gets the same 2px ring in the theme's --focus-ring (previously buttons
+   fell back to the UA default or nothing, and exactly one component rule
+   existed in 2200 lines). outline (not border) so layout never shifts. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
 /* Dead-row list (Archived/Dormant sections): an eye, not a checkbox --
    clicking changes VISIBILITY only, a different verb than the zone
    picker's chips, so it keeps the row idiom. */
