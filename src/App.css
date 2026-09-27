@@ -184,6 +184,10 @@
      the identity card, so the panel must hang off the header itself, not
      off a fixed viewport offset (it once sliced across the toolbar). */
   position: relative;
+  /* Elevation ladder level 1: the chrome bar floats just above the canvas.
+     A whisper of shadow, not a shelf. (Ref panel rides z 60, untouched.) */
+  z-index: 5;
+  box-shadow: 0 6px 20px -12px var(--shadow);
 }
 
 /* Region boundaries: identity | lane filters | controls get hairline
@@ -449,6 +453,22 @@
   position: relative;
 }
 
+/* The sticky ruler's underside: a fading gradient strip so panning content
+   visibly slides UNDER the ruler instead of ending at a hard line. Sits
+   above the SVG, below every overlay (rail z14, minimap z15). */
+.timeline-container::before {
+  content: '';
+  position: absolute;
+  top: 26px;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: linear-gradient(var(--shadow), transparent);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
+
 /* direct child only — overlay SVGs (minimap) must NOT be stretched */
 .timeline-container > svg {
   width: 100%;
@@ -467,6 +487,9 @@
   width: 360px;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
+  /* Elevation ladder level 1: docked panels float just above the canvas —
+     a soft left shadow, not a wall. */
+  box-shadow: -16px 0 32px -20px var(--shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -496,6 +519,9 @@
   overflow-y: auto;
   padding: 16px;
   border-right: 1px solid var(--border);
+  /* Same ladder level as the docked panel: the file list floats above the
+     diff reading area. */
+  box-shadow: 6px 0 16px -10px var(--shadow);
 }
 .diff-split-right {
   flex: 1;
