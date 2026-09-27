@@ -8,6 +8,16 @@ fork point, and folds back into its parent at a merge. It reconstructs branch li
 from pure git data — no server, no metadata store, no account. Inspired by gmaster's
 Branch Explorer, but an independent codebase.
 
+**Two run modes.** The Tauri desktop app (Rust backend over git2) and the VS Code
+extension in `vscode-gtv/` (TypeScript engine over the system git CLI — no Rust, no
+native modules). The React frontend is shared verbatim; only the transport differs
+(Tauri IPC ↔ VS Code webview postMessage polyfilled through
+`vscode-gtv/media/bridge.js`). The lane-layout engine exists twice and MUST stay
+equivalent: `src-tauri/src/layout.rs` (Rust) and `vscode-gtv/src/engine/layout.ts`
+(1:1 port) — the anti-drift gate is `vscode-gtv/src/engine/equivalence.test.ts`,
+which diffs the TS engine's GitData against the Rust `dump_json` example's output
+for the same repo, plus `layout.test.ts` (the ported `layout_pure.rs` vectors).
+
 gtv is **read-only by design, with exactly two sanctioned writes**: a branch
 switch the user explicitly confirms (`checkout_branch` — SAFE mode: compatible
 uncommitted changes are carried over, never forced; a merge/cherry-pick/revert
@@ -167,6 +177,14 @@ mock.html         browser-only preview harness + living contract document for
                   (registry semantics, events, terminals, per-repo views) and
                   feeds public/mock-data.json, so the frontend can be debugged
                   and E2E-driven in a plain browser without the Rust backend
+vscode-gtv/       the VS Code extension run mode: TypeScript engine over the
+                  system git CLI (engine/reader.ts mirrors git_reader.rs,
+                  engine/layout.ts is the 1:1 port of layout.rs, engine.ts
+                  mirrors commands.rs AppState), webview bridge in
+                  media/bridge.js (the __TAURI_INTERNALS__ polyfill over
+                  acquireVsCodeApi), frontend bundle synced into media/ by
+                  `node esbuild.mjs --sync-web`. Tests: `npm test`
+                  (--pool=forks: the engine spawns git subprocesses)
 docs/
   roadmap.md / design-v2.md / gmaster-research.md   design docs (written in Chinese)
   reference/gmaster-tour    archived real git repo used as the test fixture

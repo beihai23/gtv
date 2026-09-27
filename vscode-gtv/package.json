@@ -1,0 +1,51 @@
+{
+  "name": "gtv-vscode",
+  "displayName": "gtv \u2014 Git Timeline Viewer",
+  "description": "Branch-lane git history timeline inside VS Code: every branch a track, born at a fork, folded back at a merge.",
+  "version": "0.1.0",
+  "publisher": "beihai23",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "icon": "media/icon.png",
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gtv.openTimeline",
+        "title": "Open Git Timeline",
+        "category": "gtv"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gtv.openTimeline",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "test": "vitest run --pool=forks",
+    "typecheck": "tsc --noEmit -p .",
+    "build": "node esbuild.mjs",
+    "sync-web": "node esbuild.mjs --sync-web",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "playwright": "1.61.1"
+  }
+}

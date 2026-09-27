@@ -136,6 +136,30 @@ writing.
 Prebuilt binaries for macOS (universal), Windows, and Linux are on the
 [Releases](https://github.com/beihai23/gtv/releases) page.
 
+## VS Code extension
+
+gtv also runs as a VS Code extension — the same timeline in an editor tab,
+with **no Rust and no native modules**: the extension host reads your
+repository through the system `git` CLI, and the lane-layout engine is a
+TypeScript port of the desktop's pure layout module (its full test suite
+ported too, plus an equivalence test that diffs the TS engine's output
+against the Rust backend's dump for the same repo).
+
+```bash
+cd vscode-gtv
+npm install
+npm run sync-web   # build the shared frontend into media/
+npm run build      # bundle the extension host
+```
+
+Then press **F5** with `vscode-gtv/` open to launch an Extension Development
+Host and run **gtv: Open Git Timeline** from the Command Palette (or the
+Source Control title bar). Details: [vscode-gtv/README.md](vscode-gtv/README.md).
+
+Not in the extension (v1): the embedded terminal (use VS Code's own),
+patch-copy link detection, and drag-and-drop folder opening (webview
+restriction — use the picker).
+
 **macOS note:** the app is not notarized, so Gatekeeper may refuse to open it
 ("app is damaged" / "can't be opened"). Remove the quarantine flag once after
 installing:
