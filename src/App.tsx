@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
+import logoUrl from '../docs/assets/logo.png';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -544,12 +545,15 @@ function App() {
       {tabs.length === 0 ? (
         <main className="main">
           <div className="welcome">
+            <img className="welcome-logo" src={logoUrl} alt="" />
             <h2>{t('welcomeTitle')}</h2>
             <p>{t('welcomeSubtitle')}</p>
-            <p className="hint">{t('welcomeHint')}</p>
             <button className="open-btn" onClick={() => void openPicker()}>
               {t('openRepo')}
             </button>
+            {/* Fine print belongs BELOW the action, not between the
+                instruction and the button. */}
+            <p className="hint">{t('welcomeHint')}</p>
             <p className="hint">{t('welcomeDropHint')}</p>
           </div>
         </main>

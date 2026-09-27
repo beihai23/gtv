@@ -396,6 +396,14 @@
   color: var(--text);
 }
 
+/* First-screen brand: the icon rides above the title, macOS-tile rounded. */
+.welcome-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+  margin-bottom: 4px;
+}
+
 /* Empty-state hint lines (welcomeHint + the Task 6 drag hint below the
    button): quiet, centered, wrapped at a readable measure. */
 .hint {
@@ -783,13 +791,18 @@
 }
 
 .files-section {
-  margin-top: 20px;
+  margin-top: 24px;
 }
 
+/* Flex header: title + totals on the left, the flat/tree toggle pushed to
+   the right edge (margin-left: auto only works once the row is flex). */
 .files-section h4 {
   font-size: 14px;
   margin-bottom: 12px;
   color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .files-list {
