@@ -12,11 +12,14 @@ pure `layout.rs` with its full test-vector suite.
 ## Use
 
 1. Open a folder containing a git repository.
-2. Run the command **gtv: Open Git Timeline** (Command Palette, or the gtv
-   button in the Source Control title bar).
-3. The timeline opens in an editor tab. Additional repositories can be opened
-   as tabs inside the panel (the welcome screen's Open Repository button, which
-   defaults to the workspace folder).
+2. The timeline opens automatically in an editor tab when the workspace
+   itself is a git repository (first run only; afterwards your tab set is
+   restored from the webview's persisted state). Or run the command
+   **gtv: Open Git Timeline** (Command Palette, or the gtv button in the
+   Source Control title bar) any time.
+3. Additional repositories can be opened as tabs inside the panel (the
+   welcome screen's Open Repository button, which defaults to the workspace
+   folder).
 
 Everything you know from the desktop app works: pan/zoom, ref panel (`/`),
 search (`Cmd/Ctrl+F`), two-commit compare (`Ctrl/Cmd+click`), the full-width
@@ -40,7 +43,11 @@ npm test           # vitest: layout port, Rust-equivalence, full-stack E2E
 ```
 
 Then press **F5** in VS Code with this folder open to launch an Extension
-Development Host.
+Development Host — the workspace's timeline opens on its own.
+
+Diagnostics: `GTV_DEV_LOG=1` in the extension host's environment routes
+invoke traffic and webview errors to `/tmp/gtv-ext.log`; webview errors
+always reach the host console regardless.
 
 ## How it fits together
 

@@ -40,6 +40,14 @@
     }
   });
 
+  // Diagnostics: webview-side failures cross to the host's log file.
+  window.addEventListener('error', (e) => {
+    try { vscode.postMessage({ type: 'gtv-webview-error', text: String(e.message || e.error) }); } catch {}
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    try { vscode.postMessage({ type: 'gtv-webview-error', text: 'unhandledrejection: ' + String(e.reason) }); } catch {}
+  });
+
   window.__TAURI_INTERNALS__ = {
     invoke(cmd, args) {
       return new Promise((resolve, reject) => {

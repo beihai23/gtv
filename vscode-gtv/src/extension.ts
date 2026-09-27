@@ -68,9 +68,27 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('gtv.openTimeline', () => openPanel(context)),
   );
+  // First-run magic: when the workspace itself is a git repository, open
+  // its timeline right away instead of making the user find the command.
+  const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (dir) {
+    void (async () => {
+      const { RepoReader } = await import('./engine/reader');
+      if (await RepoReader.isValid(dir)) openPanel(context);
+    })();
+  }
 }
 
 function openPanel(context: vscode.ExtensionContext) {
+  // Dev diagnostics, off by default: GTV_DEV_LOG=1 routes invoke traffic
+  // and webview errors to /tmp/gtv-ext.log. Webview errors always surface
+  // in the host console too.
+  const devLog = process.env.GTV_DEV_LOG === '1';
+  const log = (line: string) => {
+    if (!devLog) return;
+    try { fs.appendFileSync('/tmp/gtv-ext.log', `${new Date().toISOString()} ${line}\n`); } catch { /* dev-only */ }
+  };
+  log('openPanel');
   const panel = vscode.window.createWebviewPanel(
     'gtv.timeline',
     'Git Timeline',
@@ -99,8 +117,15 @@ function openPanel(context: vscode.ExtensionContext) {
   const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   panel.webview.onDidReceiveMessage(async (m) => {
-    if (!m || m.type !== 'invoke') return;
+    if (!m || typeof m !== 'object') return;
+    if (m.type === 'gtv-webview-error') {
+      console.error(`[gtv] webview error: ${(m as { text?: string }).text}`);
+      log(`WEBVIEW-ERR ${(m as { text?: string }).text}`);
+      return;
+    }
+    if (m.type !== 'invoke') return;
     const { id, cmd, args } = m as { id: number; cmd: string; args: Record<string, unknown> };
+    log(`invoke ${cmd}`);
     const reply = (value: unknown) => void panel.webview.postMessage({ type: 'response', id, value });
     const fail = (error: unknown) =>
       void panel.webview.postMessage({
@@ -134,7 +159,8 @@ function openPanel(context: vscode.ExtensionContext) {
       const method = COMMANDS[cmd];
       if (!method) throw new Error(`Unknown command: ${cmd}`);
       const fn = engine[method] as (...a: unknown[]) => unknown;
-      reply(await fn.apply(engine, engineArgs(cmd, args ?? {})));
+      const value = await fn.apply(engine, engineArgs(cmd, args ?? {}));
+      reply(value);
     } catch (e) {
       fail(e);
     }
@@ -151,7 +177,10 @@ function openPanel(context: vscode.ExtensionContext) {
 /** dist/index.html, rewritten for the webview: asset URLs become
  *  asWebviewUri, the bridge script goes in FIRST (the app expects
  *  __TAURI_INTERNALS__ to exist before its module bundle evaluates), and a
- *  CSP allows exactly the local media dir plus the app's inline styles. */
+ *  CSP allows exactly the local media dir plus the app's inline styles.
+ *  When the workspace folder is itself a git repo and the user has no saved
+ *  tab set yet, the restore path is seeded with it, so the first run lands
+ *  on the workspace's timeline instead of the welcome screen. */
 function buildHtml(context: vscode.ExtensionContext, webview: vscode.Webview): string {
   const mediaDir = vscode.Uri.joinPath(context.extensionUri, 'media');
   const indexPath = path.join(mediaDir.fsPath, 'index.html');
@@ -160,13 +189,27 @@ function buildHtml(context: vscode.ExtensionContext, webview: vscode.Webview): s
   const bridgeUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaDir, 'bridge.js'));
   const bridgeTag = `<script src="${bridgeUri}"></script>`;
 
-  // Rewrite every relative asset reference (assets/…) to a webview URI.
-  html = html.replace(/(src|href)="(\.\/)?assets\//g, (_m, attr) =>
-    `${attr}="${webview.asWebviewUri(vscode.Uri.joinPath(mediaDir, 'assets')).toString()}/`);
+  // Rewrite every asset reference ("/assets/", "assets/", "./assets/" —
+  // vite emits absolute paths by default) to a webview URI.
+  const assetsUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaDir, 'assets'));
+  html = html.replace(/(src|href)="(?:\.\/)?\/?assets\//g, (_m, attr) =>
+    `${attr}="${assetsUri.toString()}/`);
 
+  const seed = seedScript();
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};">`;
-  html = html.replace(/<head>/, `<head>\n${csp}\n${bridgeTag}`);
+  html = html.replace(/<head>/, `<head>\n${csp}\n${seed}${bridgeTag}`);
   return html;
+}
+
+function seedScript(): string {
+  const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!dir) return '';
+  const seed = JSON.stringify({ members: [{ path: dir, commondir: `${dir}/.git` }], active: dir });
+  return `<script>
+    if (!localStorage.getItem('gtv_tabs')) {
+      localStorage.setItem('gtv_tabs', '${seed.replace(/'/g, "\\'")}');
+    }
+  </script>`;
 }
 
 export function deactivate() {}
