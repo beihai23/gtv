@@ -74,7 +74,8 @@ impl GitReader {
 
     /// Lane seeds: all local branches, plus remote branches whose short name
     /// has no local counterpart (e.g. a fresh clone where features exist
-    /// only as origin/X). Lane name = short branch name.
+    /// only as origin/X). Local lanes take the short branch name; remote-only
+    /// lanes keep the full `origin/x` name and carry is_remote = true.
     fn collect_lane_seeds(&self) -> Result<Vec<LaneSeed>, String> {
         let mut seeds: Vec<LaneSeed> = Vec::new();
         let mut local_names: HashSet<String> = HashSet::new();
@@ -92,6 +93,7 @@ impl GitReader {
                     seeds.push(LaneSeed {
                         name: name.to_string(),
                         tip: target.to_string(),
+                        is_remote: false,
                     });
                 }
             }
@@ -114,9 +116,15 @@ impl GitReader {
                     if short == "HEAD" || local_names.contains(short) {
                         continue;
                     }
+                    // A local branch literally named "origin/x" already owns
+                    // that lane name.
+                    if seeds.iter().any(|s| s.name == full) {
+                        continue;
+                    }
                     seeds.push(LaneSeed {
-                        name: short.to_string(),
+                        name: full.to_string(),
                         tip: target.to_string(),
+                        is_remote: true,
                     });
                 }
             }
@@ -132,7 +140,19 @@ impl GitReader {
         } else if names.contains("master") {
             "master".to_string()
         } else {
-            seeds.first().map(|s| s.name.clone()).unwrap_or_default()
+            // Remote-only fallback: the first `*/main`, then `*/master`
+            // seed, by its full name so layout's `s.name == main_branch`
+            // holds. is_remote keeps a local "feature/main" out of this.
+            let find_short = |short: &str| {
+                seeds.iter().find(|s| {
+                    s.is_remote && s.name.split_once('/').map(|(_, b)| b) == Some(short)
+                })
+            };
+            find_short("main")
+                .or_else(|| find_short("master"))
+                .or_else(|| seeds.first())
+                .map(|s| s.name.clone())
+                .unwrap_or_default()
         }
     }
 
@@ -854,6 +874,7 @@ impl GitReader {
         let seeds = vec![LaneSeed {
             name: id[..7].to_string(),
             tip: id,
+            is_remote: false,
         }];
         let data = self.build_view(&seeds, limit)?;
         let stale_names = Self::stale_seeds(&seeds, &data);
@@ -930,6 +951,7 @@ impl GitReader {
                 fork_point: None,
                 merged_into: None,
                 is_active: true,
+                is_remote: seed.is_remote,
             });
         }
 
@@ -958,6 +980,7 @@ impl GitReader {
                 fork_point: None,
                 merged_into: None,
                 is_active: true,
+                is_remote: false,
             });
         }
 

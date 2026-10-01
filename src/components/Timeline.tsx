@@ -1627,8 +1627,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           {/* M3.1: real worktree checkout (tags are not checkout targets).
               The CURRENT branch's own lane is not special-cased either:
               checking it out is a git safe no-op (spec 5). Coexists with
-              "View from this branch" above -- worktree change vs view-only. */}
-          {!laneMenu.lane.is_tag && (
+              "View from this branch" above -- worktree change vs view-only.
+              Remote-only lanes (origin/x) have no local branch to check out;
+              the backend would refuse, so the entry is not offered. */}
+          {!laneMenu.lane.is_tag && !laneMenu.lane.is_remote && (
             <button onClick={() => { onCheckoutBranch(laneMenu.lane.name); setLaneMenu(null); }}>
               {t('checkoutThisBranch')}
             </button>

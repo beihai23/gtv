@@ -4,6 +4,7 @@
 // already_open reactivation, never a rebuilt session).
 
 import { RepoReader, type ViewResult } from './reader';
+import type { LaneSeed } from './layout';
 import type { GitData, OpenedRepo } from '../../../src/types';
 
 const PAGE = 2000;
@@ -15,7 +16,7 @@ interface Session {
   /** Pagination state (ViewSession in the desktop): the seed set the view
    *  was built from, the stale names at build time, and every oid loaded
    *  so far (load_more hides these from the next walk). */
-  seeds: { name: string; tip: string }[];
+  seeds: LaneSeed[];
   staleNames: string[];
   seen: Set<string>;
   includeStale: boolean;

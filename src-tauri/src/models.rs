@@ -74,6 +74,10 @@ pub struct BranchLane {
     /// Whether the branch ref still exists (false = ghost lane).
     #[serde(default)]
     pub is_active: bool,
+    /// True when the lane is seeded by a remote-tracking ref with no local
+    /// counterpart (named `origin/x`); checkout does not apply to it.
+    #[serde(default)]
+    pub is_remote: bool,
 }
 
 /// Complete Git data for visualization

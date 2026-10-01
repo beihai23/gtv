@@ -32,12 +32,16 @@ pub fn lane_color(lane_index: i32) -> String {
 }
 
 /// A branch ref that seeds one lane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LaneSeed {
-    /// Display name of the lane (short branch name, no refs/ prefix).
+    /// Display name of the lane (short branch name, no refs/ prefix;
+    /// `origin/x` for remote-only branches).
     pub name: String,
     /// Oid of the commit the branch points to.
     pub tip: String,
+    /// True when the seed comes from a remote-tracking ref with no local
+    /// counterpart.
+    pub is_remote: bool,
 }
 
 const LANE_HEIGHT: f64 = 80.0;
@@ -209,6 +213,10 @@ pub fn compute_layout(
     });
 
     let mut lane_index_of: HashMap<String, i32> = HashMap::new();
+    let remote_of: HashMap<&str, bool> = seeds
+        .iter()
+        .map(|s| (s.name.as_str(), s.is_remote))
+        .collect();
     let mut lanes: Vec<BranchLane> = Vec::new();
     if let Some(main_name) = lane_names.first() {
         lane_index_of.insert(main_name.clone(), 0);
@@ -220,6 +228,7 @@ pub fn compute_layout(
             fork_point: None,
             merged_into: None,
             is_active: true,
+            is_remote: remote_of.get(main_name.as_str()).copied().unwrap_or(false),
         });
     }
     for (k, name) in side_lanes.into_iter().enumerate() {
@@ -233,6 +242,7 @@ pub fn compute_layout(
             fork_point: fork_points.get(name).cloned(),
             merged_into: None,
             is_active: true,
+            is_remote: remote_of.get(name.as_str()).copied().unwrap_or(false),
         });
     }
 

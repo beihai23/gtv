@@ -41,10 +41,14 @@ export function laneColor(laneIndex: number): string {
 
 /// A branch ref that seeds one lane.
 export interface LaneSeed {
-  /// Display name of the lane (short branch name, no refs/ prefix).
+  /// Display name of the lane (short branch name, no refs/ prefix;
+  /// `origin/x` for remote-only branches).
   name: string;
   /// Oid of the commit the branch points to.
   tip: string;
+  /// True when the seed comes from a remote-tracking ref with no local
+  /// counterpart.
+  is_remote: boolean;
 }
 
 const LANE_HEIGHT = 80.0;
@@ -236,6 +240,10 @@ export function computeLayout(
   });
 
   const laneIndexOf = new Map<string, number>();
+  const remoteOf = new Map<string, boolean>();
+  for (const s of seeds) {
+    remoteOf.set(s.name, s.is_remote);
+  }
   const lanes: BranchLane[] = [];
   if (laneNames.length > 0) {
     const mainName = laneNames[0];
@@ -248,6 +256,7 @@ export function computeLayout(
       fork_point: null,
       merged_into: null,
       is_active: true,
+      is_remote: remoteOf.get(mainName) ?? false,
     });
   }
   sideLanes.forEach((name, k) => {
@@ -261,6 +270,7 @@ export function computeLayout(
       fork_point: forkPoints.get(name) ?? null,
       merged_into: null,
       is_active: true,
+      is_remote: remoteOf.get(name) ?? false,
     });
   });
 

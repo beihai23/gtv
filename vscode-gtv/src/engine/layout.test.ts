@@ -38,7 +38,7 @@ function commit(id: string, ts: number, parents: string[]): CommitNode {
 }
 
 function seed(name: string, tip: string): LaneSeed {
-  return { name, tip };
+  return { name, tip, is_remote: false };
 }
 
 function laneOf(commits: CommitNode[], id: string): string {

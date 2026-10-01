@@ -40,6 +40,9 @@ export interface BranchLane {
   fork_point: string | null;
   merged_into: string | null;
   is_active: boolean;
+  /** True when seeded by a remote-tracking ref with no local counterpart
+   *  (lane named `origin/x`); checkout does not apply. Mirrors models.rs. */
+  is_remote?: boolean;
 }
 
 export interface TimeGap {

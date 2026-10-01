@@ -31,6 +31,7 @@ fn seed(name: &str, tip: &str) -> LaneSeed {
     LaneSeed {
         name: name.to_string(),
         tip: tip.to_string(),
+        is_remote: false,
     }
 }
 

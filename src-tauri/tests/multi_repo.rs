@@ -1204,3 +1204,54 @@ fn watcher_cas_writeback_never_resurrects_a_reset_baseline() {
 
     std::fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
+
+/// Remote-only branch lanes: a remote-tracking ref whose short name has no
+/// local counterpart seeds a lane named `origin/x` with is_remote = true;
+/// once a local branch of the same short name exists, the local seed
+/// shadows it (short name, is_remote = false).
+#[test]
+fn remote_only_branch_lane_keeps_origin_name() {
+    let dir = build_repo("remoteonly", "r");
+    let state = AppState::default();
+
+    // A remote-tracking ref with no local counterpart, pointing at the
+    // local feat tip (any commit works — the ref is what matters).
+    let tip = git_sha(&dir, "feat");
+    git(&dir, &["update-ref", "refs/remotes/origin/feature", &tip], &day(5));
+
+    let repo = open(&state, &dir);
+    let lane = repo
+        .data
+        .branches
+        .iter()
+        .find(|b| b.name == "origin/feature")
+        .expect("origin/feature lane missing");
+    assert!(lane.is_remote, "remote-only lane must carry is_remote");
+    assert!(
+        repo.data.branches.iter().all(|b| b.name != "feature"),
+        "no short-named lane for a remote-only branch"
+    );
+
+    let list = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list");
+    let entry = list
+        .iter()
+        .find(|b| b.name == "origin/feature")
+        .expect("origin/feature chip missing");
+    assert!(entry.is_remote);
+
+    // A local branch of the same short name shadows the remote seed.
+    git(&dir, &["branch", "feature", &tip], &day(5));
+    let refreshed = run(refresh_repository_impl(&state, repo.repo_id)).expect("refresh");
+    let lane = refreshed
+        .branches
+        .iter()
+        .find(|b| b.name == "feature")
+        .expect("local feature lane missing");
+    assert!(!lane.is_remote, "local branch lane is never remote");
+    assert!(
+        refreshed.branches.iter().all(|b| b.name != "origin/feature"),
+        "the remote seed must be shadowed by the local branch"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("clean up temp dir");
+}

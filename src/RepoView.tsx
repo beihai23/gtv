@@ -515,15 +515,28 @@ export default function RepoView({
   // bump), keep expanded lanes and filters. Loaded-older pagination state
   // is rebuilt from scratch — accepted v1 limitation. Rebased/amended
   // commits get new oids, so stale selections drop naturally.
-  // The rebuild goes through refreshRepository (Task-5 review 3c): the
-  // one command that re-reads the view from HEAD under the session's
-  // current policy without touching the terminal or the watcher baseline
-  // (a re-open is forbidden by the dedup semantics and would just return
-  // the stale session view). setIncludeStale went back to serving only
-  // the settings toggle.
+  // The full-view rebuild goes through refreshRepository (Task-5 review
+  // 3c): the one command that re-reads the view from HEAD under the
+  // session's current policy without touching the terminal or the watcher
+  // baseline (a re-open is forbidden by the dedup semantics and would just
+  // return the stale session view). A narrowed branch selection rebuilds
+  // through filterByBranches instead -- refreshRepository only knows the
+  // full seed set, so routing a subset through it would flash every lens
+  // back to all lanes. setIncludeStale went back to serving only the
+  // settings toggle.
   const refreshingRef = useRef(false);
+  // Set when a change event arrives while a refresh is in flight: the
+  // running refresh's finally replays the latest handler once, so a
+  // one-shot event (branch delete) is never dropped.
+  const refreshPendingRef = useRef(false);
+  // Declared before handleRepoRefresh so its finally can replay through
+  // this ref (the debounced listener below uses it too).
+  const refreshHandlerRef = useRef<() => Promise<void>>(async () => {});
   const handleRepoRefresh = useCallback(async () => {
-    if (refreshingRef.current) return;
+    if (refreshingRef.current) {
+      refreshPendingRef.current = true;
+      return;
+    }
     refreshingRef.current = true;
     // A pending checkout confirm holds preflight counts this rebuild just
     // invalidated -- close it (the world changed, re-ask) instead of
@@ -532,7 +545,19 @@ export default function RepoView({
     setCheckoutDialog(null);
     try {
       const keepId = selectedCommit?.id ?? null;
-      const data = await refreshRepository(repoId);
+      // refreshRepository always rebuilds the FULL view from every seed,
+      // so a narrowed selection (pinned/recent lens, chip filter,
+      // related-only) would flash back to all lanes on every refresh.
+      // Prune the selection against the fresh branch list first, then
+      // re-narrow through filterByBranches when it is a real subset.
+      const listed = await getBranchList(repoId);
+      const listedNames = new Set(listed.map(b => b.name));
+      const kept = selectedBranches.filter(n => listedNames.has(n));
+      const selection = kept.length ? kept : listed.map(b => b.name);
+      const narrowed = selection.length < listed.length;
+      const data = narrowed
+        ? await filterByBranches(repoId, selection)
+        : await refreshRepository(repoId);
       setGitData(data);
       loadDiffStats(data);
       if (keepId && data.commits.some(c => c.id === keepId)) {
@@ -546,19 +571,25 @@ export default function RepoView({
       }
       const branches = await getBranchList(repoId);
       setBranchList(branches);
-      setSelectedBranches(prev => {
-        const names = new Set(branches.map(b => b.name));
-        const kept = prev.filter(n => names.has(n));
-        return kept.length ? kept : branches.map(b => b.name);
-      });
+      const names = new Set(branches.map(b => b.name));
+      const stillKept = selection.filter(n => names.has(n));
+      setSelectedBranches(stillKept.length ? stillKept : branches.map(b => b.name));
     } catch (err) {
       // A transient failure (e.g. racing a repo being replaced) must not
-      // nuke the view; the next change event retries.
+      // nuke the view. A one-shot change (branch delete) has no next event,
+      // so the pending replay above is the retry path for dropped events.
       recordFrontendError(errText(err));
     } finally {
       refreshingRef.current = false;
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        void refreshHandlerRef.current();
+      }
     }
-  }, [repoId, selectedCommit, loadDiffStats]);
+  }, [repoId, selectedCommit, selectedBranches, loadDiffStats]);
+  useEffect(() => {
+    refreshHandlerRef.current = handleRepoRefresh;
+  }, [handleRepoRefresh]);
 
   // Manual fetch (header button): one explicit `git fetch --all` against
   // THIS tab's repo -- the same write surface as the 60 s auto-fetch,
@@ -591,10 +622,6 @@ export default function RepoView({
   // each event for THIS repo independently restarts the debounce. The
   // handler lives in a ref so resubscription only happens when the repo
   // itself changes, not on every selection.
-  const refreshHandlerRef = useRef(handleRepoRefresh);
-  useEffect(() => {
-    refreshHandlerRef.current = handleRepoRefresh;
-  }, [handleRepoRefresh]);
   const repoRefreshTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
     let dead = false;

@@ -92,7 +92,9 @@ export class RepoReader {
   }
 
   /** Lane seeds: all local branches, plus remote branches whose short name
-   *  has no local counterpart. Mirrors collect_lane_seeds. */
+   *  has no local counterpart. Local lanes take the short name; remote-only
+   *  lanes keep the full `origin/x` name and carry is_remote = true.
+   *  Mirrors collect_lane_seeds. */
   async laneSeeds(): Promise<LaneSeed[]> {
     const out = await git(this.dir, [
       'for-each-ref',
@@ -108,7 +110,7 @@ export class RepoReader {
       if (name.startsWith('refs/heads/')) {
         const short = name.slice('refs/heads/'.length);
         localNames.add(short);
-        seeds.push({ name: short, tip: oid });
+        seeds.push({ name: short, tip: oid, is_remote: false });
       }
     }
     for (const line of out.split('\n')) {
@@ -118,17 +120,26 @@ export class RepoReader {
       const full = name.slice('refs/remotes/'.length);
       const short = full.includes('/') ? full.slice(full.indexOf('/') + 1) : full;
       if (short === 'HEAD' || localNames.has(short)) continue;
-      seeds.push({ name: short, tip: oid });
+      // A local branch literally named "origin/x" already owns that lane name.
+      if (seeds.some(s => s.name === full)) continue;
+      seeds.push({ name: full, tip: oid, is_remote: true });
     }
     return seeds;
   }
 
-  /** main > master > first seed. Mirrors detect_main_branch. */
+  /** main > master > first remote `origin/main`-style seed > first
+   *  `origin/master`-style seed > first seed. Mirrors detect_main_branch. */
   private detectMainBranch(seeds: LaneSeed[]): string {
     const names = new Set(seeds.map(s => s.name));
     if (names.has('main')) return 'main';
     if (names.has('master')) return 'master';
-    return seeds[0]?.name ?? '';
+    const shortOf = (s: LaneSeed) => {
+      const i = s.name.indexOf('/');
+      return i < 0 ? undefined : s.name.slice(i + 1);
+    };
+    return (seeds.find(s => s.is_remote && shortOf(s) === 'main')
+      ?? seeds.find(s => s.is_remote && shortOf(s) === 'master')
+      ?? seeds[0])?.name ?? '';
   }
 
   private async headOid(): Promise<string | null> {
@@ -269,7 +280,7 @@ export class RepoReader {
     const r = await gitRaw(this.dir, ['rev-parse', '--verify', '--quiet', `${commitId}^{commit}`]);
     if (r.code !== 0) throw new Error(`Commit not found: ${commitId}`);
     const id = r.stdout.trim();
-    const seeds = [{ name: id.slice(0, 7), tip: id }];
+    const seeds = [{ name: id.slice(0, 7), tip: id, is_remote: false }];
     const data = await this.buildView(seeds, limit);
     return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
   }
@@ -333,6 +344,7 @@ export class RepoReader {
       fork_point: null,
       merged_into: null,
       is_active: true,
+      is_remote: s.is_remote,
     }));
     const tagOut = await git(this.dir, ['tag', '--list']);
     const tags = tagOut.split('\n').filter(Boolean).sort();
@@ -345,6 +357,7 @@ export class RepoReader {
         fork_point: null,
         merged_into: null,
         is_active: true,
+        is_remote: false,
       });
     }
     return list;

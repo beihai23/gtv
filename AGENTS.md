@@ -60,7 +60,12 @@ src-tauri/src/
                   (walk_commits + load_more pagination), lazy diff stats,
                   worktree status + SAFE branch checkout (the first
                   sanctioned write; refuses branches held by sibling
-                  worktrees) and two-commit compare; the second sanctioned
+                  worktrees) and two-commit compare; lane seeds name a
+                  remote-only branch (remote-tracking ref with no local
+                  counterpart) `origin/x` and mark its lane is_remote =
+                  true (a local branch of the same short name shadows it),
+                  so a deleted local branch whose origin ref survives still
+                  shows, clearly marked; the second sanctioned
                   write, auto-fetch, runs the SYSTEM git subprocess
                   `git -C <path> fetch --all --quiet` (2026-09-18 user
                   decision: credential fidelity + zero native-dep risk;
@@ -145,7 +150,14 @@ src/
                   family snapshots + repo-changed refresh, restore, error strip
   RepoView.tsx    per-repo view body (one instance per tab, kept alive via
                   display:none): data state, display pipeline, handlers,
-                  header/toolbar, panels, per-tab terminal
+                  header/toolbar, panels, per-tab terminal; the repo-changed
+                  refresh coalesces — an event landing mid-refresh sets a
+                  pending flag the in-flight refresh's finally replays once
+                  (a one-shot change like a branch delete is never dropped),
+                  and it re-applies a narrowed branch selection through
+                  filterByBranches (refresh_repository only knows the full
+                  seed set), so a pinned/recent lens or chip filter survives
+                  refreshes instead of flashing back to all lanes
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core
   components/CommitDetails.tsx  commit detail panel (narrow summary; file
