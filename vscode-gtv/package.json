@@ -5,6 +5,11 @@
   "version": "0.1.0",
   "publisher": "beihai23",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beihai23/gtv.git",
+    "directory": "vscode-gtv"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },

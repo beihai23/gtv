@@ -1,0 +1,13 @@
+# source & build tooling
+src/**
+esbuild.mjs
+tsconfig.json
+.gitignore
+
+# maps & dev artifacts
+**/*.map
+node_modules/**
+out/**
+*.vsix
+
+# keep: package.json, README.md, LICENSE, dist/, media/
