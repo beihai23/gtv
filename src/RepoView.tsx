@@ -65,6 +65,8 @@ interface RepoViewProps {
   setShowMergeLinks: Dispatch<SetStateAction<boolean>>;
   showRefLabels: boolean;
   setShowRefLabels: Dispatch<SetStateAction<boolean>>;
+  showAnnotations: boolean;
+  setShowAnnotations: Dispatch<SetStateAction<boolean>>;
   // Global dialog VISIBILITY lives in App while the per-repo context
   // (error, repo path, commit count) lives here: the issue dialog renders
   // inside RepoView and takes the path as a prop.
@@ -114,6 +116,8 @@ export default function RepoView({
   setShowMergeLinks,
   showRefLabels,
   setShowRefLabels,
+  showAnnotations,
+  setShowAnnotations,
   showIssueReport,
   setShowIssueReport,
 }: RepoViewProps) {
@@ -413,8 +417,12 @@ export default function RepoView({
   // selection-restore effect below: it calls this for the M2.4 restore,
   // and a useCallback dep array is read during render, so a later
   // declaration would be a TDZ error (the M1.3 landmine).
+  // filterBusy feeds Timeline's render badge through the delay gate; the
+  // try/finally wraps the whole body so every exit path drops it.
+  const [filterBusy, setFilterBusy] = useState(false);
   const handleFilterChange = useCallback(async (branchNames: string[]) => {
     setSelectedBranches(branchNames);
+    setFilterBusy(true);
     try {
       const data = await filterByBranches(repoId, branchNames);
       setGitData(data);
@@ -422,6 +430,8 @@ export default function RepoView({
     } catch (err) {
       recordFrontendError(errText(err));
       setError(errText(err));
+    } finally {
+      setFilterBusy(false);
     }
   }, [repoId, loadDiffStats]);
 
@@ -525,6 +535,10 @@ export default function RepoView({
   // back to all lanes. setIncludeStale went back to serving only the
   // settings toggle.
   const refreshingRef = useRef(false);
+  // UI twin of refreshingRef (the ref gates re-entry, the state feeds
+  // Timeline's render badge through the delay gate). Set only after the
+  // re-entry gate is taken, so a skipped duplicate refresh never lights it.
+  const [refreshBusy, setRefreshBusy] = useState(false);
   // Set when a change event arrives while a refresh is in flight: the
   // running refresh's finally replays the latest handler once, so a
   // one-shot event (branch delete) is never dropped.
@@ -538,6 +552,7 @@ export default function RepoView({
       return;
     }
     refreshingRef.current = true;
+    setRefreshBusy(true);
     // A pending checkout confirm holds preflight counts this rebuild just
     // invalidated -- close it (the world changed, re-ask) instead of
     // letting the user confirm against stale numbers. SAFE checkout stays
@@ -581,6 +596,7 @@ export default function RepoView({
       recordFrontendError(errText(err));
     } finally {
       refreshingRef.current = false;
+      setRefreshBusy(false);
       if (refreshPendingRef.current) {
         refreshPendingRef.current = false;
         void refreshHandlerRef.current();
@@ -1599,6 +1615,7 @@ export default function RepoView({
     (compressed ? 0 : 1) +
     (showMergeLinks ? 0 : 1) +
     (showRefLabels ? 0 : 1) +
+    (showAnnotations ? 1 : 0) +
     (showPatchLinks ? 1 : 0) +
     (hideRemotes ? 1 : 0);
 
@@ -1987,6 +2004,17 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          checked={showAnnotations}
+                          onChange={() => setShowAnnotations(v => !v)}
+                        />
+                        <span className="view-menu-text">
+                          <span className="view-menu-label">{t('annotations')}</span>
+                          <span className="view-menu-desc">{t('annotationsTip')}</span>
+                        </span>
+                      </label>
+                      <label className="view-menu-item">
+                        <input
+                          type="checkbox"
                           checked={showPatchLinks}
                           onChange={() => setShowPatchLinks(v => !v)}
                         />
@@ -2223,11 +2251,13 @@ export default function RepoView({
               compressed={compressed}
               showMergeLinks={showMergeLinks}
               showRefLabels={showRefLabels}
+              showAnnotations={showAnnotations}
               patchLinks={showPatchLinks ? patchLinks : NO_LINKS}
               fitSignal={fitSignal}
               headSignal={headSignal}
               hasMore={gitData.has_more ?? false}
               loadingOlder={loadingOlder}
+              busy={filterBusy || refreshBusy}
               onLoadOlder={handleLoadOlder}
               focusCommit={focusTarget}
               hiddenIds={hiddenIds}

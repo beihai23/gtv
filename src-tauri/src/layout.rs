@@ -114,30 +114,133 @@ pub fn compute_layout(
     // owner[i] = lane name that claimed commits[i]
     let mut owner: Vec<Option<String>> = vec![None; commits.len()];
 
-    // Order seeds: main first; then lanes whose tip was merged into another
-    // lane (the merge record proves their lineage was integrated as a unit,
-    // so they get first claim on their ancestry); then the rest. Within each
-    // class, newest tip first.
+    // Seed order decides who claims shared ancestry first. Hard evidence
+    // beats the soft heuristic classes:
+    //   R1 (ancestor): seed P's tip lies on seed C's first-parent chain
+    //      -> P claims before C.
+    //   R2 (merge destination): seed S's tip is a non-first parent of a
+    //      merge commit m, and m lies on seed T's first-parent chain
+    //      -> T claims before S. (The old rule gave merged SOURCES
+    //      unconditional priority, which handed the destination branch's
+    //      own history to the merged branch whenever the destination was
+    //      not main.)
+    // R1+R2 form precedence edges resolved with Kahn's algorithm; among the
+    // ready (in-degree 0) seeds a soft key picks: main first, then lanes
+    // whose tip was merged into another lane (the merge record proves their
+    // lineage was integrated as a unit — covers "Y merged into main, Z
+    // forked mid-Y"), newest tip first, name as the final tiebreak. A cycle
+    // (mutual merges) is broken by the same soft key so the sort always
+    // terminates. When the DAG offers no evidence at all — two branches
+    // forked out of each other's mid-region with no merge and no ancestry
+    // relation — the direction is genuinely ambiguous and newest-tip-first
+    // decides; that residual misattribution is the documented heuristic
+    // limit.
     let merged_tips: HashSet<&str> = commits
         .iter()
         .flat_map(|c| c.parents.iter().skip(1))
         .map(|p| p.as_str())
         .collect();
-    let mut ordered_seeds: Vec<&LaneSeed> = seeds.iter().collect();
-    ordered_seeds.sort_by_key(|s| {
-        if s.name == main_branch {
-            (0, std::cmp::Reverse(i64::MAX))
-        } else {
-            let ts = index_of
-                .get(&s.tip)
-                .map(|&i| commits[i].timestamp)
-                .unwrap_or(i64::MIN);
-            let class = if merged_tips.contains(s.tip.as_str()) { 1 } else { 2 };
-            // Reverse(newest first) instead of negation: -i64::MIN overflows
-            // for tips outside the walked window.
-            (class, std::cmp::Reverse(ts))
+
+    // First-parent chain (commit ids) of each seed's tip, stopping at the
+    // window edge. The insert-check also guards against a corrupt cycle.
+    let chains: Vec<HashSet<&str>> = seeds
+        .iter()
+        .map(|s| {
+            let mut set = HashSet::new();
+            let mut cursor = index_of.get(&s.tip).copied();
+            while let Some(i) = cursor {
+                if !set.insert(commits[i].id.as_str()) {
+                    break;
+                }
+                cursor = commits[i]
+                    .parents
+                    .first()
+                    .and_then(|p| index_of.get(p))
+                    .copied();
+            }
+            set
+        })
+        .collect();
+
+    // Precedence edges (before, after) as seed indices, deduped.
+    let mut precedence: HashSet<(usize, usize)> = HashSet::new();
+    // R1: P's tip on C's chain -> P before C. Equal tips are excluded: two
+    // seeds on one commit would otherwise form a spurious 2-cycle.
+    for (c, seed_c) in seeds.iter().enumerate() {
+        for (p, seed_p) in seeds.iter().enumerate() {
+            if p != c && seed_p.tip != seed_c.tip && chains[c].contains(seed_p.tip.as_str()) {
+                precedence.insert((p, c));
+            }
         }
-    });
+    }
+    // R2: S's tip merged at m, m on T's chain -> T before S.
+    for m in commits.iter() {
+        if m.parents.len() < 2 {
+            continue;
+        }
+        for parent in &m.parents[1..] {
+            for (s, seed_s) in seeds.iter().enumerate() {
+                if &seed_s.tip != parent {
+                    continue;
+                }
+                for (t, _) in seeds.iter().enumerate() {
+                    if t != s && chains[t].contains(m.id.as_str()) {
+                        precedence.insert((t, s));
+                    }
+                }
+            }
+        }
+    }
+
+    // Soft priority key (lower wins): main class, merged-tip class, the
+    // rest; newest tip first within a class (Reverse instead of negation:
+    // -i64::MIN overflows for tips outside the walked window); name as a
+    // stable tiebreak.
+    let soft_key = |s: &LaneSeed| -> (u8, std::cmp::Reverse<i64>) {
+        let class = if s.name == main_branch {
+            0
+        } else if merged_tips.contains(s.tip.as_str()) {
+            1
+        } else {
+            2
+        };
+        let ts = index_of
+            .get(&s.tip)
+            .map(|&i| commits[i].timestamp)
+            .unwrap_or(i64::MIN);
+        (class, std::cmp::Reverse(ts))
+    };
+    let soft_cmp = |a: &LaneSeed, b: &LaneSeed| {
+        soft_key(a).cmp(&soft_key(b)).then_with(|| a.name.cmp(&b.name))
+    };
+
+    // Kahn's algorithm over the precedence edges; each round takes the
+    // soft-key-smallest ready seed. No ready seed means a cycle — take the
+    // soft-key-smallest remaining seed outright to guarantee termination.
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); seeds.len()];
+    let mut indegree = vec![0usize; seeds.len()];
+    for &(before, after) in &precedence {
+        successors[before].push(after);
+        indegree[after] += 1;
+    }
+    let mut done = vec![false; seeds.len()];
+    let mut ordered_seeds: Vec<&LaneSeed> = Vec::with_capacity(seeds.len());
+    loop {
+        let pick = (0..seeds.len())
+            .filter(|&i| !done[i] && indegree[i] == 0)
+            .min_by(|&a, &b| soft_cmp(&seeds[a], &seeds[b]))
+            .or_else(|| {
+                (0..seeds.len())
+                    .filter(|&i| !done[i])
+                    .min_by(|&a, &b| soft_cmp(&seeds[a], &seeds[b]))
+            });
+        let Some(i) = pick else { break };
+        done[i] = true;
+        ordered_seeds.push(&seeds[i]);
+        for &next in &successors[i] {
+            indegree[next] -= 1;
+        }
+    }
 
     // Branch tips act as walls: a tip commit belongs to its own branch even
     // if a descendant branch claims its lineage first (branch-from-branch

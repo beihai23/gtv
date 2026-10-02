@@ -55,7 +55,17 @@ src-tauri/src/
   models.rs       all shared data types (CommitNode, BranchLane, GitData, ...) —
                   the single source of truth for the IPC contract
   layout.rs       pure lane-propagation engine; NO git2 dependency, operates only
-                  on models so it is unit-testable with hand-built graphs
+                  on models so it is unit-testable with hand-built graphs. Seed
+                  claim order is hard-evidence-first: R1 (a seed whose tip lies
+                  on another's first-parent chain claims first) and R2 (the
+                  merge DESTINATION claims before the merged source: S's tip is
+                  a non-first parent of a merge m on T's chain => T first) form
+                  precedence edges resolved by Kahn; among ready seeds the soft
+                  key picks main > merged-tip class > the rest, newest tip
+                  first, name as tiebreak (cycles fall back to the same key).
+                  When the DAG offers no evidence (mutual mid-region forks, no
+                  merges), newest-tip-first decides — a documented heuristic
+                  limit, not a correctness guarantee
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
                   (walk_commits + load_more pagination), lazy diff stats,
                   worktree status + SAFE branch checkout (the first
@@ -71,8 +81,13 @@ src-tauri/src/
                   decision: credential fidelity + zero native-dep risk;
                   libgit2 stays default-features = off) and returns a
                   one-line failure summary; change_fingerprint powers the
-                  repo-change poller; feeds layout::compute_layout and
-                  returns GitData
+                  repo-change poller; filter_by_branches is TWO-PASS: pass 1
+                  builds the full view to read each selected lane's
+                  ancestor-lane closure (fork_point -> owner -> ... up to
+                  main), pass 2 walks the union of selected + closure seeds
+                  so fork edges anchor on the true parent lane even when it
+                  (e.g. main) is not selected; feeds layout::compute_layout
+                  and returns GitData
   commands.rs     #[tauri::command] handlers + AppState (repos registry:
                   repo_id -> RepoSession with view + pagination
                   ViewSession + terminal, plus active/auto_fetch);
@@ -91,7 +106,8 @@ src-tauri/src/
   fetcher.rs      auto-fetch thread: 60s tick fetching the ACTIVE tab's
                   remotes (busy-skip, auto_fetch gate, silent failure log)
 src-tauri/tests/
-  layout_pure.rs  10 pure-graph algorithm tests (no git repo involved)
+  layout_pure.rs  16 pure-graph algorithm tests (no git repo involved),
+                  including the R1/R2 hard-evidence seed-ordering pins
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
                   (pre-existing failures in fresh clones: the fixture is a
                   contentless gitlink)
@@ -125,6 +141,11 @@ src-tauri/tests/
                   drop-kill teardown
   repo_fingerprint.rs  change_fingerprint behavior: stable across reads, moves
                   on commit/branch/tag/checkout, ignores worktree noise
+  lane_attribution.rs  lane-ownership integration tests on git-CLI temp repos:
+                  branch-from-branch with merge evidence (R2 keeps the parent's
+                  internal commits on the parent lane) and the two-pass
+                  filter_by_branches ancestor-lane closure (fork edges anchor
+                  on an unselected main)
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
@@ -145,6 +166,9 @@ src/
   compare.ts      compare-pairing pure functions: nextPair (Ctrl+click
                   base/target state machine) + headToLaneTip (pair for the
                   lane-menu "compare with HEAD" item)
+  delaygate.ts    delay-gate state machine for busy indicators (350ms show-up
+                  delay + 500ms minimum show, pure step(gate, busy, now));
+                  Timeline's useDelayedBusy wraps it with setTimeout
   App.tsx         tab shell: open funnel (picker/Cmd+T/drag-drop/restore all
                   through openTab with backend dedup), two-level tab bar,
                   family snapshots + repo-changed refresh, restore, error strip
@@ -159,7 +183,25 @@ src/
                   seed set), so a pinned/recent lens or chip filter survives
                   refreshes instead of flashing back to all lanes
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
-                                ruler, gestures) — ~1000 lines, the rendering core
+                                ruler, gestures) — ~1000 lines, the rendering core.
+                                The zoom handler applies the transform per event
+                                (pointer tracking) but frame-coalesces cull /
+                                minimap viewport / lane band / ruler through one
+                                rAF (the callback reads transformRef, so the last
+                                frame of a gesture always culls the resting
+                                camera). Full redraws of scenes over
+                                HEAVY_SCENE_COMMITS (2500) visible commits light
+                                the render badge first and draw inside a double
+                                rAF (a synchronous block could never paint it);
+                                async rebuilds (filter/refresh, RepoView's `busy`
+                                prop) light the same badge through useDelayedBusy.
+                                Label system: fork/merge 🌱/🔀 annotations are
+                                off by default (view-menu toggle, hover tooltip
+                                recalls them); remote-tracking pills render as
+                                outline style vs the local pills' solid fill,
+                                fold into their local twin (name ⤒), and dim
+                                the origin/ prefix; below a 28px row height the
+                                pills and annotations mute (HEAD and tags stay)
   components/CommitDetails.tsx  commit detail panel (narrow summary; file
                                 rows open the split view)
   components/CompareDetails.tsx two-commit compare panel (Ctrl+click pairing):
@@ -190,8 +232,10 @@ mock.html         browser-only preview harness + living contract document for
                   feeds public/mock-data.json, so the frontend can be debugged
                   and E2E-driven in a plain browser without the Rust backend
 vscode-gtv/       the VS Code extension run mode: TypeScript engine over the
-                  system git CLI (engine/reader.ts mirrors git_reader.rs,
-                  engine/layout.ts is the 1:1 port of layout.rs, engine.ts
+                  system git CLI (engine/reader.ts mirrors git_reader.rs —
+                  including the two-pass filterByBranches ancestor-lane
+                  closure; engine/layout.ts is the 1:1 port of layout.rs,
+                  R1/R2 precedence + Kahn ordering included; engine.ts
                   mirrors commands.rs AppState), webview bridge in
                   media/bridge.js (the __TAURI_INTERNALS__ polyfill over
                   acquireVsCodeApi), frontend bundle synced into media/ by
@@ -223,11 +267,11 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 132 cases across 12 files: `src/inactive.test.ts`,
+(`npm test`, 142 cases across 13 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
 `src/compare.test.ts`, `src/tabs.test.ts`, `src/filetree.test.ts`,
-`src/diffparse.test.ts`,
+`src/diffparse.test.ts`, `src/delaygate.test.ts`,
 `src/components/minimap.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy

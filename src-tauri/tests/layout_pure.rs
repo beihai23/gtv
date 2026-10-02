@@ -459,3 +459,92 @@ fn anonymous_unclaimed_lineage_is_unattributed() {
         None
     );
 }
+
+/// R2 (merge destination first): feature forked out of develop mid-way and
+/// its tip was merged back into develop; feature's tip is NEWER than
+/// develop's. The merge record must order develop before feature, so the
+/// shared segment (d1) belongs to develop and feature's fork point lands on
+/// develop's lane. The old unconditional merged-source-first rule inverted
+/// exactly this (feature claimed d1, develop forked off feature).
+#[test]
+fn merge_destination_claims_shared_history() {
+    // main:     c1
+    //              \
+    // develop:      d1 -- d2 -- m1(tip)
+    //                 \         /
+    // feature:         f1 -- f2(tip, newer than m1)
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("d1", 200, &["c1"]),
+        commit("f1", 300, &["d1"]),
+        commit("d2", 350, &["d1"]),
+        commit("m1", 360, &["d2", "f2"]),
+        commit("f2", 400, &["f1"]),
+    ];
+    let seeds = [seed("main", "c1"), seed("develop", "m1"), seed("feature", "f2")];
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane_of(&commits, "d1"), "develop", "shared segment belongs to the merge destination");
+    assert_eq!(lane_of(&commits, "d2"), "develop");
+    assert_eq!(lane_of(&commits, "m1"), "develop");
+    assert_eq!(lane_of(&commits, "f1"), "feature");
+    assert_eq!(lane_of(&commits, "f2"), "feature");
+    assert_eq!(lane(&lanes, "feature").fork_point.as_deref(), Some("d1"));
+    assert_eq!(lane(&lanes, "develop").fork_point.as_deref(), Some("c1"));
+    assert_eq!(lane_of(&commits, "c1"), "main");
+}
+
+/// The merged-tip soft class still beats newest-tip-first when there is no
+/// counter-evidence: Y merged into main, Z forked out of Y mid-way, Z's tip
+/// is newer. Y must keep its shared history (Z must not steal y1).
+#[test]
+fn merged_branch_keeps_history_against_newer_unmerged_fork() {
+    // main:  c1 -------- mY -- m2(tip)
+    //          \        /
+    // Y:        y1 -- y2(tip)
+    //            \
+    // Z:          z1(tip, newer than y2)
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("y1", 200, &["c1"]),
+        commit("y2", 300, &["y1"]),
+        commit("mY", 350, &["c1", "y2"]),
+        commit("m2", 360, &["mY"]),
+        commit("z1", 400, &["y1"]),
+    ];
+    let seeds = [seed("main", "m2"), seed("Y", "y2"), seed("Z", "z1")];
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane_of(&commits, "y1"), "Y");
+    assert_eq!(lane_of(&commits, "y2"), "Y");
+    assert_eq!(lane_of(&commits, "z1"), "Z");
+    assert_eq!(lane(&lanes, "Z").fork_point.as_deref(), Some("y1"));
+}
+
+/// R1 (ancestor first): P's tip lies on C's first-parent chain, so P claims
+/// before C even though C's tip is newer. C's fork point is P's tip on P's
+/// lane (the tip wall alone produced this; R1 pins the ordering itself).
+#[test]
+fn ancestor_seed_claims_before_descendant() {
+    // main:  c1
+    //          \
+    // P:        p1(tip)
+    //             \
+    // C:           s1 -- s2(tip)
+    let mut commits = vec![
+        commit("c1", 100, &[]),
+        commit("p1", 200, &["c1"]),
+        commit("s1", 300, &["p1"]),
+        commit("s2", 400, &["s1"]),
+    ];
+    let seeds = [seed("main", "c1"), seed("P", "p1"), seed("C", "s2")];
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane_of(&commits, "p1"), "P");
+    assert_eq!(lane_of(&commits, "s1"), "C");
+    assert_eq!(lane_of(&commits, "s2"), "C");
+    assert_eq!(lane(&lanes, "C").fork_point.as_deref(), Some("p1"));
+    assert_eq!(lane(&lanes, "P").fork_point.as_deref(), Some("c1"));
+    let p1 = commits.iter().find(|c| c.id == "p1").unwrap();
+    assert_eq!(p1.fork_branch_name.as_deref(), Some("C"));
+}

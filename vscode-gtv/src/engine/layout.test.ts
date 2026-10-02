@@ -425,4 +425,89 @@ describe('computeLayout', () => {
     // No refs on the hidden parent, so the merge node names nothing.
     expect(findCommit(commits, 'm').merge_branch_name).toBeNull();
   });
+
+  /// R2 (merge destination first): feature forked out of develop mid-way and
+  /// its tip was merged back into develop; feature's tip is NEWER than
+  /// develop's. The merge record must order develop before feature, so the
+  /// shared segment (d1) belongs to develop and feature's fork point lands on
+  /// develop's lane. The old unconditional merged-source-first rule inverted
+  /// exactly this (feature claimed d1, develop forked off feature).
+  it('merge_destination_claims_shared_history', () => {
+    // main:     c1
+    //              \
+    // develop:      d1 -- d2 -- m1(tip)
+    //                 \         /
+    // feature:         f1 -- f2(tip, newer than m1)
+    const commits = [
+      commit('c1', 100, []),
+      commit('d1', 200, ['c1']),
+      commit('f1', 300, ['d1']),
+      commit('d2', 350, ['d1']),
+      commit('m1', 360, ['d2', 'f2']),
+      commit('f2', 400, ['f1']),
+    ];
+    const seeds = [seed('main', 'c1'), seed('develop', 'm1'), seed('feature', 'f2')];
+    const { lanes } = computeLayout(commits, seeds, 'main', null);
+
+    expect(laneOf(commits, 'd1')).toBe('develop'); // shared segment belongs to the merge destination
+    expect(laneOf(commits, 'd2')).toBe('develop');
+    expect(laneOf(commits, 'm1')).toBe('develop');
+    expect(laneOf(commits, 'f1')).toBe('feature');
+    expect(laneOf(commits, 'f2')).toBe('feature');
+    expect(lane(lanes, 'feature').fork_point).toBe('d1');
+    expect(lane(lanes, 'develop').fork_point).toBe('c1');
+    expect(laneOf(commits, 'c1')).toBe('main');
+  });
+
+  /// The merged-tip soft class still beats newest-tip-first when there is no
+  /// counter-evidence: Y merged into main, Z forked out of Y mid-way, Z's tip
+  /// is newer. Y must keep its shared history (Z must not steal y1).
+  it('merged_branch_keeps_history_against_newer_unmerged_fork', () => {
+    // main:  c1 -------- mY -- m2(tip)
+    //          \        /
+    // Y:        y1 -- y2(tip)
+    //            \
+    // Z:          z1(tip, newer than y2)
+    const commits = [
+      commit('c1', 100, []),
+      commit('y1', 200, ['c1']),
+      commit('y2', 300, ['y1']),
+      commit('mY', 350, ['c1', 'y2']),
+      commit('m2', 360, ['mY']),
+      commit('z1', 400, ['y1']),
+    ];
+    const seeds = [seed('main', 'm2'), seed('Y', 'y2'), seed('Z', 'z1')];
+    const { lanes } = computeLayout(commits, seeds, 'main', null);
+
+    expect(laneOf(commits, 'y1')).toBe('Y');
+    expect(laneOf(commits, 'y2')).toBe('Y');
+    expect(laneOf(commits, 'z1')).toBe('Z');
+    expect(lane(lanes, 'Z').fork_point).toBe('y1');
+  });
+
+  /// R1 (ancestor first): P's tip lies on C's first-parent chain, so P claims
+  /// before C even though C's tip is newer. C's fork point is P's tip on P's
+  /// lane (the tip wall alone produced this; R1 pins the ordering itself).
+  it('ancestor_seed_claims_before_descendant', () => {
+    // main:  c1
+    //          \
+    // P:        p1(tip)
+    //             \
+    // C:           s1 -- s2(tip)
+    const commits = [
+      commit('c1', 100, []),
+      commit('p1', 200, ['c1']),
+      commit('s1', 300, ['p1']),
+      commit('s2', 400, ['s1']),
+    ];
+    const seeds = [seed('main', 'c1'), seed('P', 'p1'), seed('C', 's2')];
+    const { lanes } = computeLayout(commits, seeds, 'main', null);
+
+    expect(laneOf(commits, 'p1')).toBe('P');
+    expect(laneOf(commits, 's1')).toBe('C');
+    expect(laneOf(commits, 's2')).toBe('C');
+    expect(lane(lanes, 'C').fork_point).toBe('p1');
+    expect(lane(lanes, 'P').fork_point).toBe('c1');
+    expect(findCommit(commits, 'p1').fork_branch_name).toBe('C');
+  });
 });

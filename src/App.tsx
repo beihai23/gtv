@@ -67,6 +67,7 @@ function App() {
   const [compressed, setCompressed] = useState(true);
   const [showMergeLinks, setShowMergeLinks] = useState(true);
   const [showRefLabels, setShowRefLabels] = useState(true);
+  const [showAnnotations, setShowAnnotations] = useState(false);
 
   // --- Tab shell state ---
   const [tabs, setTabs] = useState<TabInfo[]>([]);
@@ -579,6 +580,8 @@ function App() {
               setShowMergeLinks={setShowMergeLinks}
               showRefLabels={showRefLabels}
               setShowRefLabels={setShowRefLabels}
+              showAnnotations={showAnnotations}
+              setShowAnnotations={setShowAnnotations}
               showIssueReport={showIssueReport}
               setShowIssueReport={setShowIssueReport}
             />

@@ -295,12 +295,54 @@ export class RepoReader {
     return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
   }
 
-  /** Union of the selected branches' lineages. Mirrors filter_by_branches. */
+  /** Filtered view over the selected branches' lineages, built in TWO
+   *  passes. Pass 1 builds the full view (all lane seeds) purely to read
+   *  off each selected lane's ancestry: fork_point -> the lane owning that
+   *  commit -> that lane's fork_point -> ... up to main. Pass 2 walks the
+   *  union of the selected seeds plus every ancestor lane's seed.
+   *
+   *  Why: a fork edge must anchor on the TRUE parent lane. When the parent
+   *  lane's seed is missing from the walk (e.g. main is not selected), its
+   *  commits have no owner and the first selected branch whose walk reaches
+   *  them claims them — the fork line then lands on the wrong lane. The
+   *  closure lanes are render context only; the frontend's chip selection
+   *  state is unaffected. Mirrors filter_by_branches. */
   async filterByBranches(branchNames: string[]): Promise<ViewResult> {
     const all = await this.laneSeeds();
-    const selected = all.filter(s => branchNames.includes(s.name));
-    const data = await this.buildView(selected, PAGE);
-    return { data, seeds: selected, staleNames: this.staleSeeds(selected, data) };
+    const selected = all.filter((s) => branchNames.includes(s.name));
+
+    // Pass 1: full view, read only for lane ancestry.
+    const full = await this.buildView(all, PAGE);
+    const ownerOf = new Map(full.commits.map((c) => [c.id, c.lane_owner]));
+    const forkOf = new Map<string, string>();
+    for (const b of full.branches) {
+      if (b.fork_point !== null) forkOf.set(b.name, b.fork_point);
+    }
+
+    // Ancestor-lane closure: lane -> owner of its fork point -> ..., with
+    // a visited set as the cycle guard.
+    const closure = new Set<string>();
+    const stack = selected.map((s) => s.name);
+    while (stack.length > 0) {
+      const name = stack.pop()!;
+      const fp = forkOf.get(name);
+      if (fp === undefined) continue;
+      const owner = ownerOf.get(fp);
+      if (owner === undefined || owner === '' || closure.has(owner)) continue;
+      closure.add(owner);
+      stack.push(owner);
+    }
+
+    // Pass 2: selected seeds first (unchanged membership), then the
+    // closure lanes' seeds, deduped by name.
+    const seeds = [...selected];
+    for (const s of all) {
+      if (closure.has(s.name) && !seeds.some((x) => x.name === s.name)) {
+        seeds.push(s);
+      }
+    }
+    const data = await this.buildView(seeds, PAGE);
+    return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
   }
 
   /** Next older chunk: full walk minus what the session already holds,

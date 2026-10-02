@@ -7,6 +7,32 @@ import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 import { LANE_HEIGHT } from '../inactive';
 import type { TraceRow, TraceBar, DeadKind } from '../inactive';
 import { headToLaneTip, type ComparePair } from '../compare';
+import { createDelayGate, step as delayGateStep, type DelayGate } from '../delaygate';
+
+/** A busy indicator must hold off for a beat (sub-frame async waits never
+ *  flash it) and, once visible, stay long enough to read as a state rather
+ *  than a strobe. */
+function useDelayedBusy(busy: boolean, delayMs = 350, minShowMs = 500): boolean {
+  const gateRef = useRef<DelayGate | null>(null);
+  const timerRef = useRef<number | undefined>(undefined);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!gateRef.current) gateRef.current = createDelayGate(delayMs, minShowMs);
+    const gate = gateRef.current;
+    const apply = () => {
+      const res = delayGateStep(gate, busy, performance.now());
+      setVisible(res.visible);
+      window.clearTimeout(timerRef.current);
+      timerRef.current = undefined;
+      if (res.at !== null) {
+        timerRef.current = window.setTimeout(apply, Math.max(0, res.at - performance.now()));
+      }
+    };
+    apply();
+    return () => window.clearTimeout(timerRef.current);
+  }, [busy, delayMs, minShowMs]);
+  return visible;
+}
 
 interface TimelineProps {
   data: GitData;
@@ -30,6 +56,9 @@ interface TimelineProps {
   compressed: boolean;
   showMergeLinks: boolean;
   showRefLabels: boolean;
+  /** Fork/merge name annotations (🌱/🔀) on the graph; off by default —
+   *  the hover tooltip carries the same names instead. */
+  showAnnotations: boolean;
   /** Cherry-pick / rebase copy links (empty when the Copies toggle is off). */
   patchLinks: PatchLink[];
   /** Increment to trigger "Fit to view" from outside. */
@@ -41,6 +70,10 @@ interface TimelineProps {
   hasMore: boolean;
   /** An older-history page load is in flight. */
   loadingOlder: boolean;
+  /** An async view rebuild is in flight (branch filter / repo refresh).
+   *  Fed through the delay gate — only waits that outlast the gate show the
+   *  render badge. */
+  busy: boolean;
   /** Called when the user pans near the oldest (left) edge of the scene. */
   onLoadOlder: () => void;
   /** External "jump to commit" (header search); seq increments per jump. */
@@ -89,6 +122,26 @@ const MINIMAP_H = 170;
  *  themes, distinct from every lane color including main's blue. */
 const UNATTRIBUTED_COLOR = '#9E9E9E';
 
+/** Below this on-screen row height (LANE_HEIGHT * zoom scale) the ref badge
+ *  pills and fork/merge annotations mute entirely; HEAD and tag pills stay. */
+const LABEL_MIN_ROW_H = 28;
+
+/** Above this many visible commits the full join redraw reliably blocks the
+ *  main thread past ~300ms on ordinary hardware — long enough to be felt and
+ *  worth pre-lighting the render badge. Smaller scenes redraw synchronously:
+ *  zero badge, zero flicker. */
+const HEAVY_SCENE_COMMITS = 2500;
+
+/** Lane-chip label cap: longer names keep head and tail with an ellipsis in
+ *  the middle (the tail carries the distinguishing part); the chip's title
+ *  holds the full name. */
+const CHIP_NAME_MAX = 28;
+
+function middleEllipsis(name: string): string {
+  if (name.length <= CHIP_NAME_MAX) return name;
+  return `${name.slice(0, 14)}…${name.slice(name.length - 12)}`;
+}
+
 interface LaneMenu {
   x: number;
   y: number;
@@ -98,6 +151,10 @@ interface LaneMenu {
 interface BadgePill {
   name: string;
   is_tag: boolean;
+  is_remote: boolean;
+  /** A remote-tracking twin (any <remote>/x for local x) was folded into
+   *  this local pill; it earns a cloud marker. */
+  synced: boolean;
 }
 
 interface BadgeSpec {
@@ -115,7 +172,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
+export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -130,6 +187,15 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   const [laneMenu, setLaneMenu] = useState<LaneMenu | null>(null);
   /** Endpoints of the last plain-clicked edge; drives the highlight rings. */
   const [edgeHighlight, setEdgeHighlight] = useState<{ from: string; to: string } | null>(null);
+
+  // Render badge: `rendering` covers the heavy full-join redraw (lit BEFORE
+  // the blocking draw so the browser gets a frame to paint it); the async
+  // `busy` prop rides the delay gate so quick rebuilds never flash it.
+  const [rendering, setRendering] = useState(false);
+  const busyDelayed = useDelayedBusy(busy);
+  /** A frame-coalesced cull scheduled by the zoom handler; component-level
+   *  so draw() can cancel a stale frame before rebuilding the scene. */
+  const pendingCullRef = useRef(0);
 
   // View-local state (options themselves live in the app header)
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
@@ -211,6 +277,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     // through the `active` dep with real dimensions.
     if (!active) return;
 
+    // A frame-coalesced cull from the PREVIOUS draw's zoom handler may still
+    // be pending; its closures reference the scene this draw is about to
+    // wipe. Cancel it — the draw rebuilds everything anyway.
+    if (pendingCullRef.current) {
+      cancelAnimationFrame(pendingCullRef.current);
+      pendingCullRef.current = 0;
+    }
+
     const svg = d3.select(svgRef.current);
     const container = containerRef.current;
     const width = container.clientWidth;
@@ -285,6 +359,24 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       }
     };
 
+    // Frame-coalesced follow-up work: the transform itself applies per zoom
+    // event (the canvas must track the pointer exactly), while the expensive
+    // per-event bookkeeping — a full-scene cull, the minimap viewport, the
+    // lane band, the ruler — runs at most ONCE per animation frame. The rAF
+    // callback reads transformRef (always the LATEST transform), so the
+    // final frame of a gesture is guaranteed to cull against the resting
+    // camera. draw() cancels a pending frame before rebuilding the scene.
+    const scheduleFrame = () => {
+      if (pendingCullRef.current) return;
+      pendingCullRef.current = requestAnimationFrame(() => {
+        pendingCullRef.current = 0;
+        cull();
+        minimapViewport();
+        updateLaneBand?.();
+        updateRuler?.();
+      });
+    };
+
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.005, 40])
       // Wheel events are handled by our own trackpad-friendly handler
@@ -293,10 +385,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform.toString());
-        cull();
-        minimapViewport();
-        updateLaneBand?.();
-        updateRuler?.();
+        scheduleFrame();
         maybeLoadOlder(event.transform);
       });
     svg.call(zoom);
@@ -577,14 +666,15 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           : memberLanes.has(d.name) ? 'lane-chip member-lane'
             : 'lane-chip'))
       .attr('title', (d: BranchLane) => {
-        if (d.name === headBranch) return t('currentBranchTip');
-        const member = memberLanes.get(d.name);
-        return member != null ? t('checkedOutIn', { name: member }) : null;
+        const hint = d.name === headBranch ? t('currentBranchTip')
+          : memberLanes.has(d.name) ? t('checkedOutIn', { name: memberLanes.get(d.name)! })
+            : null;
+        return hint ? `${d.name} — ${hint}` : d.name;
       })
       .style('color', (d: BranchLane) => d.color)
       .style('border-color', (d: BranchLane) => d.color)
       .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
-      .text((d: BranchLane) => d.name)
+      .text((d: BranchLane) => middleEllipsis(d.name))
       .on('click', (_e: MouseEvent, d: BranchLane) => {
         setFocusedLane(prev => (prev === d.name ? null : d.name));
       })
@@ -972,12 +1062,37 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .map(c => ({ c, refs: filterRefs(c.branch_refs, hideRemotes) }))
         .filter(e => e.refs.length > 0)
         .sort((a, b) => a.c.x - b.c.x);
+      // A local branch and its remote-tracking counterpart collapse into ONE
+      // pill: any remote whose post-prefix name matches a local ref
+      // (upstream/x folds into x too) drops out, and the local pill earns a
+      // cloud marker. The folded names stay in the tooltip and <title>.
+      const foldRemotes = (refs: BranchRef[]): { shown: BranchRef[]; synced: Set<string> } => {
+        const locals = new Set(refs.filter(r => !r.is_remote && !r.is_tag).map(r => r.name));
+        const synced = new Set<string>();
+        const shown = refs.filter(r => {
+          if (!r.is_remote) return true;
+          const slash = r.name.indexOf('/');
+          if (slash >= 0 && locals.has(r.name.slice(slash + 1))) {
+            synced.add(r.name.slice(slash + 1));
+            return false;
+          }
+          return true;
+        });
+        return { shown, synced };
+      };
       for (const { c, refs } of withRefs) {
-        const shown = refs.slice(0, 2);
-        const extra = refs.length - shown.length;
-        const names: BadgePill[] = shown.map(r => ({ name: r.name, is_tag: r.is_tag }));
-        if (extra > 0) names.push({ name: `+${extra}`, is_tag: false });
-        const width = Math.max(...names.map(n => pillW(n.name)));
+        const folded = foldRemotes(refs);
+        const shown = folded.shown.slice(0, 2);
+        const extra = folded.shown.length - shown.length;
+        const names: BadgePill[] = shown.map(r => ({
+          name: r.name,
+          is_tag: r.is_tag,
+          is_remote: r.is_remote,
+          synced: folded.synced.has(r.name),
+        }));
+        if (extra > 0) names.push({ name: `+${extra}`, is_tag: false, is_remote: false, synced: false });
+        const pillText = (n: BadgePill) => (n.synced ? `${n.name} ⤒` : n.name);
+        const width = Math.max(...names.map(n => pillW(pillText(n))));
         const stackH = (names.length - 1) * 18;
         let level = -1;
         for (let l = 0; l <= MAX_LEVEL; l++) {
@@ -1020,20 +1135,40 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
             .attr('opacity', 0.65);
         }
         s.names.forEach((n, i) => {
-          const w = pillW(n.name);
-          const item = grp.append('g').attr('transform', `translate(${-w / 2}, ${-i * 18})`);
+          const w = pillW(n.synced ? `${n.name} ⤒` : n.name);
+          // Remote-tracking pills read as SECONDARY: outline style (canvas
+          // fill + lane-color stroke/text) against the local pills' solid
+          // lane-color fill. Tags keep their solid purple.
+          const outline = n.is_remote && !n.is_tag;
+          const laneColor = ownerColor(s.c.lane_owner);
+          const item = grp.append('g')
+            .datum(n)
+            .attr('class', n.is_tag ? 'pill pill-tag' : 'pill')
+            .attr('transform', `translate(${-w / 2}, ${-i * 18})`);
           item.append('rect')
             .attr('x', 0).attr('y', -13)
             .attr('width', w).attr('height', 16)
             .attr('rx', 8)
-            .attr('fill', n.is_tag ? cssVar('--tag-pill', '#9C27B0') : n.name.startsWith('+') ? cssVar('--text-faint', '#555555') : ownerColor(s.c.lane_owner))
+            .attr('fill', n.is_tag ? cssVar('--tag-pill', '#9C27B0') : n.name.startsWith('+') ? cssVar('--text-faint', '#555555') : outline ? cssVar('--bg-canvas', '#1a1a2e') : laneColor)
+            .attr('stroke', outline ? laneColor : 'none')
+            .attr('stroke-width', outline ? 1 : 0)
             .attr('opacity', 0.92);
-          item.append('text')
+          const label = item.append('text')
             .attr('x', w / 2).attr('y', -2)
             .attr('text-anchor', 'middle')
             .attr('font-size', '10px')
-            .attr('fill', '#fff')
-            .text(n.name);
+            .attr('fill', outline ? laneColor : '#fff');
+          if (n.synced) {
+            label.append('tspan').text(n.name);
+            label.append('tspan').attr('opacity', 0.7).text(' ⤒');
+          } else if (n.is_remote && n.name.includes('/')) {
+            // Dim the remote prefix (origin/) so the branch name pops.
+            const cut = n.name.indexOf('/') + 1;
+            label.append('tspan').attr('opacity', 0.55).text(n.name.slice(0, cut));
+            label.append('tspan').text(n.name.slice(cut));
+          } else {
+            label.text(n.name);
+          }
         });
       });
     }
@@ -1111,30 +1246,34 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     const laneColorOf = (name: string, fallback: string) =>
       branchColorMap.get(name) ?? fallback;
 
-    drawAnnotations(
-      'fork-label',
-      visibleCommits.filter(c => c.fork_branch_name),
-      c => (c.fork_branch_name ?? '').split(', ').map((name, i) => ({
-        text: (i === 0 ? '🌱 ' : ', ') + name,
-        color: laneColorOf(name, '#4A90D9'),
-      })),
-      '#4A90D9',
-      c => c.y + 24,
-      1,
-    );
-
-    if (showMergeLinks) {
+    // Fork/merge annotations are opt-in (showAnnotations, default off): the
+    // hover tooltip carries the same names, so the canvas stays quiet.
+    if (showAnnotations) {
       drawAnnotations(
-        'merge-label',
-        visibleCommits.filter(c => c.merge_branch_name),
-        c => [{
-          text: `🔀 ${c.merge_branch_name}`,
-          color: laneColorOf(c.merge_branch_name ?? '', cssVar('--accent', '#E91E63')),
-        }],
-        cssVar('--accent', '#E91E63'),
-        c => c.y - nodeRadius(c) - 8,
-        -1,
+        'fork-label',
+        visibleCommits.filter(c => c.fork_branch_name),
+        c => (c.fork_branch_name ?? '').split(', ').map((name, i) => ({
+          text: (i === 0 ? '🌱 ' : ', ') + name,
+          color: laneColorOf(name, '#4A90D9'),
+        })),
+        '#4A90D9',
+        c => c.y + 24,
+        1,
       );
+
+      if (showMergeLinks) {
+        drawAnnotations(
+          'merge-label',
+          visibleCommits.filter(c => c.merge_branch_name),
+          c => [{
+            text: `🔀 ${c.merge_branch_name}`,
+            color: laneColorOf(c.merge_branch_name ?? '', cssVar('--accent', '#E91E63')),
+          }],
+          cssVar('--accent', '#E91E63'),
+          c => c.y - nodeRadius(c) - 8,
+          -1,
+        );
+      }
     }
 
     // --- viewport culling: only elements inside (or near) the visible scene
@@ -1149,12 +1288,24 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       const y1 = (height - t.y) / t.k + M;
       const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
 
+      // Density mute: below the label row-height threshold the pill stack
+      // and the fork/merge annotations drop out entirely; HEAD and tag
+      // pills stay readable at any zoom.
+      const rowH = LANE_HEIGHT * t.k;
+      const labelsMuted = rowH < LABEL_MIN_ROW_H;
+
       g.selectAll<SVGGElement, CommitNode>('.node')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
       g.selectAll<SVGGElement, BadgeSpec>('.ref-badges')
-        .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
+        .style('display', d => {
+          if (!inView(d.c.x, d.c.y)) return 'none';
+          if (labelsMuted && !d.names.some(n => n.is_tag)) return 'none';
+          return null;
+        });
+      g.selectAll<SVGGElement, BadgePill>('.ref-badges .pill')
+        .style('display', d => (labelsMuted && !d.is_tag ? 'none' : null));
       g.selectAll<SVGGElement, AnnSpec>('.fork-label,.merge-label')
-        .style('display', d => (inView(d.c.x, d.c.y) ? null : 'none'));
+        .style('display', d => (labelsMuted || !inView(d.c.x, d.c.y) ? 'none' : null));
       // Cull by bounding box, not endpoints: a fork polyline's long vertical
       // run (or a merge curve's midsection) can cross the viewport while both
       // endpoint nodes are offscreen — endpoint testing made such edges
@@ -1200,7 +1351,6 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           if (sy < 34 || sy > height - 8) return 'none';
           // At heavy zoom-out lanes squeeze together; thin the pinned chips so
           // they never overlap on screen (every Nth lane keeps its label).
-          const rowH = LANE_HEIGHT * t.k;
           if (rowH < 18 && d.lane_index % Math.ceil(18 / rowH) !== 0) return 'none';
           return null;
         })
@@ -1395,12 +1545,39 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
 
+  // Full redraw. Small scenes draw synchronously (zero badge, zero flicker).
+  // A heavy scene's join blocks the main thread past a frame budget, and a
+  // synchronous block could never paint a spinner — so the badge goes up
+  // FIRST and the draw runs inside a double rAF: the browser gets one full
+  // frame to paint the badge before the blocking draw begins. Cleanup
+  // cancels a pending draw (fast successive dep changes don't stack stale
+  // redraws) and drops the badge. `rendering` deliberately stays OUT of the
+  // deps (it would retrigger the effect it gates); visibleCommits.length is
+  // fresh because visibleCommits is already in draw's deps.
   useEffect(() => {
-    draw();
+    let rafOuter = 0;
+    let rafInner = 0;
+    const heavy = visibleCommits.length > HEAVY_SCENE_COMMITS;
+    if (heavy) {
+      setRendering(true);
+      rafOuter = requestAnimationFrame(() => {
+        rafInner = requestAnimationFrame(() => {
+          draw();
+          setRendering(false);
+        });
+      });
+    } else {
+      draw();
+    }
     window.addEventListener('resize', draw);
-    return () => window.removeEventListener('resize', draw);
+    return () => {
+      window.removeEventListener('resize', draw);
+      cancelAnimationFrame(rafOuter);
+      cancelAnimationFrame(rafInner);
+      if (heavy) setRendering(false);
+    };
   }, [draw]);
 
   // Container-size redraws: the window resize listener only covers resizes
@@ -1580,6 +1757,13 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       <div className="lane-rail-blur"></div>
       <div ref={laneRailRef} className="lane-rail"></div>
 
+      {(rendering || busyDelayed) && (
+        <div className="render-badge" aria-live="polite">
+          <span className="render-spinner" aria-hidden="true" />
+          {t('rendering')}
+        </div>
+      )}
+
       <div className="view-toolbar">
         {loadingOlder && (
           <span className="view-btn loading-older">{t('loadingOlder')}</span>
@@ -1680,6 +1864,14 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
                 </span>
               ))}
             </div>
+          )}
+          {/* Fork/merge recall: the canvas annotations are opt-in, so the
+              tooltip always carries the branch names for these points. */}
+          {hoveredCommit.fork_branch_name && (
+            <div className="tooltip-time">🌱 {hoveredCommit.fork_branch_name}</div>
+          )}
+          {hoveredCommit.merge_branch_name && (
+            <div className="tooltip-time">🔀 {hoveredCommit.merge_branch_name}</div>
           )}
         </div>
       )}

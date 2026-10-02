@@ -126,36 +126,132 @@ export function computeLayout(
   // owner[i] = lane name that claimed commits[i]
   const owner: (string | null)[] = new Array(commits.length).fill(null);
 
-  // Order seeds: main first; then lanes whose tip was merged into another
-  // lane (the merge record proves their lineage was integrated as a unit,
-  // so they get first claim on their ancestry); then the rest. Within each
-  // class, newest tip first.
+  // Seed order decides who claims shared ancestry first. Hard evidence
+  // beats the soft heuristic classes:
+  //   R1 (ancestor): seed P's tip lies on seed C's first-parent chain
+  //      -> P claims before C.
+  //   R2 (merge destination): seed S's tip is a non-first parent of a
+  //      merge commit m, and m lies on seed T's first-parent chain
+  //      -> T claims before S. (The old rule gave merged SOURCES
+  //      unconditional priority, which handed the destination branch's
+  //      own history to the merged branch whenever the destination was
+  //      not main.)
+  // R1+R2 form precedence edges resolved with Kahn's algorithm; among the
+  // ready (in-degree 0) seeds a soft key picks: main first, then lanes
+  // whose tip was merged into another lane (the merge record proves their
+  // lineage was integrated as a unit — covers "Y merged into main, Z
+  // forked mid-Y"), newest tip first, name as the final tiebreak. A cycle
+  // (mutual merges) is broken by the same soft key so the sort always
+  // terminates. When the DAG offers no evidence at all — two branches
+  // forked out of each other's mid-region with no merge and no ancestry
+  // relation — the direction is genuinely ambiguous and newest-tip-first
+  // decides; that residual misattribution is the documented heuristic
+  // limit.
   const mergedTips = new Set<string>();
   for (const c of commits) {
     for (const p of c.parents.slice(1)) {
       mergedTips.add(p);
     }
   }
-  const seedKey = (s: LaneSeed): [number, number] => {
-    if (s.name === mainBranch) {
-      return [0, I64_MAX];
+
+  // First-parent chain (commit ids) of each seed's tip, stopping at the
+  // window edge. The has-check also guards against a corrupt cycle.
+  const chains: Set<string>[] = seeds.map((s) => {
+    const set = new Set<string>();
+    let cursor = indexOf.get(s.tip);
+    while (cursor !== undefined) {
+      if (set.has(commits[cursor].id)) {
+        break;
+      }
+      set.add(commits[cursor].id);
+      const first: string | undefined = commits[cursor].parents[0];
+      cursor = first !== undefined ? indexOf.get(first) : undefined;
     }
+    return set;
+  });
+
+  // Precedence edges (before, after) as seed-index pairs, deduped.
+  const precedence = new Set<string>();
+  // R1: P's tip on C's chain -> P before C. Equal tips are excluded: two
+  // seeds on one commit would otherwise form a spurious 2-cycle.
+  for (let c = 0; c < seeds.length; c++) {
+    for (let p = 0; p < seeds.length; p++) {
+      if (p !== c && seeds[p].tip !== seeds[c].tip && chains[c].has(seeds[p].tip)) {
+        precedence.add(`${p}:${c}`);
+      }
+    }
+  }
+  // R2: S's tip merged at m, m on T's chain -> T before S.
+  for (const m of commits) {
+    if (m.parents.length < 2) {
+      continue;
+    }
+    for (const parent of m.parents.slice(1)) {
+      for (let s = 0; s < seeds.length; s++) {
+        if (seeds[s].tip !== parent) {
+          continue;
+        }
+        for (let t = 0; t < seeds.length; t++) {
+          if (t !== s && chains[t].has(m.id)) {
+            precedence.add(`${t}:${s}`);
+          }
+        }
+      }
+    }
+  }
+
+  // Soft priority key (lower wins): main class, merged-tip class, the
+  // rest; newest tip first within a class (descending ts instead of
+  // negation: -i64::MIN overflows in Rust for tips outside the window);
+  // name as a stable tiebreak.
+  const softKey = (s: LaneSeed): [number, number, string] => {
+    const cls = s.name === mainBranch ? 0 : mergedTips.has(s.tip) ? 1 : 2;
     const ti = indexOf.get(s.tip);
     const ts = ti !== undefined ? commits[ti].timestamp : I64_MIN;
-    const cls = mergedTips.has(s.tip) ? 1 : 2;
-    return [cls, ts];
+    return [cls, ts, s.name];
   };
-  // Rust sort_by_key is stable; Array.prototype.sort is stable in ES2019+.
-  // Reverse(newest first) maps to a descending second key instead of
-  // negation: -i64::MIN overflows for tips outside the walked window.
-  const orderedSeeds = [...seeds].sort((a, b) => {
-    const ka = seedKey(a);
-    const kb = seedKey(b);
-    if (ka[0] !== kb[0]) {
-      return ka[0] - kb[0];
+  const compareSoft = (a: LaneSeed, b: LaneSeed): number => {
+    const ka = softKey(a);
+    const kb = softKey(b);
+    if (ka[0] !== kb[0]) return ka[0] - kb[0];
+    if (ka[1] !== kb[1]) return kb[1] - ka[1]; // newest tip first
+    return ka[2] < kb[2] ? -1 : ka[2] > kb[2] ? 1 : 0;
+  };
+
+  // Kahn's algorithm over the precedence edges; each round takes the
+  // soft-key-smallest ready seed. No ready seed means a cycle — take the
+  // soft-key-smallest remaining seed outright to guarantee termination.
+  const successors: number[][] = seeds.map(() => []);
+  const indegree = new Array<number>(seeds.length).fill(0);
+  for (const e of precedence) {
+    const [before, after] = e.split(':').map(Number);
+    successors[before].push(after);
+    indegree[after] += 1;
+  }
+  const done = new Array<boolean>(seeds.length).fill(false);
+  const orderedSeeds: LaneSeed[] = [];
+  for (;;) {
+    let pick = -1;
+    for (let i = 0; i < seeds.length; i++) {
+      if (!done[i] && indegree[i] === 0 && (pick < 0 || compareSoft(seeds[i], seeds[pick]) < 0)) {
+        pick = i;
+      }
     }
-    return kb[1] - ka[1];
-  });
+    if (pick < 0) {
+      // Cycle: fall back to the soft-key-smallest remaining seed.
+      for (let i = 0; i < seeds.length; i++) {
+        if (!done[i] && (pick < 0 || compareSoft(seeds[i], seeds[pick]) < 0)) {
+          pick = i;
+        }
+      }
+    }
+    if (pick < 0) break;
+    done[pick] = true;
+    orderedSeeds.push(seeds[pick]);
+    for (const next of successors[pick]) {
+      indegree[next] -= 1;
+    }
+  }
 
   // Branch tips act as walls: a tip commit belongs to its own branch even
   // if a descendant branch claims its lineage first (branch-from-branch

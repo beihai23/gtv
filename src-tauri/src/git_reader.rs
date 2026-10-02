@@ -906,20 +906,66 @@ impl GitReader {
         })
     }
 
-    /// Keep the complete lineage of the selected branches: walk from each
-    /// selected tip and take the union, instead of keeping only commits the
-    /// refs point at directly.
+    /// Filtered view over the selected branches' lineages, built in TWO
+    /// passes. Pass 1 builds the full view (all lane seeds) purely to read
+    /// off each selected lane's ancestry: fork_point -> the lane owning
+    /// that commit -> that lane's fork_point -> ... up to main. Pass 2
+    /// walks the union of the selected seeds plus every ancestor lane's
+    /// seed.
+    ///
+    /// Why: a fork edge must anchor on the TRUE parent lane. When the
+    /// parent lane's seed is missing from the walk (e.g. main is not
+    /// selected), its commits have no owner and the first selected branch
+    /// whose walk reaches them claims them — the fork line then lands on
+    /// the wrong lane. The closure lanes are render context only; the
+    /// frontend's chip selection state is unaffected.
     pub fn filter_by_branches(&mut self, branch_names: &[String]) -> Result<ViewResult, String> {
         let all_seeds = self.collect_lane_seeds()?;
         let selected: Vec<LaneSeed> = all_seeds
-            .into_iter()
+            .iter()
             .filter(|s| branch_names.iter().any(|n| n == &s.name))
+            .cloned()
             .collect();
-        let data = self.build_view(&selected, 2000)?;
-        let stale_names = Self::stale_seeds(&selected, &data);
+
+        // Pass 1: full view, read only for lane ancestry.
+        let full = self.build_view(&all_seeds, 2000)?;
+        let owner_of: HashMap<&str, &str> = full
+            .commits
+            .iter()
+            .map(|c| (c.id.as_str(), c.lane_owner.as_str()))
+            .collect();
+        let fork_of: HashMap<&str, &str> = full
+            .branches
+            .iter()
+            .filter_map(|b| b.fork_point.as_deref().map(|fp| (b.name.as_str(), fp)))
+            .collect();
+
+        // Ancestor-lane closure: lane -> owner of its fork point -> ...,
+        // with a visited set as the cycle guard.
+        let mut closure: HashSet<String> = HashSet::new();
+        let mut stack: Vec<&str> = selected.iter().map(|s| s.name.as_str()).collect();
+        while let Some(name) = stack.pop() {
+            let Some(fp) = fork_of.get(name) else { continue };
+            let Some(owner) = owner_of.get(fp) else { continue };
+            if owner.is_empty() || !closure.insert(owner.to_string()) {
+                continue;
+            }
+            stack.push(owner);
+        }
+
+        // Pass 2: selected seeds first (unchanged membership), then the
+        // closure lanes' seeds, deduped by name.
+        let mut seeds = selected.clone();
+        for s in &all_seeds {
+            if closure.contains(&s.name) && !seeds.iter().any(|x| x.name == s.name) {
+                seeds.push(s.clone());
+            }
+        }
+        let data = self.build_view(&seeds, 2000)?;
+        let stale_names = Self::stale_seeds(&seeds, &data);
         Ok(ViewResult {
             data,
-            seeds: selected,
+            seeds,
             stale_names,
         })
     }
