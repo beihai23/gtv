@@ -279,6 +279,14 @@
           return null;
         }
         case 'set_active_repository': return null; // recorded, ack only
+        // The member menu re-enumerates the family on every open
+        // (RepoView's memberMenuOpen effect -> App's refreshFamily).
+        case 'list_worktree_members': {
+          for (const [p, id] of [...MOCK.repos]) {
+            if (id === args?.repoId) return familyOf(p);
+          }
+          throw new Error(`mock: unknown repo_id ${args?.repoId}`);
+        }
         case 'set_auto_fetch': return null;        // recorded, ack only
         // The mock cannot run git: a manual fetch is a no-op that reports a
         // clean result (null), same shape as the real command's Ok(None).

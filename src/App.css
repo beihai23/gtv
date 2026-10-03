@@ -184,9 +184,11 @@
      the identity card, so the panel must hang off the header itself, not
      off a fixed viewport offset (it once sliced across the toolbar). */
   position: relative;
-  /* Elevation ladder level 1: the chrome bar floats just above the canvas.
-     A whisper of shadow, not a shelf. (Ref panel rides z 60, untouched.) */
-  z-index: 5;
+  /* The header's dropdowns (member menu, ref panel) are trapped in this
+     stacking context, so the level must clear every canvas overlay (rail
+     14/15, toolbar 20, render badge 30) or lane chips paint over an open
+     menu. Side panels (60) and modals stay above. */
+  z-index: 40;
   box-shadow: 0 6px 20px -12px var(--shadow);
 }
 
