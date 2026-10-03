@@ -1562,7 +1562,10 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 /* Compact the date pickers (default width would dominate the toolbar) and
    follow the app theme for the native calendar-picker icon. */
 .date-input { width: 122px; color-scheme: dark; }
-:root[data-theme='github-light'] .date-input { color-scheme: light; }
+:root[data-theme='github-light'] .date-input,
+:root[data-theme='solarized-light'] .date-input,
+:root[data-theme='catppuccin-latte'] .date-input,
+:root[data-theme='tokyo-night-light'] .date-input { color-scheme: light; }
 
 /* --- minimap (bottom-right overlay) --- */
 .minimap {
