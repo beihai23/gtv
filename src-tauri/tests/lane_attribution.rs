@@ -255,3 +255,127 @@ fn behind_local_main_still_owns_upstream_history() {
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
+
+/// Regression for the R1-removal bug: release/x points at M3, an ancestor
+/// commit ON main's first-parent chain (a branch fast-forwarded into main).
+/// The removed R1 precedence edge ordered release/x before main, so it
+/// claimed M1..M3 and main's lane began mid-life at M4 with a fork point.
+/// Main must claim first and own the whole chain; release/x is zero-length
+/// (no lane), and feat/f forks off the main lane.
+#[test]
+fn ancestor_tip_branch_does_not_steal_mainline() {
+    let dir = temp_repo("ancestor-tip");
+    let mut m: Vec<String> = Vec::new();
+    for i in 1..=6usize {
+        let date = format!("2026-09-{}T09:00:00", 15 + i);
+        m.push(commit_at(
+            &dir,
+            "f.txt",
+            &format!("m{i}\n"),
+            &format!("M{i}"),
+            &date,
+        ));
+    }
+    git_at(&dir, "2026-09-22T09:00:00", &["branch", "release/x", &m[2]]);
+    git_at(&dir, "2026-09-23T09:00:00", &["checkout", "-b", "feat/f", &m[4]]);
+    let _f1 = commit_at(&dir, "g.txt", "f1\n", "F1", "2026-09-23T09:00:00");
+    git_at(&dir, "2026-09-23T09:00:00", &["checkout", "main"]);
+
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let view = reader.read_git_data(2000).expect("read view");
+    let owner = |id: &str| {
+        view.data
+            .commits
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("commit {id} not in view"))
+            .lane_owner
+            .clone()
+    };
+
+    let main_lane = view
+        .data
+        .branches
+        .iter()
+        .find(|l| l.name == "main")
+        .expect("main lane");
+    assert_eq!(main_lane.lane_index, 0, "main must be lane 0");
+    for (i, id) in m.iter().enumerate() {
+        assert_eq!(owner(id), "main", "M{} must stay on main", i + 1);
+    }
+    assert!(
+        !view.data.branches.iter().any(|l| l.name == "release/x"),
+        "a zero-length ancestor-tip branch must not form a lane"
+    );
+    let lane_f = view
+        .data
+        .branches
+        .iter()
+        .find(|l| l.name == "feat/f")
+        .expect("feat/f lane");
+    assert_eq!(lane_f.fork_point.as_deref(), Some(m[4].as_str()));
+    assert_eq!(owner(&m[4]), "main", "feat/f's fork point must render on main");
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// R2 main exemption: feat/y merges main's newest tip into itself (a sync
+/// merge). main's tip is then a non-first parent of a merge on feat/y's
+/// first-parent chain — without the exemption R2 would order feat/y before
+/// main and hand the mainline to feat/y. main must keep its whole chain.
+#[test]
+fn sync_merge_of_main_does_not_demote_main() {
+    let dir = temp_repo("sync-merge");
+    let mut m: Vec<String> = Vec::new();
+    for i in 1..=6usize {
+        let date = format!("2026-09-{}T09:00:00", 15 + i);
+        m.push(commit_at(
+            &dir,
+            "f.txt",
+            &format!("m{i}\n"),
+            &format!("M{i}"),
+            &date,
+        ));
+    }
+    git_at(&dir, "2026-09-23T09:00:00", &["checkout", "-b", "feat/y", &m[4]]);
+    let _y1 = commit_at(&dir, "g.txt", "y1\n", "Y1", "2026-09-23T09:00:00");
+    git_at(
+        &dir,
+        "2026-09-24T09:00:00",
+        &["merge", "--no-ff", "main", "-m", "sync main into feat/y"],
+    );
+    git_at(&dir, "2026-09-24T09:00:00", &["checkout", "main"]);
+
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let view = reader.read_git_data(2000).expect("read view");
+    let owner = |id: &str| {
+        view.data
+            .commits
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("commit {id} not in view"))
+            .lane_owner
+            .clone()
+    };
+
+    let main_lane = view
+        .data
+        .branches
+        .iter()
+        .find(|l| l.name == "main")
+        .expect("main lane");
+    assert_eq!(main_lane.lane_index, 0, "main must stay lane 0");
+    for (i, id) in m.iter().enumerate() {
+        assert_eq!(owner(id), "main", "M{} must stay on main", i + 1);
+    }
+    let lane_y = view
+        .data
+        .branches
+        .iter()
+        .find(|l| l.name == "feat/y")
+        .expect("feat/y lane");
+    assert_eq!(lane_y.fork_point.as_deref(), Some(m[4].as_str()));
+    assert_eq!(owner(&m[4]), "main", "feat/y's fork point must render on main");
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}

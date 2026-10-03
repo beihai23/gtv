@@ -118,27 +118,33 @@ pub fn compute_layout(
     // owner[i] = lane name that claimed commits[i]
     let mut owner: Vec<Option<String>> = vec![None; commits.len()];
 
-    // Seed order decides who claims shared ancestry first. Hard evidence
-    // beats the soft heuristic classes:
-    //   R1 (ancestor): seed P's tip lies on seed C's first-parent chain
-    //      -> P claims before C.
+    // Seed order decides who claims shared ancestry first. Main claims
+    // first unconditionally: no precedence edge may ever demote the trunk
+    // behind a side branch. (The removed R1 rule — "a seed whose tip lies
+    // on another's first-parent chain claims first" — did exactly that:
+    // an ancestor-tip branch like release/x, ordered before main, walked
+    // straight down the mainline and stole its whole history, because from
+    // its own tip it never hits main's tip wall.)
     //   R2 (merge destination): seed S's tip is a non-first parent of a
     //      merge commit m, and m lies on seed T's first-parent chain
-    //      -> T claims before S. (The old rule gave merged SOURCES
-    //      unconditional priority, which handed the destination branch's
-    //      own history to the merged branch whenever the destination was
-    //      not main.)
-    // R1+R2 form precedence edges resolved with Kahn's algorithm; among the
-    // ready (in-degree 0) seeds a soft key picks: main first, then lanes
-    // whose tip was merged into another lane (the merge record proves their
+    //      -> T claims before S, EXCEPT when S is main: merging main into
+    //      your branch (a sync merge) must not demote main. (The old rule
+    //      gave merged SOURCES unconditional priority, which handed the
+    //      destination branch's own history to the merged branch whenever
+    //      the destination was not main.)
+    // R2 edges are resolved with Kahn's algorithm; among the ready
+    // (in-degree 0) seeds a soft key picks: main first, then lanes whose
+    // tip was merged into another lane (the merge record proves their
     // lineage was integrated as a unit — covers "Y merged into main, Z
     // forked mid-Y"), newest tip first, name as the final tiebreak. A cycle
     // (mutual merges) is broken by the same soft key so the sort always
-    // terminates. When the DAG offers no evidence at all — two branches
-    // forked out of each other's mid-region with no merge and no ancestry
-    // relation — the direction is genuinely ambiguous and newest-tip-first
-    // decides; that residual misattribution is the documented heuristic
-    // limit.
+    // terminates. Ordering alone does not protect branch tips — the tip
+    // wall in the claiming loop below does (a walk stops at another lane's
+    // tip commit regardless of who walks first). When the DAG offers no
+    // evidence at all — two branches forked out of each other's mid-region
+    // with no merge and no ancestry relation — the direction is genuinely
+    // ambiguous and newest-tip-first decides; that residual misattribution
+    // is the documented heuristic limit.
     let merged_tips: HashSet<&str> = commits
         .iter()
         .flat_map(|c| c.parents.iter().skip(1))
@@ -171,23 +177,16 @@ pub fn compute_layout(
 
     // Precedence edges (before, after) as seed indices, deduped.
     let mut precedence: HashSet<(usize, usize)> = HashSet::new();
-    // R1: P's tip on C's chain -> P before C. Equal tips are excluded: two
-    // seeds on one commit would otherwise form a spurious 2-cycle.
-    for (c, seed_c) in seeds.iter().enumerate() {
-        for (p, seed_p) in seeds.iter().enumerate() {
-            if p != c && seed_p.tip != seed_c.tip && chains[c].contains(seed_p.tip.as_str()) {
-                precedence.insert((p, c));
-            }
-        }
-    }
-    // R2: S's tip merged at m, m on T's chain -> T before S.
+    // R2: S's tip merged at m, m on T's chain -> T before S. Main is
+    // exempt as the source: a sync merge (main merged into a side branch)
+    // must not order that branch before the trunk.
     for m in commits.iter() {
         if m.parents.len() < 2 {
             continue;
         }
         for parent in &m.parents[1..] {
             for (s, seed_s) in seeds.iter().enumerate() {
-                if &seed_s.tip != parent {
+                if &seed_s.tip != parent || seed_s.name == main_branch {
                     continue;
                 }
                 for (t, _) in seeds.iter().enumerate() {

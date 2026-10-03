@@ -522,9 +522,12 @@ fn merged_branch_keeps_history_against_newer_unmerged_fork() {
     assert_eq!(lane(&lanes, "Z").fork_point.as_deref(), Some("y1"));
 }
 
-/// R1 (ancestor first): P's tip lies on C's first-parent chain, so P claims
-/// before C even though C's tip is newer. C's fork point is P's tip on P's
-/// lane (the tip wall alone produced this; R1 pins the ordering itself).
+/// Ancestor-tip protection: P's tip lies on C's first-parent chain. Even
+/// though C's tip is newer (so C claims first under the soft key now that
+/// the R1 ordering rule is removed), C's walk must stop at p1 — the tip
+/// wall alone covers this: a non-main walk never claims through another
+/// lane's tip, regardless of seed order. C's fork point is P's tip on P's
+/// lane.
 #[test]
 fn ancestor_seed_claims_before_descendant() {
     // main:  c1
@@ -548,6 +551,47 @@ fn ancestor_seed_claims_before_descendant() {
     assert_eq!(lane(&lanes, "P").fork_point.as_deref(), Some("c1"));
     let p1 = commits.iter().find(|c| c.id == "p1").unwrap();
     assert_eq!(p1.fork_branch_name.as_deref(), Some("C"));
+}
+
+/// Regression for the R1-removal bug (5b860a3): release/x points at m3, an
+/// ancestor commit ON main's first-parent chain (a fast-forwarded branch).
+/// Ordered before main by the old R1 edge, it walked down the mainline and
+/// stole m1..m3; main's lane started mid-life at m4 with a fork point.
+/// Main must claim first and own the whole chain; release/x is zero-length
+/// (no lane), and feat/f forks off the main lane.
+#[test]
+fn ancestor_tip_branch_does_not_steal_mainline() {
+    // main:       m1 -- m2 -- m3 -- m4 -- m5 -- m6(tip)
+    // release/x:             ^tip
+    // feat/f:                            \ f1(tip)
+    let mut commits = vec![
+        commit("m1", 100, &[]),
+        commit("m2", 200, &["m1"]),
+        commit("m3", 300, &["m2"]),
+        commit("m4", 400, &["m3"]),
+        commit("m5", 500, &["m4"]),
+        commit("m6", 600, &["m5"]),
+        commit("f1", 550, &["m5"]),
+    ];
+    let seeds = [
+        seed("main", "m6"),
+        seed("release/x", "m3"),
+        seed("feat/f", "f1"),
+    ];
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", Some("m6"));
+
+    assert_eq!(lane(&lanes, "main").lane_index, 0);
+    for id in ["m1", "m2", "m3", "m4", "m5", "m6"] {
+        assert_eq!(lane_of(&commits, id), "main", "{id} must stay on main");
+    }
+    assert!(
+        !lanes.iter().any(|l| l.name == "release/x"),
+        "a zero-length ancestor-tip branch must not form a lane"
+    );
+    let feat = lane(&lanes, "feat/f");
+    assert_eq!(feat.fork_point.as_deref(), Some("m5"));
+    assert_eq!(lane_of(&commits, "m5"), "main", "feat/f's fork point must render on main");
+    assert_eq!(lane_of(&commits, "f1"), "feat/f");
 }
 
 /// A lane seeded with an extra upstream tip (local main behind origin/main)

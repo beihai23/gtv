@@ -56,19 +56,24 @@ src-tauri/src/
                   the single source of truth for the IPC contract
   layout.rs       pure lane-propagation engine; NO git2 dependency, operates only
                   on models so it is unit-testable with hand-built graphs. Seed
-                  claim order is hard-evidence-first: R1 (a seed whose tip lies
-                  on another's first-parent chain claims first) and R2 (the
+                  claim order: main claims first unconditionally — no precedence
+                  edge may demote the trunk (the removed R1 ancestor-tip rule let
+                  an ancestor-tip branch like release/x steal the whole
+                  mainline). The one remaining hard-evidence rule is R2 (the
                   merge DESTINATION claims before the merged source: S's tip is
-                  a non-first parent of a merge m on T's chain => T first) form
-                  precedence edges resolved by Kahn; among ready seeds the soft
-                  key picks main > merged-tip class > the rest, newest tip
-                  first, name as tiebreak (cycles fall back to the same key).
-                  When the DAG offers no evidence (mutual mid-region forks, no
-                  merges), newest-tip-first decides — a documented heuristic
-                  limit, not a correctness guarantee. LaneSeed.extra_tips folds
+                  a non-first parent of a merge m on T's chain => T first,
+                  exempting main as the source — a sync merge of main into a
+                  branch never demotes main), resolved by Kahn; among ready
+                  seeds the soft key picks main > merged-tip class > the rest,
+                  newest tip first, name as tiebreak (cycles fall back to the
+                  same key). Branch tips are protected by the tip wall in the
+                  claiming loop, not by ordering. When the DAG offers no
+                  evidence (mutual mid-region forks, no merges),
+                  newest-tip-first decides — a documented heuristic limit, not
+                  a correctness guarantee. LaneSeed.extra_tips folds
                   a shadowed remote tip into the local lane's walk starts:
                   the lane claims from tip + every extra tip (first-parent
-                  chains union for R1/R2, fork points first-wins, converging
+                  chains union for R2, fork points first-wins, converging
                   same-lane starts stop silently), so a behind local main
                   still owns its upstream-only history
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
@@ -115,8 +120,9 @@ src-tauri/src/
   fetcher.rs      auto-fetch thread: 60s tick fetching the ACTIVE tab's
                   remotes (busy-skip, auto_fetch gate, silent failure log)
 src-tauri/tests/
-  layout_pure.rs  16 pure-graph algorithm tests (no git repo involved),
-                  including the R1/R2 hard-evidence seed-ordering pins
+  layout_pure.rs  18 pure-graph algorithm tests (no git repo involved),
+                  including the R2 hard-evidence seed-ordering pins and the
+                  ancestor-tip-branch mainline regression
   tour_repo.rs    ground-truth benchmark against docs/reference/gmaster-tour
                   (pre-existing failures in fresh clones: the fixture is a
                   contentless gitlink)
@@ -250,7 +256,8 @@ vscode-gtv/       the VS Code extension run mode: TypeScript engine over the
                   system git CLI (engine/reader.ts mirrors git_reader.rs —
                   including the two-pass filterByBranches ancestor-lane
                   closure; engine/layout.ts is the 1:1 port of layout.rs,
-                  R1/R2 precedence + Kahn ordering included; engine.ts
+                  R2 precedence (main exempt as source) + Kahn ordering
+                  included; engine.ts
                   mirrors commands.rs AppState), webview bridge in
                   media/bridge.js (the __TAURI_INTERNALS__ polyfill over
                   acquireVsCodeApi), frontend bundle synced into media/ by

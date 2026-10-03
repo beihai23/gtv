@@ -485,9 +485,12 @@ describe('computeLayout', () => {
     expect(lane(lanes, 'Z').fork_point).toBe('y1');
   });
 
-  /// R1 (ancestor first): P's tip lies on C's first-parent chain, so P claims
-  /// before C even though C's tip is newer. C's fork point is P's tip on P's
-  /// lane (the tip wall alone produced this; R1 pins the ordering itself).
+  /// Ancestor-tip protection: P's tip lies on C's first-parent chain. Even
+  /// though C's tip is newer (so C claims first under the soft key now that
+  /// the R1 ordering rule is removed), C's walk must stop at p1 — the tip
+  /// wall alone covers this: a non-main walk never claims through another
+  /// lane's tip, regardless of seed order. C's fork point is P's tip on P's
+  /// lane.
   it('ancestor_seed_claims_before_descendant', () => {
     // main:  c1
     //          \
@@ -509,6 +512,42 @@ describe('computeLayout', () => {
     expect(lane(lanes, 'C').fork_point).toBe('p1');
     expect(lane(lanes, 'P').fork_point).toBe('c1');
     expect(findCommit(commits, 'p1').fork_branch_name).toBe('C');
+  });
+
+  /// Regression for the R1-removal bug (5b860a3): release/x points at m3, an
+  /// ancestor commit ON main's first-parent chain (a fast-forwarded branch).
+  /// Ordered before main by the old R1 edge, it walked down the mainline and
+  /// stole m1..m3; main's lane started mid-life at m4 with a fork point.
+  /// Main must claim first and own the whole chain; release/x is zero-length
+  /// (no lane), and feat/f forks off the main lane.
+  it('ancestor_tip_branch_does_not_steal_mainline', () => {
+    // main:       m1 -- m2 -- m3 -- m4 -- m5 -- m6(tip)
+    // release/x:             ^tip
+    // feat/f:                            \ f1(tip)
+    const commits = [
+      commit('m1', 100, []),
+      commit('m2', 200, ['m1']),
+      commit('m3', 300, ['m2']),
+      commit('m4', 400, ['m3']),
+      commit('m5', 500, ['m4']),
+      commit('m6', 600, ['m5']),
+      commit('f1', 550, ['m5']),
+    ];
+    const seeds = [seed('main', 'm6'), seed('release/x', 'm3'), seed('feat/f', 'f1')];
+    const { lanes } = computeLayout(commits, seeds, 'main', 'm6');
+
+    expect(lane(lanes, 'main').lane_index).toBe(0);
+    for (const id of ['m1', 'm2', 'm3', 'm4', 'm5', 'm6']) {
+      expect(laneOf(commits, id), `${id} must stay on main`).toBe('main');
+    }
+    expect(
+      lanes.some((l) => l.name === 'release/x'),
+      'a zero-length ancestor-tip branch must not form a lane',
+    ).toBe(false);
+    const feat = lane(lanes, 'feat/f');
+    expect(feat.fork_point).toBe('m5');
+    expect(laneOf(commits, 'm5'), "feat/f's fork point must render on main").toBe('main');
+    expect(laneOf(commits, 'f1')).toBe('feat/f');
   });
 
   /// A lane seeded with an extra upstream tip (local main behind origin/main)
