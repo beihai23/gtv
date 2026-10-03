@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { SettingsDialog } from './components/SettingsDialog';
+import { HelpDialog } from './components/HelpDialog';
 import RepoView from './RepoView';
 import {
   openRepository,
@@ -41,6 +42,7 @@ function errText(err: unknown): string {
 function App() {
   const { t, showStaleBranches, autoFetch } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [showIssueReport, setShowIssueReport] = useState(false);
 
   // Cmd/Ctrl + , toggles the settings dialog (macOS convention).
@@ -463,6 +465,7 @@ function App() {
           that modal on top (first click closes it). Rendered after the
           bodies, the same keypress would flip the stacking instead. */}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showHelp && <HelpDialog onClose={() => setShowHelp(false)} />}
 
       {/* Global chrome band: always rendered, even with zero tabs.
           Shell-level controls live here rather than inside a tab --
@@ -504,6 +507,13 @@ function App() {
           </button>
         </div>
       )}
+      <button
+        className="view-btn settings-btn"
+        onClick={() => setShowHelp(true)}
+        title={t('helpTip')}
+      >
+        ?
+      </button>
       <button
         className="view-btn settings-btn"
         onClick={() => setShowSettings(true)}

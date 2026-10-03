@@ -64,6 +64,9 @@ describe('vscode extension full stack (no VS Code)', () => {
   let server: { port: number; close: () => void };
   let engine: Engine;
   let repoDir: string;
+  // Captured open_external_terminal args.path values (the VS Code host's
+  // terminal surface — extension.ts turns it into vscode.window.createTerminal).
+  const terminalCalls: string[] = [];
 
   beforeAll(async () => {
     expect(fs.existsSync(path.join(MEDIA, 'index.html')), 'media/ built (run node esbuild.mjs --sync-web)').toBe(true);
@@ -90,6 +93,9 @@ describe('vscode extension full stack (no VS Code)', () => {
           case 'plugin:opener|open-url': return reply(null);
           case 'get_patch_links': return reply([]);
           case 'get_recent_logs': return reply([]);
+          // Host-only surface (no Engine method): record the cwd the
+          // webview asked the VS Code terminal to open at.
+          case 'open_external_terminal': terminalCalls.push(String(a.path)); return reply(null);
           default: {
             const cmd = m.cmd.replace(/_([a-z])/g, (_s, c: string) => c.toUpperCase()) as keyof Engine;
             const fn = engine[cmd] as unknown as (...x: unknown[]) => Promise<unknown>;
@@ -151,6 +157,7 @@ describe('vscode extension full stack (no VS Code)', () => {
     await browser?.close();
     server?.close();
     fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(`${repoDir}-wt`, { recursive: true, force: true });
   });
 
   it('boots into the timeline for the restored repo', async () => {
@@ -208,5 +215,31 @@ describe('vscode extension full stack (no VS Code)', () => {
       env: { ...process.env, GIT_AUTHOR_DATE: '2026-01-05T09:00:00', GIT_COMMITTER_DATE: '2026-01-05T09:00:00' },
     });
     expect(await refreshed).toBe(true);
+  }, 60000);
+
+  // The terminal button under the VS Code host must open VS Code's
+  // integrated terminal at the CURRENT worktree member — after a member
+  // switch, not at the family's main dir.
+  it('terminal button targets the worktree member dir after a member switch', async () => {
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'wt-lane', `${repoDir}-wt`], { cwd: repoDir, stdio: 'pipe' });
+    // git reports the realpath (macOS /var -> /private/var); compare in
+    // canonical form.
+    const wtDir = fs.realpathSync(`${repoDir}-wt`);
+    await page.goto(`http://127.0.0.1:${server.port}/index.html`);
+    await page.waitForSelector('g.node', { state: 'attached', timeout: 20000 });
+    // The worktree add moved refs; give the family refresh a beat, then
+    // switch member through the worktree menu.
+    await page.locator('.member-menu-btn').waitFor({ timeout: 10000 });
+    await page.locator('.member-menu-btn').click();
+    await page.locator('.member-item', { hasText: 'wt-lane' }).click();
+    await page.waitForFunction(
+      (dir) => document.querySelector('.repo-path')?.getAttribute('title') === dir,
+      wtDir,
+      { timeout: 20000 },
+    );
+    const before = terminalCalls.length;
+    await page.locator('.terminal-toggle-btn').click();
+    expect(terminalCalls.length).toBe(before + 1);
+    expect(terminalCalls[terminalCalls.length - 1]).toBe(wtDir);
   }, 60000);
 });

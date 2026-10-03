@@ -183,6 +183,19 @@ export default function RepoView({
   // every launch — a terminal should be an explicit user action.
   const [termOpen, setTermOpen] = useState(false);
   const [termAvailable, setTermAvailable] = useState(true);
+  // Worktree cleanliness marker in the identity card. Refreshed on mount /
+  // member switch (repoId change), after each view rebuild, and after a
+  // checkout; the watcher deliberately ignores worktree-only churn
+  // (change_fingerprint), so this is an on-refresh indicator, not a live
+  // monitor.
+  const [wtStatus, setWtStatus] = useState<WorktreeStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getWorktreeStatus(repoId)
+      .then(s => { if (!cancelled) setWtStatus(s); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [repoId]);
   // VS Code host (flag set by media/bridge.js): no webview PTY — the
   // terminal button opens VS Code's own integrated terminal instead.
   const isVsCodeHost = typeof window !== 'undefined'
@@ -593,6 +606,9 @@ export default function RepoView({
       const names = new Set(branches.map(b => b.name));
       const stillKept = selection.filter(n => names.has(n));
       setSelectedBranches(stillKept.length ? stillKept : branches.map(b => b.name));
+      // Ref changes often accompany worktree churn (checkout/pull) — keep
+      // the cleanliness marker in step with the rebuilt view.
+      getWorktreeStatus(repoId).then(setWtStatus).catch(() => {});
     } catch (err) {
       // A transient failure (e.g. racing a repo being replaced) must not
       // nuke the view. A one-shot change (branch delete) has no next event,
@@ -1735,6 +1751,20 @@ export default function RepoView({
                     {t('commitCount', { n: gitData.head_commit_count })}
                   </span>
                 )}
+                {/* Worktree cleanliness at a glance: green dot = clean, amber
+                    + count = uncommitted changes, red = merge in progress. */}
+                {wtStatus && (() => {
+                  const dirty = wtStatus.modified + wtStatus.untracked;
+                  const cls = wtStatus.merge_in_progress ? 'wt-merge' : dirty > 0 ? 'wt-dirty' : 'wt-clean';
+                  const tip = wtStatus.merge_in_progress ? t('wtMergeTip')
+                    : dirty > 0 ? t('wtDirtyTip', { modified: wtStatus.modified, untracked: wtStatus.untracked })
+                      : t('wtCleanTip');
+                  return (
+                    <span className={`wt-status ${cls}`} title={tip}>
+                      {wtStatus.merge_in_progress ? '!' : dirty > 0 ? dirty : ''}
+                    </span>
+                  );
+                })()}
               </span>
               <span className="repo-path" title={path}>{path}</span>
             </>

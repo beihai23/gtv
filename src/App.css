@@ -1569,6 +1569,43 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
 :root[data-theme='catppuccin-latte'] .date-input,
 :root[data-theme='tokyo-night-light'] .date-input { color-scheme: light; }
 
+/* Worktree cleanliness dot in the identity card: green clean, amber dirty
+   (with the change count), red merge in progress. */
+.wt-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+.wt-status::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.wt-status.wt-dirty { color: var(--warning); }
+.wt-status.wt-dirty::before { background: var(--warning); }
+.wt-status.wt-merge { color: var(--danger); }
+.wt-status.wt-merge::before { background: var(--danger); }
+
+/* Help dialog: wider than settings, legend rows pair a mini sample with text. */
+.help-dialog { width: 640px; }
+.help-items { display: flex; flex-direction: column; gap: 10px; }
+.help-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.help-item-art { flex-shrink: 0; width: 72px; padding-top: 1px; }
+.help-art { width: 72px; height: 22px; display: block; }
+.help-item-text { flex: 1; }
+
 /* --- minimap (bottom-right overlay) --- */
 .minimap {
   position: absolute;

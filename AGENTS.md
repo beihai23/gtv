@@ -189,7 +189,10 @@ src/
                   family snapshots + repo-changed refresh, restore, error strip
   RepoView.tsx    per-repo view body (one instance per tab, kept alive via
                   display:none): data state, display pipeline, handlers,
-                  header/toolbar, panels, per-tab terminal; the repo-changed
+                  header/toolbar, panels, per-tab terminal; the identity card
+                  carries a worktree-cleanliness dot (wt-status: green clean,
+                  amber + count dirty, red merge in progress — refreshed on
+                  mount/member-switch/view rebuild, not live); the repo-changed
                   refresh coalesces — an event landing mid-refresh sets a
                   pending flag the in-flight refresh's finally replays once
                   (a one-shot change like a branch delete is never dropped),
@@ -238,6 +241,11 @@ src/
                                 optional line numbers) over diffparse.ts
   components/SettingsDialog.tsx settings modal (Cmd/Ctrl+,): language, theme,
                                 stale-branches toggle, About
+  components/HelpDialog.tsx   help modal (the "?" button in the global chrome
+                                band): quick-start walkthrough + canvas legend
+                                with mini SVG samples; long-form content lives
+                                in the component per language, not the settings
+                                dictionaries
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
                                 session alive while hidden (VSCode-style),
                                 drag-resize handle, restart/exited states.
