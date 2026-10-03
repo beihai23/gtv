@@ -190,3 +190,9 @@ export async function terminalResize(repoId: number, cols: number, rows: number)
 export async function terminalKill(repoId: number): Promise<void> {
   return invoke<void>('terminal_kill', { repoId });
 }
+
+/** VS Code host only: open the repo in VS Code's own integrated terminal
+ *  (the webview has no PTY; the desktop uses terminalSpawn instead). */
+export async function openHostTerminal(path: string): Promise<void> {
+  return invoke<void>('open_external_terminal', { path });
+}

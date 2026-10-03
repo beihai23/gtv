@@ -66,6 +66,11 @@
     unregisterListener(_event, eventId) { callbacks.delete(eventId); },
   };
 
+  // Host marker: the shared frontend branches on this for VS Code-only
+  // behavior (the terminal button opens a VS Code integrated terminal
+  // instead of the webview PTY panel, which this host does not provide).
+  window.__GTV_HOST__ = 'vscode';
+
   // The invoke cases the bridge answers ITSELF (event plumbing is local);
   // everything else crosses to the extension host.
   const origInvoke = window.__TAURI_INTERNALS__.invoke;

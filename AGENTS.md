@@ -234,7 +234,13 @@ src/
                                 stale-branches toggle, About
   components/TerminalPanel.tsx  bottom-docked xterm.js panel: keeps its PTY
                                 session alive while hidden (VSCode-style),
-                                drag-resize handle, restart/exited states
+                                drag-resize handle, restart/exited states.
+                                Desktop-only: under the VS Code host
+                                (bridge.js sets window.__GTV_HOST__ = 'vscode')
+                                the header's terminal button instead invokes
+                                open_external_terminal and the extension host
+                                surfaces the repo in VS Code's own integrated
+                                terminal (find-or-create by `gtv: <name>`)
 mock.html         browser-only preview harness + living contract document for
                   the multi-repo frontend surface: mocks window.__TAURI_INTERNALS__
                   (registry semantics, events, terminals, per-repo views) and
@@ -365,6 +371,10 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
   write commands there is the feature itself — gtv never feeds commands into it
   programmatically, it only relays keystrokes and output, and it watches for
   repo changes by re-reading refs (`change_fingerprint`), never by writing.
+  This panel exists only in the desktop app; the VS Code extension has no
+  webview PTY, so there the terminal button opens VS Code's own integrated
+  terminal (`open_external_terminal` → `vscode.window.createTerminal`) — same
+  "user-driven shell" exception, hosted by VS Code itself.
 - Tauri capabilities (`src-tauri/capabilities/default.json`) are minimal:
   `core:default`, `opener:default`, `dialog:default` only. The terminal and
   repo-watcher events need no extra grants — `core:default` already covers

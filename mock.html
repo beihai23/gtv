@@ -522,6 +522,11 @@
           }
           return null;
         }
+        // VS Code host only (api.ts openHostTerminal): the browser preview
+        // never sets __GTV_HOST__, so this case is contract documentation.
+        case 'open_external_terminal': {
+          return null;
+        }
 
         // -- plugin surfaces ---------------------------------------------------
         case 'plugin:dialog|open': {

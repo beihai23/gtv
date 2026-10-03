@@ -152,6 +152,19 @@ function openPanel(context: vscode.ExtensionContext) {
       }
       // v1: no embedded PTY in the webview — the toggle hides on null.
       if (cmd.startsWith('terminal_')) { reply(null); return; }
+      // The shared frontend's terminal button routes here under the VS Code
+      // host: surface the repo in VS Code's own integrated terminal instead
+      // (find-or-create by name so repeat clicks focus, not duplicate).
+      if (cmd === 'open_external_terminal') {
+        const p = String((args as { path?: string })?.path ?? '');
+        if (!p || !fs.existsSync(p)) throw new Error(`Not a directory: ${p}`);
+        const name = `gtv: ${path.basename(p)}`;
+        const term = vscode.window.terminals.find(t => t.name === name)
+          ?? vscode.window.createTerminal({ name, cwd: p });
+        term.show();
+        reply(null);
+        return;
+      }
       // get_patch_links (cherry-pick detection) is not ported yet: empty.
       if (cmd === 'get_patch_links') { reply([]); return; }
       if (cmd === 'get_recent_logs') { reply([]); return; }

@@ -8,7 +8,7 @@ import { CheckoutDialog } from './components/CheckoutDialog';
 import TerminalPanel from './components/TerminalPanel';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
-import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, fetchRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch } from './api';
+import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, fetchRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch, openHostTerminal } from './api';
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
@@ -183,6 +183,10 @@ export default function RepoView({
   // every launch — a terminal should be an explicit user action.
   const [termOpen, setTermOpen] = useState(false);
   const [termAvailable, setTermAvailable] = useState(true);
+  // VS Code host (flag set by media/bridge.js): no webview PTY — the
+  // terminal button opens VS Code's own integrated terminal instead.
+  const isVsCodeHost = typeof window !== 'undefined'
+    && (window as unknown as { __GTV_HOST__?: string }).__GTV_HOST__ === 'vscode';
   // Stable identity so TerminalPanel's ensureSession memoization holds
   // (final-review F1): an inline arrow here changed on every render, which
   // un-memoed ensureSession and re-ran the panel's visibility effect on
@@ -1935,11 +1939,17 @@ export default function RepoView({
               >
                 ⌖ {t('headHome')}
               </button>
-              {termAvailable && (
+              {(isVsCodeHost || termAvailable) && (
                 <button
-                  className={`view-btn terminal-toggle-btn${termOpen ? ' active' : ''}`}
-                  onClick={() => setTermOpen(v => !v)}
-                  title={t('terminalTip')}
+                  className={`view-btn terminal-toggle-btn${!isVsCodeHost && termOpen ? ' active' : ''}`}
+                  onClick={() => {
+                    if (isVsCodeHost) {
+                      openHostTerminal(path).catch(err => recordFrontendError(errText(err)));
+                    } else {
+                      setTermOpen(v => !v);
+                    }
+                  }}
+                  title={isVsCodeHost ? t('terminalHostTip') : t('terminalTip')}
                   aria-label={t('terminal')}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
