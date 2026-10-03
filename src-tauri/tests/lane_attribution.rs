@@ -178,3 +178,80 @@ fn filtered_view_anchors_forks_on_unselected_main() {
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
+
+/// Local main behind origin/main (the ms_otc forensic case): the shadowed
+/// remote tip folds into main's walk starts (extra_tips), so the
+/// upstream-only region is claimed by main — a side branch forked inside
+/// that region forks off the main lane, and origin/main's top commit no
+/// longer evaporates from the view.
+#[test]
+fn behind_local_main_still_owns_upstream_history() {
+    let dir = temp_repo("behind-main");
+    let _m1 = commit_at(&dir, "f.txt", "m1\n", "M1", "2025-09-01T09:00:00");
+    let m2 = commit_at(&dir, "f.txt", "m2\n", "M2", "2025-09-02T09:00:00");
+    git_at(&dir, "2025-09-03T09:00:00", &["checkout", "-b", "side"]);
+    let _s1 = commit_at(&dir, "s.txt", "s1\n", "S1", "2025-09-03T09:00:00");
+    git_at(&dir, "2025-09-04T09:00:00", &["checkout", "main"]);
+    git_at(
+        &dir,
+        "2025-09-04T09:00:00",
+        &["merge", "--no-ff", "side", "-m", "M3 merge side"],
+    );
+    let m3 = git_out(&dir, &["rev-parse", "HEAD"]);
+    let m4 = commit_at(&dir, "f.txt", "m4\n", "M4", "2025-09-05T09:00:00");
+    // origin/main advanced to M4 while local main stayed at M2.
+    git_at(
+        &dir,
+        "2025-09-05T09:00:00",
+        &["update-ref", "refs/remotes/origin/main", &m4],
+    );
+    git_at(
+        &dir,
+        "2025-09-05T09:00:00",
+        &["update-ref", "refs/heads/main", &m2],
+    );
+    // feat/F forks out of the upstream-only region (M3).
+    git_at(&dir, "2025-09-06T09:00:00", &["checkout", "-b", "feat/F", &m3]);
+    let _f1 = commit_at(&dir, "g.txt", "f1\n", "F1", "2025-09-06T09:00:00");
+    git_at(&dir, "2025-09-07T09:00:00", &["checkout", "main"]);
+
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let view = reader.read_git_data(2000).expect("read view");
+    let owner = |id: &str| {
+        view.data
+            .commits
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("commit {id} not in view"))
+            .lane_owner
+            .clone()
+    };
+
+    assert_eq!(owner(&m3), "main", "upstream-only merge belongs to main");
+    assert_eq!(owner(&m4), "main", "upstream tip region belongs to main");
+    assert!(
+        view.data.commits.iter().any(|c| c.id == m4),
+        "origin/main's top commit must not evaporate from the view"
+    );
+    let lane_f = view
+        .data
+        .branches
+        .iter()
+        .find(|l| l.name == "feat/F")
+        .expect("feat/F lane");
+    assert_eq!(lane_f.fork_point.as_deref(), Some(m3.as_str()));
+    assert_eq!(owner(&m3), "main", "F's fork point must render on main");
+    assert!(
+        !view.data.branches.iter().any(|l| l.name == "origin/main"),
+        "shadowed remote must not form its own lane"
+    );
+
+    let list = reader.get_branch_list(&view.data).expect("branch list");
+    assert_eq!(
+        list.iter().filter(|b| b.name == "main").count(),
+        1,
+        "main appears exactly once in the branch list"
+    );
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}

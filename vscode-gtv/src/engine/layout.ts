@@ -49,6 +49,10 @@ export interface LaneSeed {
   /// True when the seed comes from a remote-tracking ref with no local
   /// counterpart.
   is_remote: boolean;
+  /// Upstream tips of the same branch folded into this lane's walk starts
+  /// (a local branch shadows the remote lane, but the remote tip still
+  /// claims for it so upstream-only history stays attributable).
+  extra_tips?: string[];
 }
 
 const LANE_HEIGHT = 80.0;
@@ -154,18 +158,21 @@ export function computeLayout(
     }
   }
 
-  // First-parent chain (commit ids) of each seed's tip, stopping at the
-  // window edge. The has-check also guards against a corrupt cycle.
+  // First-parent chain (commit ids) of each seed, stopping at the window
+  // edge: the union of the chains walked from the tip and every extra tip.
+  // The has-check also guards against a corrupt cycle.
   const chains: Set<string>[] = seeds.map((s) => {
     const set = new Set<string>();
-    let cursor = indexOf.get(s.tip);
-    while (cursor !== undefined) {
-      if (set.has(commits[cursor].id)) {
-        break;
+    for (const start of [s.tip, ...(s.extra_tips ?? [])]) {
+      let cursor = indexOf.get(start);
+      while (cursor !== undefined) {
+        if (set.has(commits[cursor].id)) {
+          break;
+        }
+        set.add(commits[cursor].id);
+        const first: string | undefined = commits[cursor].parents[0];
+        cursor = first !== undefined ? indexOf.get(first) : undefined;
       }
-      set.add(commits[cursor].id);
-      const first: string | undefined = commits[cursor].parents[0];
-      cursor = first !== undefined ? indexOf.get(first) : undefined;
     }
     return set;
   });
@@ -271,36 +278,53 @@ export function computeLayout(
   const laneNames: string[] = [];
 
   for (const seed of orderedSeeds) {
-    const tipIdx = indexOf.get(seed.tip);
-    if (tipIdx === undefined) {
-      continue; // tip outside the walked window
-    }
-    if (owner[tipIdx] !== null) {
-      continue; // zero-length lane: ref points at an already-claimed commit
-    }
-
     const laneName = seed.name;
     const isMain = laneName === mainBranch;
-    laneNames.push(laneName);
+    let lanePushed = false;
 
-    // Walk first-parent chain from the tip, claiming until we hit a
-    // commit already owned by another lane or reserved as another
-    // lane's tip — that commit is the fork point.
-    let cursor: number | undefined = tipIdx;
-    while (cursor !== undefined) {
-      // Explicit annotations break a TS control-flow narrowing cycle
-      // (cursor -> first -> commits[i] -> i -> cursor).
-      const i: number = cursor;
-      const tipName = tipOf.get(i);
-      const blocked =
-        owner[i] !== null || (!isMain && tipName !== undefined && tipName !== laneName);
-      if (blocked) {
-        forkPoints.set(laneName, commits[i].id);
-        break;
+    // One lane, one claim per start: the branch tip plus every folded
+    // upstream tip. A start whose tip is already claimed (or outside
+    // the window) is skipped on its own; the lane name is registered
+    // at the first start that actually claims.
+    for (const start of [seed.tip, ...(seed.extra_tips ?? [])]) {
+      const startIdx = indexOf.get(start);
+      if (startIdx === undefined) {
+        continue; // tip outside the walked window
       }
-      owner[i] = laneName;
-      const first: string | undefined = commits[i].parents[0];
-      cursor = first !== undefined ? indexOf.get(first) : undefined;
+      if (owner[startIdx] !== null) {
+        continue; // zero-length start: points at an already-claimed commit
+      }
+      if (!lanePushed) {
+        laneNames.push(laneName);
+        lanePushed = true;
+      }
+
+      // Walk first-parent chain from the start, claiming until we hit a
+      // commit already owned by another lane or reserved as another
+      // lane's tip — that commit is the fork point.
+      let cursor: number | undefined = startIdx;
+      while (cursor !== undefined) {
+        // Explicit annotations break a TS control-flow narrowing cycle
+        // (cursor -> first -> commits[i] -> i -> cursor).
+        const i: number = cursor;
+        const tipName = tipOf.get(i);
+        const blocked =
+          owner[i] !== null || (!isMain && tipName !== undefined && tipName !== laneName);
+        if (blocked) {
+          if (owner[i] === laneName) {
+            break; // two starts of the same lane converge — not a fork
+          }
+          // First-wins: two diverged starts may hit different lanes; keep
+          // the fork point recorded first.
+          if (!forkPoints.has(laneName)) {
+            forkPoints.set(laneName, commits[i].id);
+          }
+          break;
+        }
+        owner[i] = laneName;
+        const first: string | undefined = commits[i].parents[0];
+        cursor = first !== undefined ? indexOf.get(first) : undefined;
+      }
     }
   }
 
@@ -370,19 +394,20 @@ export function computeLayout(
     });
   });
 
-  // Detect where each lane was merged: lane's tip appears as a non-first
-  // parent of a merge commit on another lane.
-  const tipOfSeed = new Map<string, string>();
+  // Detect where each lane was merged: any of the lane's tips (branch tip
+  // plus folded upstream tips) appears as a non-first parent of a merge
+  // commit on another lane.
+  const tipsOfSeed = new Map<string, string[]>();
   for (const s of seeds) {
-    tipOfSeed.set(s.name, s.tip);
+    tipsOfSeed.set(s.name, [s.tip, ...(s.extra_tips ?? [])]);
   }
   for (const lane of lanes) {
-    const tip = tipOfSeed.get(lane.name);
-    if (tip === undefined) {
+    const tips = tipsOfSeed.get(lane.name);
+    if (tips === undefined) {
       continue;
     }
     for (const c of commits) {
-      if (c.parents.length > 1 && c.parents.slice(1).some((p) => p === tip)) {
+      if (c.parents.length > 1 && c.parents.slice(1).some((p) => tips.includes(p))) {
         lane.merged_into = c.id;
         break;
       }

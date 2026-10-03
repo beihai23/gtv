@@ -32,6 +32,7 @@ fn seed(name: &str, tip: &str) -> LaneSeed {
         name: name.to_string(),
         tip: tip.to_string(),
         is_remote: false,
+        ..LaneSeed::default()
     }
 }
 
@@ -547,4 +548,44 @@ fn ancestor_seed_claims_before_descendant() {
     assert_eq!(lane(&lanes, "P").fork_point.as_deref(), Some("c1"));
     let p1 = commits.iter().find(|c| c.id == "p1").unwrap();
     assert_eq!(p1.fork_branch_name.as_deref(), Some("C"));
+}
+
+/// A lane seeded with an extra upstream tip (local main behind origin/main)
+/// claims the upstream-only region as its own: a side branch forked out of
+/// that region forks off the main lane, and the upstream merge/top commits
+/// belong to main — not to whichever side branch's first-parent chain
+/// passes through.
+#[test]
+fn extra_tip_claims_upstream_only_history() {
+    // main:   m1 -- m2 (local tip)
+    //                \
+    // side:           s1
+    //                  \
+    // origin/main:     m3(merge) -- m4 (extra tip)
+    //                    \
+    // F:                  f1(tip)
+    let mut commits = vec![
+        commit("m1", 100, &[]),
+        commit("m2", 200, &["m1"]),
+        commit("s1", 250, &["m2"]),
+        commit("m3", 300, &["m2", "s1"]),
+        commit("m4", 400, &["m3"]),
+        commit("f1", 350, &["m3"]),
+    ];
+    let main = LaneSeed {
+        name: "main".to_string(),
+        tip: "m2".to_string(),
+        is_remote: false,
+        extra_tips: vec!["m4".to_string()],
+    };
+    let seeds = [main, seed("F", "f1")];
+    let (lanes, _edges, _) = compute_layout(&mut commits, &seeds, "main", None);
+
+    assert_eq!(lane_of(&commits, "m3"), "main");
+    assert_eq!(lane_of(&commits, "m4"), "main");
+    assert_eq!(lane_of(&commits, "m2"), "main");
+    assert_eq!(lane_of(&commits, "f1"), "F");
+    assert_eq!(lane(&lanes, "F").fork_point.as_deref(), Some("m3"));
+    // The merged-in side lineage has no seed of its own: unattributed.
+    assert_eq!(lane_of(&commits, "s1"), "");
 }

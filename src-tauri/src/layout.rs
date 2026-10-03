@@ -42,6 +42,10 @@ pub struct LaneSeed {
     /// True when the seed comes from a remote-tracking ref with no local
     /// counterpart.
     pub is_remote: bool,
+    /// Upstream tips of the same branch folded into this lane's walk starts
+    /// (a local branch shadows the remote lane, but the remote tip still
+    /// claims for it so upstream-only history stays attributable).
+    pub extra_tips: Vec<String>,
 }
 
 const LANE_HEIGHT: f64 = 80.0;
@@ -141,22 +145,25 @@ pub fn compute_layout(
         .map(|p| p.as_str())
         .collect();
 
-    // First-parent chain (commit ids) of each seed's tip, stopping at the
-    // window edge. The insert-check also guards against a corrupt cycle.
+    // First-parent chain (commit ids) of each seed, stopping at the window
+    // edge: the union of the chains walked from the tip and every extra tip.
+    // The insert-check also guards against a corrupt cycle.
     let chains: Vec<HashSet<&str>> = seeds
         .iter()
         .map(|s| {
             let mut set = HashSet::new();
-            let mut cursor = index_of.get(&s.tip).copied();
-            while let Some(i) = cursor {
-                if !set.insert(commits[i].id.as_str()) {
-                    break;
+            for start in std::iter::once(&s.tip).chain(s.extra_tips.iter()) {
+                let mut cursor = index_of.get(start).copied();
+                while let Some(i) = cursor {
+                    if !set.insert(commits[i].id.as_str()) {
+                        break;
+                    }
+                    cursor = commits[i]
+                        .parents
+                        .first()
+                        .and_then(|p| index_of.get(p))
+                        .copied();
                 }
-                cursor = commits[i]
-                    .parents
-                    .first()
-                    .and_then(|p| index_of.get(p))
-                    .copied();
             }
             set
         })
@@ -257,35 +264,52 @@ pub fn compute_layout(
     let mut lane_names: Vec<String> = Vec::new();
 
     for seed in ordered_seeds {
-        let Some(&tip_idx) = index_of.get(&seed.tip) else {
-            continue; // tip outside the walked window
-        };
-        if owner[tip_idx].is_some() {
-            continue; // zero-length lane: ref points at an already-claimed commit
-        }
-
         let lane_name = seed.name.clone();
         let is_main = lane_name == main_branch;
-        lane_names.push(lane_name.clone());
+        let mut lane_pushed = false;
 
-        // Walk first-parent chain from the tip, claiming until we hit a
-        // commit already owned by another lane or reserved as another
-        // lane's tip — that commit is the fork point.
-        let mut cursor = Some(tip_idx);
-        while let Some(i) = cursor {
-            let blocked = owner[i].is_some()
-                || (!is_main
-                    && tip_of.get(&i).map(|t| *t != lane_name).unwrap_or(false));
-            if blocked {
-                fork_points.insert(lane_name.clone(), commits[i].id.clone());
-                break;
+        // One lane, one claim per start: the branch tip plus every folded
+        // upstream tip. A start whose tip is already claimed (or outside
+        // the window) is skipped on its own; the lane name is registered
+        // at the first start that actually claims.
+        for start in std::iter::once(&seed.tip).chain(seed.extra_tips.iter()) {
+            let Some(&start_idx) = index_of.get(start) else {
+                continue; // tip outside the walked window
+            };
+            if owner[start_idx].is_some() {
+                continue; // zero-length start: points at an already-claimed commit
             }
-            owner[i] = Some(lane_name.clone());
-            cursor = commits[i]
-                .parents
-                .first()
-                .and_then(|p| index_of.get(p))
-                .copied();
+            if !lane_pushed {
+                lane_names.push(lane_name.clone());
+                lane_pushed = true;
+            }
+
+            // Walk first-parent chain from the start, claiming until we hit
+            // a commit already owned by another lane or reserved as another
+            // lane's tip — that commit is the fork point.
+            let mut cursor = Some(start_idx);
+            while let Some(i) = cursor {
+                let blocked = owner[i].is_some()
+                    || (!is_main
+                        && tip_of.get(&i).map(|t| *t != lane_name).unwrap_or(false));
+                if blocked {
+                    if owner[i].as_deref() == Some(lane_name.as_str()) {
+                        break; // two starts of the same lane converge — not a fork
+                    }
+                    // First-wins: two diverged starts may hit different
+                    // lanes; keep the fork point recorded first.
+                    fork_points
+                        .entry(lane_name.clone())
+                        .or_insert_with(|| commits[i].id.clone());
+                    break;
+                }
+                owner[i] = Some(lane_name.clone());
+                cursor = commits[i]
+                    .parents
+                    .first()
+                    .and_then(|p| index_of.get(p))
+                    .copied();
+            }
         }
     }
 
@@ -349,16 +373,23 @@ pub fn compute_layout(
         });
     }
 
-    // Detect where each lane was merged: lane's tip appears as a non-first
-    // parent of a merge commit on another lane.
-    let tip_of: HashMap<&String, &String> = seeds
+    // Detect where each lane was merged: any of the lane's tips (branch tip
+    // plus folded upstream tips) appears as a non-first parent of a merge
+    // commit on another lane.
+    let tips_of: HashMap<&String, Vec<&String>> = seeds
         .iter()
-        .map(|s| (&s.name, &s.tip))
+        .map(|s| {
+            let mut tips = vec![&s.tip];
+            tips.extend(s.extra_tips.iter());
+            (&s.name, tips)
+        })
         .collect();
     for lane in lanes.iter_mut() {
-        let Some(&tip) = tip_of.get(&lane.name) else { continue };
+        let Some(tips) = tips_of.get(&lane.name) else { continue };
         for c in commits.iter() {
-            if c.parents.len() > 1 && c.parents[1..].iter().any(|p| p == tip) {
+            if c.parents.len() > 1
+                && c.parents[1..].iter().any(|p| tips.iter().any(|t| *t == p))
+            {
                 lane.merged_into = Some(c.id.clone());
                 break;
             }

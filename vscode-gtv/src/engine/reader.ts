@@ -93,7 +93,10 @@ export class RepoReader {
 
   /** Lane seeds: all local branches, plus remote branches whose short name
    *  has no local counterpart. Local lanes take the short name; remote-only
-   *  lanes keep the full `origin/x` name and carry is_remote = true.
+   *  lanes keep the full `origin/x` name and carry is_remote = true. A
+   *  local branch shadows the remote LANE, but the remote tip still joins
+   *  that lane's walk starts (extra_tips) so upstream-only history stays
+   *  attributable — a behind local main must reach its own merges.
    *  Mirrors collect_lane_seeds. */
   async laneSeeds(): Promise<LaneSeed[]> {
     const out = await git(this.dir, [
@@ -119,7 +122,16 @@ export class RepoReader {
       if (!name || !oid || !name.startsWith('refs/remotes/')) continue;
       const full = name.slice('refs/remotes/'.length);
       const short = full.includes('/') ? full.slice(full.indexOf('/') + 1) : full;
-      if (short === 'HEAD' || localNames.has(short)) continue;
+      if (short === 'HEAD') continue;
+      if (localNames.has(short)) {
+        // Shadowed remote: fold its tip into the local lane's walk starts
+        // unless it already is one.
+        const local = seeds.find(s => s.name === short);
+        if (local && local.tip !== oid && !(local.extra_tips ?? []).includes(oid)) {
+          (local.extra_tips ??= []).push(oid);
+        }
+        continue;
+      }
       // A local branch literally named "origin/x" already owns that lane name.
       if (seeds.some(s => s.name === full)) continue;
       seeds.push({ name: full, tip: oid, is_remote: true });
@@ -193,8 +205,10 @@ export class RepoReader {
     // skips unparseable oids; an empty push set falls back to HEAD).
     const tips: string[] = [];
     for (const s of seeds) {
-      const r = await gitRaw(this.dir, ['rev-parse', '--verify', '--quiet', `${s.tip}^{commit}`]);
-      if (r.code === 0) tips.push(s.tip);
+      for (const start of [s.tip, ...(s.extra_tips ?? [])]) {
+        const r = await gitRaw(this.dir, ['rev-parse', '--verify', '--quiet', `${start}^{commit}`]);
+        if (r.code === 0) tips.push(start);
+      }
     }
     const revArgs = tips.length > 0 ? tips : ['HEAD'];
     // No -n when hiding: the limit applies AFTER filtering, like the Rust
@@ -261,10 +275,14 @@ export class RepoReader {
     };
   }
 
-  /** Stale = tip never entered the loaded window. Mirrors stale_seeds. */
+  /** Stale = tip AND every folded upstream tip never entered the loaded
+   *  window (a behind local main is not stale while origin/main's tip is
+   *  in). Mirrors stale_seeds. */
   private staleSeeds(seeds: LaneSeed[], data: GitData): string[] {
     const ids = new Set(data.commits.map(c => c.id));
-    return seeds.filter(s => !ids.has(s.tip)).map(s => s.name);
+    return seeds
+      .filter(s => !ids.has(s.tip) && (s.extra_tips ?? []).every(t => !ids.has(t)))
+      .map(s => s.name);
   }
 
   /** Full view result. Mirrors read_git_data. */
@@ -563,7 +581,7 @@ export class RepoReader {
     if (!q || limit === 0) return [];
     const isHex = q.length >= 4 && /^[0-9a-f]+$/.test(q);
     const seeds = await this.laneSeeds();
-    const tips = seeds.map(s => s.tip);
+    const tips = seeds.flatMap(s => [s.tip, ...(s.extra_tips ?? [])]);
     const args = ['log', '--date-order', `--format=%H${US}%s${US}%an${US}%ct${RS}`];
     args.push(...(tips.length > 0 ? tips : ['HEAD']));
     const out = await git(this.dir, args, 60000);

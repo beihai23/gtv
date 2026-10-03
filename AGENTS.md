@@ -65,7 +65,12 @@ src-tauri/src/
                   first, name as tiebreak (cycles fall back to the same key).
                   When the DAG offers no evidence (mutual mid-region forks, no
                   merges), newest-tip-first decides — a documented heuristic
-                  limit, not a correctness guarantee
+                  limit, not a correctness guarantee. LaneSeed.extra_tips folds
+                  a shadowed remote tip into the local lane's walk starts:
+                  the lane claims from tip + every extra tip (first-parent
+                  chains union for R1/R2, fork points first-wins, converging
+                  same-lane starts stop silently), so a behind local main
+                  still owns its upstream-only history
   git_reader.rs   all git2 access: refs, chunked revwalk from branch tips
                   (walk_commits + load_more pagination), lazy diff stats,
                   worktree status + SAFE branch checkout (the first
@@ -73,8 +78,12 @@ src-tauri/src/
                   worktrees) and two-commit compare; lane seeds name a
                   remote-only branch (remote-tracking ref with no local
                   counterpart) `origin/x` and mark its lane is_remote =
-                  true (a local branch of the same short name shadows it),
-                  so a deleted local branch whose origin ref survives still
+                  true (a local branch of the same short name shadows the
+                  remote LANE, but the remote tip still folds into the local
+                  seed's extra_tips walk starts so upstream-only history
+                  stays attributable and origin's top commits never
+                  evaporate from the view), so a deleted local branch whose
+                  origin ref survives still
                   shows, clearly marked; the second sanctioned
                   write, auto-fetch, runs the SYSTEM git subprocess
                   `git -C <path> fetch --all --quiet` (2026-09-18 user

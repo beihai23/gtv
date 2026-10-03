@@ -510,4 +510,43 @@ describe('computeLayout', () => {
     expect(lane(lanes, 'P').fork_point).toBe('c1');
     expect(findCommit(commits, 'p1').fork_branch_name).toBe('C');
   });
+
+  /// A lane seeded with an extra upstream tip (local main behind origin/main)
+  /// claims the upstream-only region as its own: a side branch forked out of
+  /// that region forks off the main lane, and the upstream merge/top commits
+  /// belong to main — not to whichever side branch's first-parent chain
+  /// passes through.
+  it('extra_tip_claims_upstream_only_history', () => {
+    // main:   m1 -- m2 (local tip)
+    //                \
+    // side:           s1
+    //                  \
+    // origin/main:     m3(merge) -- m4 (extra tip)
+    //                    \
+    // F:                  f1(tip)
+    const commits = [
+      commit('m1', 100, []),
+      commit('m2', 200, ['m1']),
+      commit('s1', 250, ['m2']),
+      commit('m3', 300, ['m2', 's1']),
+      commit('m4', 400, ['m3']),
+      commit('f1', 350, ['m3']),
+    ];
+    const main: LaneSeed = {
+      name: 'main',
+      tip: 'm2',
+      is_remote: false,
+      extra_tips: ['m4'],
+    };
+    const seeds = [main, seed('F', 'f1')];
+    const { lanes } = computeLayout(commits, seeds, 'main', null);
+
+    expect(laneOf(commits, 'm3')).toBe('main');
+    expect(laneOf(commits, 'm4')).toBe('main');
+    expect(laneOf(commits, 'm2')).toBe('main');
+    expect(laneOf(commits, 'f1')).toBe('F');
+    expect(lane(lanes, 'F').fork_point).toBe('m3');
+    // The merged-in side lineage has no seed of its own: unattributed.
+    expect(laneOf(commits, 's1')).toBe('');
+  });
 });

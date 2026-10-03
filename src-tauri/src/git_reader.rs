@@ -75,7 +75,10 @@ impl GitReader {
     /// Lane seeds: all local branches, plus remote branches whose short name
     /// has no local counterpart (e.g. a fresh clone where features exist
     /// only as origin/X). Local lanes take the short branch name; remote-only
-    /// lanes keep the full `origin/x` name and carry is_remote = true.
+    /// lanes keep the full `origin/x` name and carry is_remote = true. A
+    /// local branch shadows the remote LANE, but the remote tip still joins
+    /// that lane's walk starts (extra_tips) so upstream-only history stays
+    /// attributable — a behind local main must reach its own merges.
     fn collect_lane_seeds(&self) -> Result<Vec<LaneSeed>, String> {
         let mut seeds: Vec<LaneSeed> = Vec::new();
         let mut local_names: HashSet<String> = HashSet::new();
@@ -94,6 +97,7 @@ impl GitReader {
                         name: name.to_string(),
                         tip: target.to_string(),
                         is_remote: false,
+                        ..LaneSeed::default()
                     });
                 }
             }
@@ -113,7 +117,18 @@ impl GitReader {
                         .split_once('/')
                         .map(|(_, s)| s)
                         .unwrap_or(full);
-                    if short == "HEAD" || local_names.contains(short) {
+                    if short == "HEAD" {
+                        continue;
+                    }
+                    if local_names.contains(short) {
+                        // Shadowed remote: fold its tip into the local lane's
+                        // walk starts unless it already is one.
+                        if let Some(local) = seeds.iter_mut().find(|s| s.name == short) {
+                            let tip = target.to_string();
+                            if local.tip != tip && !local.extra_tips.contains(&tip) {
+                                local.extra_tips.push(tip);
+                            }
+                        }
                         continue;
                     }
                     // A local branch literally named "origin/x" already owns
@@ -125,6 +140,7 @@ impl GitReader {
                         name: full.to_string(),
                         tip: target.to_string(),
                         is_remote: true,
+                        ..LaneSeed::default()
                     });
                 }
             }
@@ -609,11 +625,13 @@ impl GitReader {
 
         let mut pushed = false;
         for seed in seeds {
-            if let Ok(oid) = Oid::from_str(&seed.tip) {
-                revwalk
-                    .push(oid)
-                    .map_err(|e| format!("Failed to push tip {}: {}", seed.name, e))?;
-                pushed = true;
+            for start in std::iter::once(&seed.tip).chain(seed.extra_tips.iter()) {
+                if let Ok(oid) = Oid::from_str(start) {
+                    revwalk
+                        .push(oid)
+                        .map_err(|e| format!("Failed to push tip {}: {}", seed.name, e))?;
+                    pushed = true;
+                }
             }
         }
         if !pushed {
@@ -754,11 +772,17 @@ impl GitReader {
         })
     }
 
+    /// A seed is stale only when its tip AND every folded upstream tip are
+    /// all outside the loaded window (a behind local main is not stale just
+    /// because its own tip fell out — origin/main's tip may still be in).
     fn stale_seeds(seeds: &[LaneSeed], data: &GitData) -> Vec<String> {
         let ids: HashSet<&str> = data.commits.iter().map(|c| c.id.as_str()).collect();
         seeds
             .iter()
-            .filter(|s| !ids.contains(s.tip.as_str()))
+            .filter(|s| {
+                !ids.contains(s.tip.as_str())
+                    && s.extra_tips.iter().all(|t| !ids.contains(t.as_str()))
+            })
             .map(|s| s.name.clone())
             .collect()
     }
@@ -797,11 +821,13 @@ impl GitReader {
             .map_err(|e| format!("Failed to set sorting: {}", e))?;
         let mut pushed = false;
         for seed in &seeds {
-            if let Ok(oid) = Oid::from_str(&seed.tip) {
-                revwalk
-                    .push(oid)
-                    .map_err(|e| format!("Failed to push tip {}: {}", seed.name, e))?;
-                pushed = true;
+            for start in std::iter::once(&seed.tip).chain(seed.extra_tips.iter()) {
+                if let Ok(oid) = Oid::from_str(start) {
+                    revwalk
+                        .push(oid)
+                        .map_err(|e| format!("Failed to push tip {}: {}", seed.name, e))?;
+                    pushed = true;
+                }
             }
         }
         if !pushed {
@@ -875,6 +901,7 @@ impl GitReader {
             name: id[..7].to_string(),
             tip: id,
             is_remote: false,
+            ..LaneSeed::default()
         }];
         let data = self.build_view(&seeds, limit)?;
         let stale_names = Self::stale_seeds(&seeds, &data);
