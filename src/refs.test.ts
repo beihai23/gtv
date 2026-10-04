@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterRefs } from './refs';
+import { filterRefs, pruneRemoteLanes } from './refs';
 import type { BranchRef } from './types';
 
 // --- fixtures -------------------------------------------------------------
@@ -27,5 +27,23 @@ describe('filterRefs', () => {
     const out = filterRefs(mixed, true);
     expect(out).not.toBe(mixed);
     expect(out.map(r => r.name)).toEqual(['main', 'v1.0']);
+  });
+});
+
+describe('pruneRemoteLanes', () => {
+  const remotes = new Set(['origin/feat', 'origin/hotfix']);
+
+  it('drops remote-only lane names, keeps locals in order', () => {
+    expect(pruneRemoteLanes(['main', 'origin/feat', 'feat/x', 'origin/hotfix'], remotes))
+      .toEqual(['main', 'feat/x']);
+  });
+
+  it('an all-remote selection falls back to the original (never empties the view)', () => {
+    const all = ['origin/feat', 'origin/hotfix'];
+    expect(pruneRemoteLanes(all, remotes)).toBe(all);
+  });
+
+  it('a local-only selection passes through unchanged', () => {
+    expect(pruneRemoteLanes(['main', 'feat/x'], remotes)).toEqual(['main', 'feat/x']);
   });
 });

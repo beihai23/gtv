@@ -15,6 +15,7 @@ import type { DeadKind } from './inactive';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
 import type { DateRange } from './daterange';
 import { saveSelection, loadSelection, restoreSelection, savePinned, loadPinned } from './persist';
+import { pruneRemoteLanes } from './refs';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
 import type { LocateResult } from './locate';
@@ -129,6 +130,13 @@ export default function RepoView({
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [branchList, setBranchList] = useState<BranchLane[]>([]);
+  // Names of remote-only lanes (no local counterpart). The remotes toggle
+  // prunes these from every selection that goes to filterByBranches — their
+  // lanes vanish while the backend closure keeps fork-parent context.
+  const remoteLaneNames = useMemo(
+    () => new Set(branchList.filter(b => b.is_remote).map(b => b.name)),
+    [branchList],
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
   // Pinned branches: the durable "branches I care about" marks behind the
@@ -441,7 +449,8 @@ export default function RepoView({
     setSelectedBranches(branchNames);
     setFilterBusy(true);
     try {
-      const data = await filterByBranches(repoId, branchNames);
+      const effective = hideRemotes ? pruneRemoteLanes(branchNames, remoteLaneNames) : branchNames;
+      const data = await filterByBranches(repoId, effective);
       setGitData(data);
       loadDiffStats(data);
     } catch (err) {
@@ -450,7 +459,18 @@ export default function RepoView({
     } finally {
       setFilterBusy(false);
     }
-  }, [repoId, loadDiffStats]);
+  }, [repoId, hideRemotes, remoteLaneNames, loadDiffStats]);
+
+  // The remotes toggle is lane-level: flipping it rebuilds the view with
+  // the remote-only lanes pruned (ON) or restored (OFF). The chip selection
+  // itself is untouched — only what goes to the backend is pruned.
+  const hideRemotesRef = useRef(hideRemotes);
+  useEffect(() => {
+    if (hideRemotesRef.current === hideRemotes) return;
+    hideRemotesRef.current = hideRemotes;
+    void handleFilterChange(selectedBranches);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideRemotes, handleFilterChange]);
 
   // Mount-time tail of the old open flow (Task 5): App opened the repo
   // and handed us initialData; the chip list and the M2.4 selection
@@ -586,9 +606,16 @@ export default function RepoView({
       const listedNames = new Set(listed.map(b => b.name));
       const kept = selectedBranches.filter(n => listedNames.has(n));
       const selection = kept.length ? kept : listed.map(b => b.name);
-      const narrowed = selection.length < listed.length;
+      // The remotes toggle hides remote-only lanes at the lane level too:
+      // a full local-only selection counts as narrowed, so the refresh
+      // goes through the (closure-anchored) filter path.
+      const remoteNames = hideRemotes
+        ? new Set(listed.filter(b => b.is_remote).map(b => b.name))
+        : null;
+      const effective = remoteNames ? pruneRemoteLanes(selection, remoteNames) : selection;
+      const narrowed = effective.length < listed.length;
       const data = narrowed
-        ? await filterByBranches(repoId, selection)
+        ? await filterByBranches(repoId, effective)
         : await refreshRepository(repoId);
       setGitData(data);
       loadDiffStats(data);
@@ -622,7 +649,7 @@ export default function RepoView({
         void refreshHandlerRef.current();
       }
     }
-  }, [repoId, selectedCommit, selectedBranches, loadDiffStats]);
+  }, [repoId, selectedCommit, selectedBranches, hideRemotes, loadDiffStats]);
   useEffect(() => {
     refreshHandlerRef.current = handleRepoRefresh;
   }, [handleRepoRefresh]);
@@ -984,11 +1011,12 @@ export default function RepoView({
   }, [branchList, refActivity]);
 
   const filteredBranches = useMemo(() => {
-    const visible = showTags ? sortedBranches : sortedBranches.filter(b => !b.is_tag);
+    const visible = (showTags ? sortedBranches : sortedBranches.filter(b => !b.is_tag))
+      .filter(b => !hideRemotes || !b.is_remote);
     if (!searchQuery) return visible;
     const query = searchQuery.toLowerCase();
     return visible.filter(b => b.name.toLowerCase().includes(query));
-  }, [sortedBranches, searchQuery, showTags]);
+  }, [sortedBranches, searchQuery, showTags, hideRemotes]);
 
   // Active-only ref view, TWO DOMAINS with one boundary: the header owns
   // the state at rest, the panel owns the search. activeBranches
@@ -1004,8 +1032,9 @@ export default function RepoView({
   const activeBranches = useMemo(
     () => sortedBranches
       .filter(b => showTags || !b.is_tag)
+      .filter(b => !hideRemotes || !b.is_remote)
       .filter(b => !allDeadNames.has(b.name)),
-    [sortedBranches, showTags, allDeadNames]
+    [sortedBranches, showTags, hideRemotes, allDeadNames]
   );
 
 
@@ -1030,8 +1059,14 @@ export default function RepoView({
     [activeBranches, pinnedBranches]
   );
   const aliveSelection = useMemo(
-    () => selectedBranches.filter(n => !allDeadNames.has(n)),
-    [selectedBranches, allDeadNames]
+    () => {
+      const alive = selectedBranches.filter(n => !allDeadNames.has(n));
+      // Compare against the same domain the remotes toggle shows: with
+      // remote lanes hidden, the lit state of the All lens judges the
+      // local-only selection.
+      return hideRemotes ? pruneRemoteLanes(alive, remoteLaneNames) : alive;
+    },
+    [selectedBranches, allDeadNames, hideRemotes, remoteLaneNames]
   );
   const sameSet = (a: string[], b: string[]) =>
     a.length === b.length && a.every(x => b.includes(x));
