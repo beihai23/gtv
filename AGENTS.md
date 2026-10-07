@@ -173,11 +173,13 @@ src/
                   palettes (CSS custom properties applied to :root; App.css
                   consumes them via var(--x)), persisted in localStorage
                   (gtv_lang / gtv_theme / gtv_show_stale / gtv_hide_remotes /
-                  gtv_inactive_days / gtv_autofetch). The remotes toggle is
-                  lane-level: ON hides remote-only branches (origin/x lanes,
-                  chips, and badges) — selections sent to filterByBranches
-                  are pruned via refs.ts pruneRemoteLanes while the backend
-                  closure keeps fork-parent lanes as context
+                  gtv_inactive_days / gtv_autofetch). The remotes SWITCH
+                  presents ON = show (storage stays gtv_hide_remotes, the UI
+                  inverts it): remote-only branches (origin/x lanes, chips,
+                  badges) disappear while OFF — selections sent to
+                  filterByBranches are pruned via refs.ts pruneRemoteLanes
+                  while the backend closure keeps fork-parent lanes as
+                  context
   tabs.ts         pure tab-shell state: commondir grouping, next-active
                   after close, gtv_tabs persist/restore (legacy
                   gtv_latest_repo migration, read-once)

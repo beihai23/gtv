@@ -2046,6 +2046,8 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          role="switch"
+                          className="switch"
                           checked={compressed}
                           onChange={() => setCompressed(v => !v)}
                         />
@@ -2057,6 +2059,8 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          role="switch"
+                          className="switch"
                           checked={showMergeLinks}
                           onChange={() => setShowMergeLinks(v => !v)}
                         />
@@ -2068,6 +2072,8 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          role="switch"
+                          className="switch"
                           checked={showRefLabels}
                           onChange={() => setShowRefLabels(v => !v)}
                         />
@@ -2079,6 +2085,8 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          role="switch"
+                          className="switch"
                           checked={showAnnotations}
                           onChange={() => setShowAnnotations(v => !v)}
                         />
@@ -2090,6 +2098,8 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
+                          role="switch"
+                          className="switch"
                           checked={showPatchLinks}
                           onChange={() => setShowPatchLinks(v => !v)}
                         />
@@ -2103,8 +2113,10 @@ export default function RepoView({
                       <label className="view-menu-item">
                         <input
                           type="checkbox"
-                          checked={hideRemotes}
-                          onChange={() => setHideRemotes(!hideRemotes)}
+                          role="switch"
+                          className="switch"
+                          checked={!hideRemotes}
+                          onChange={e => setHideRemotes(!e.target.checked)}
                         />
                         <span className="view-menu-text">
                           <span className="view-menu-label">{t('remotes')}</span>

@@ -62,6 +62,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             <label className="settings-toggle" title={t('showStaleTip')}>
               <input
                 type="checkbox"
+                role="switch"
+                className="switch"
                 checked={showStaleBranches}
                 onChange={e => setShowStaleBranches(e.target.checked)}
               />
@@ -75,6 +77,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             <label className="settings-toggle" title={t('autoFetchTip')}>
               <input
                 type="checkbox"
+                role="switch"
+                className="switch"
                 checked={autoFetch}
                 onChange={e => setAutoFetch(e.target.checked)}
               />

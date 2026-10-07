@@ -1008,9 +1008,41 @@
   background: var(--bg-input);
 }
 
-.view-menu-item input {
-  margin-top: 3px;
-  accent-color: var(--accent);
+/* View-menu options are switches, not checkboxes: a persistent on/off
+   preference reads as a switch, and the switch track makes the remote
+   item's inverted presentation (ON = show remote-only lanes) legible. */
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 17px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.switch::before {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform 0.15s, background 0.15s;
+}
+.switch:checked {
+  background: var(--link);
+  border-color: var(--link);
+}
+.switch:checked::before {
+  transform: translateX(13px);
+  background: var(--on-link);
 }
 
 .view-menu-text {
