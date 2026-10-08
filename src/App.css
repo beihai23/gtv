@@ -1539,35 +1539,44 @@
 span.view-btn.loading-older { cursor: default; }
 span.view-btn.loading-older:hover { border-color: var(--border); color: var(--text-dim); }
 
-/* --- render badge (top-right overlay): heavy redraw / async view rebuild --- */
-/* Same frosted-pill language as the lane chips; mirrored to the right of the
-   view toolbar's row. Above the canvas overlays (rail 15, toolbar 20 is
-   top-left and never overlaps), below the side panels (60). Never clickable
-   — it must not swallow a pan drag. */
-.render-badge {
+/* --- render overlay (centered): heavy redraw / async view rebuild --- */
+/* A heavy redraw freezes the main thread, so the signal must read as
+   "working", not "decorating": a dimmed scrim over the canvas plus a
+   centered card is unmissable, while a corner pill was not. The triggers
+   (heavy scene threshold, delay-gated async busy) already prevent
+   flicker, so the overlay can afford to be this loud. Never clickable —
+   it must not swallow a pan drag. */
+.render-overlay {
   position: absolute;
-  top: 34px;
-  right: 16px;
+  inset: 0;
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  font-size: 11px;
-  color: var(--text-dim);
-  background: rgba(var(--bg-canvas-rgb), 0.85);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  backdrop-filter: blur(12px) saturate(1.5);
-  -webkit-backdrop-filter: blur(12px) saturate(1.5);
+  justify-content: center;
+  background: rgba(var(--bg-canvas-rgb), 0.45);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   pointer-events: none;
   user-select: none;
 }
+.render-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 32px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px var(--shadow);
+}
+.render-card-text { font-size: 14px; font-weight: 600; color: var(--text); }
+.render-card-sub { font-size: 11px; color: var(--text-dim); }
 .render-spinner {
-  width: 12px;
-  height: 12px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  border: 2px solid var(--border);
+  border: 3px solid var(--border);
   border-top-color: var(--accent);
   animation: render-spin 0.8s linear infinite;
 }

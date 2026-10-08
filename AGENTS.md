@@ -215,10 +215,11 @@ src/
                                 frame of a gesture always culls the resting
                                 camera). Full redraws of scenes over
                                 HEAVY_SCENE_COMMITS (2500) visible commits light
-                                the render badge first and draw inside a double
+                                the centered render overlay (dimmed scrim +
+                                spinner card) first and draw inside a double
                                 rAF (a synchronous block could never paint it);
                                 async rebuilds (filter/refresh, RepoView's `busy`
-                                prop) light the same badge through useDelayedBusy.
+                                prop) light the same overlay through useDelayedBusy.
                                 Label system: fork/merge 🌱/🔀 annotations are
                                 off by default (view-menu toggle, hover tooltip
                                 recalls them); remote-tracking pills render as

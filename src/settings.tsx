@@ -173,6 +173,7 @@ const en: Record<string, string> = {
   collapseGroup: 'Collapse',
   loadingOlder: 'Loading older history…',
   rendering: 'Rendering…',
+  renderingTip: 'Large scene — redrawing the graph',
   checkoutThisBranch: 'Check out this branch',
   confirmCheckoutTitle: 'Switch branch?',
   // Three-state body copy (final review L1): "0 modified, N untracked"
@@ -364,6 +365,7 @@ const zh: Record<string, string> = {
   collapseGroup: '收拢',
   loadingOlder: '正在加载更早的历史…',
   rendering: '渲染中…',
+  renderingTip: '提交较多,正在重绘图形',
   checkoutThisBranch: '切换到此分支',
   confirmCheckoutTitle: '切换分支？',
   confirmCheckoutBodyBoth: '{modified} 处已修改、{untracked} 个未跟踪文件',

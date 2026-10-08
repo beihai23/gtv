@@ -1758,9 +1758,12 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       <div ref={laneRailRef} className="lane-rail"></div>
 
       {(rendering || busyDelayed) && (
-        <div className="render-badge" aria-live="polite">
-          <span className="render-spinner" aria-hidden="true" />
-          {t('rendering')}
+        <div className="render-overlay" aria-live="polite" role="status">
+          <div className="render-card">
+            <span className="render-spinner" aria-hidden="true" />
+            <span className="render-card-text">{t('rendering')}</span>
+            <span className="render-card-sub">{t('renderingTip')}</span>
+          </div>
         </div>
       )}
 
