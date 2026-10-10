@@ -8,6 +8,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // Relative base: built asset URLs must resolve against the hosting
+  // document, because the VS Code webview serves media/index.html from a
+  // vscode-resource URI — runtime JS references like the welcome logo's
+  // /assets/... 404 there (extension.ts only rewrites the static HTML).
+  base: './',
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
