@@ -187,6 +187,9 @@ src/
   compare.ts      compare-pairing pure functions: nextPair (Ctrl+click
                   base/target state machine) + headToLaneTip (pair for the
                   lane-menu "compare with HEAD" item)
+  collapse.ts     compressed-view folded segments: collapsedRuns finds each
+                  lane's maximal runs of hidden non-key commits (x-sorted) —
+                  one +N chip per run, click expands just that stretch
   delaygate.ts    delay-gate state machine for busy indicators (350ms show-up
                   delay + 500ms minimum show, pure step(gate, busy, now));
                   Timeline's useDelayedBusy wraps it with setTimeout
@@ -226,7 +229,15 @@ src/
                                 outline style vs the local pills' solid fill,
                                 fold into their local twin (name ⤒), and dim
                                 the origin/ prefix; below a 28px row height the
-                                pills and annotations mute (HEAD and tags stay)
+                                pills and annotations mute (HEAD and tags stay).
+                                Compress mode folds each lane's non-key commits
+                                into per-run +N chips (collapse.ts — one chip per
+                                maximal hidden stretch, centered on the stretch's
+                                x midpoint, hover title carries the count); a chip
+                                click expands just that stretch (expandedIds), the
+                                lane context/search jump expands whole lanes
+                                (expandedLanes), and the toolbar's Collapse all
+                                clears both granularities
   components/CommitDetails.tsx  commit detail panel (narrow summary; file
                                 rows open the split view)
   components/CompareDetails.tsx two-commit compare panel (Ctrl+click pairing):
@@ -304,11 +315,11 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 171 cases across 16 files: `src/inactive.test.ts`,
+(`npm test`, 181 cases across 17 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
-`src/compare.test.ts`, `src/tabs.test.ts`, `src/filetree.test.ts`,
-`src/diffparse.test.ts`, `src/delaygate.test.ts`,
+`src/compare.test.ts`, `src/collapse.test.ts`, `src/tabs.test.ts`,
+`src/filetree.test.ts`, `src/diffparse.test.ts`, `src/delaygate.test.ts`,
 `src/components/minimap.test.ts`); all other automated testing lives in Rust.
 
 ## Testing strategy

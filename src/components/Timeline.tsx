@@ -7,6 +7,7 @@ import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 import { LANE_HEIGHT } from '../inactive';
 import type { TraceRow, TraceBar, DeadKind } from '../inactive';
 import { headToLaneTip, type ComparePair } from '../compare';
+import { collapsedRuns, type CollapsedRun } from '../collapse';
 import { createDelayGate, step as delayGateStep, type DelayGate } from '../delaygate';
 
 /** A busy indicator must hold off for a beat (sub-frame async waits never
@@ -200,6 +201,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   // View-local state (options themselves live in the app header)
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
   /** Scene→minimap mapping (uniform scale, letterbox-centered), set during
@@ -219,6 +221,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   useEffect(() => {
     setFocusedLane(null);
     setExpandedLanes(new Set());
+    setExpandedIds(new Set());
     setLaneMenu(null);
     setEdgeHighlight(null);
   }, [resetKey]);
@@ -245,20 +248,16 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   const visibleCommits = useMemo(() => {
     const alive = data.commits.filter(c => !hiddenIds.has(c.id) && c.lane_owner !== '');
     if (!compressed) return alive;
-    return alive.filter(c => c.is_key || expandedLanes.has(c.lane_owner));
-  }, [data, compressed, expandedLanes, hiddenIds]);
+    return alive.filter(c => c.is_key || expandedLanes.has(c.lane_owner) || expandedIds.has(c.id));
+  }, [data, compressed, expandedLanes, expandedIds, hiddenIds]);
 
-  const hiddenCountByLane = useMemo(() => {
-    const m = new Map<string, number>();
-    if (!compressed) return m;
-    for (const c of data.commits) {
-      if (hiddenIds.has(c.id) || c.lane_owner === '') continue;
-      if (!c.is_key && !expandedLanes.has(c.lane_owner)) {
-        m.set(c.lane_owner, (m.get(c.lane_owner) ?? 0) + 1);
-      }
-    }
-    return m;
-  }, [data, compressed, expandedLanes, hiddenIds]);
+  // Folded stretches of the compressed view: one chip per maximal run of
+  // hidden non-key commits (collapse.ts), so the user expands exactly the
+  // segment they care about instead of the whole lane.
+  const collapseRunData = useMemo(
+    () => (compressed ? collapsedRuns(data.commits, data.branches, hiddenIds, expandedLanes, expandedIds) : []),
+    [data, compressed, hiddenIds, expandedLanes, expandedIds],
+  );
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000);
@@ -896,38 +895,32 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
       .text((l: PatchLink) =>
         `${l.kind === 'rebase' ? 'Rebased' : 'Cherry-picked'} copy: ${l.from.slice(0, 7)} ↔ ${l.to.slice(0, 7)}`);
 
-    // --- collapsed-segment chips ------------------------------------------------
+    // --- collapsed-run chips ---------------------------------------------------
     if (compressed) {
-      const chipData = data.branches
-        .map(b => ({ lane: b, hidden: hiddenCountByLane.get(b.name) ?? 0 }))
-        .filter(d => d.hidden > 0 && laneSpan.has(d.lane.lane_index));
       const chips = g.selectAll('.collapse-chip')
-        .data(chipData)
+        .data(collapseRunData)
         .enter()
         .append('g')
         .attr('class', 'collapse-chip')
-        .attr('transform', d => {
-          const span = laneSpan.get(d.lane.lane_index)!;
-          return `translate(${(span.min + span.max) / 2}, ${d.lane.lane_index * LANE_HEIGHT})`;
-        })
+        .attr('transform', d => `translate(${d.x}, ${d.lane_index * LANE_HEIGHT})`)
         .style('cursor', 'pointer')
         .on('click', (_e, d) => {
-          setExpandedLanes(prev => new Set(prev).add(d.lane.name));
+          setExpandedIds(prev => new Set([...prev, ...d.ids]));
         });
       chips.append('rect')
         .attr('x', -18).attr('y', -9)
         .attr('width', 36).attr('height', 18)
         .attr('rx', 9)
         .attr('fill', cssVar('--bg-input', '#2a2a2a'))
-        .attr('stroke', d => d.lane.color)
+        .attr('stroke', d => d.color)
         .attr('stroke-width', 1);
       chips.append('text')
         .attr('text-anchor', 'middle')
         .attr('dy', 3)
         .attr('font-size', '10px')
         .attr('fill', cssVar('--text-dim', '#bbbbbb'))
-        .text(d => `+${d.hidden}`);
-      chips.append('title').text(d => `${d.hidden} commits collapsed — click to expand`);
+        .text(d => `+${d.ids.length}`);
+      chips.append('title').text(d => t('collapsedTip', { n: d.ids.length }));
     }
 
     // --- nodes -------------------------------------------------------------------
@@ -1355,12 +1348,8 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
           return null;
         })
         .style('top', d => `${d.lane_index * LANE_HEIGHT * t.k + t.y - 9}px`);
-      g.selectAll<SVGGElement, { lane: BranchLane; hidden: number }>('.collapse-chip')
-        .style('display', d => {
-          const span = laneSpan.get(d.lane.lane_index);
-          if (!span) return 'none';
-          return inView((span.min + span.max) / 2, d.lane.lane_index * LANE_HEIGHT) ? null : 'none';
-        });
+      g.selectAll<SVGGElement, CollapsedRun>('.collapse-chip')
+        .style('display', d => (inView(d.x, d.lane_index * LANE_HEIGHT) ? null : 'none'));
       g.selectAll<SVGLineElement, TraceBar>('.trace-bar')
         .style('display', d => (d.x2 >= x0 && d.x1 <= x1 ? null : 'none'));
       g.selectAll<SVGRectElement, TraceRow>('.trace-hit')
@@ -1545,7 +1534,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, hiddenCountByLane, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
+  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
 
   // Full redraw. Small scenes draw synchronously (zero badge, zero flicker).
   // A heavy scene's join blocks the main thread past a frame budget, and a
@@ -1771,9 +1760,9 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         {loadingOlder && (
           <span className="view-btn loading-older">{t('loadingOlder')}</span>
         )}
-        {compressed && expandedLanes.size > 0 && (
-          <button className="view-btn" onClick={() => setExpandedLanes(new Set())}>
-            Collapse all
+        {compressed && expandedLanes.size + expandedIds.size > 0 && (
+          <button className="view-btn" onClick={() => { setExpandedLanes(new Set()); setExpandedIds(new Set()); }}>
+            {t('collapseAll')}
           </button>
         )}
         {focusedLane && (
