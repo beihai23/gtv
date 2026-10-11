@@ -1170,11 +1170,12 @@ fn watcher_cas_writeback_never_resurrects_a_reset_baseline() {
     next.insert(repo.repo_id, "fp-new".to_string());
     let changed = vec![repo.repo_id];
 
-    let emits = {
+    let outcome = {
         let mut repos = state.repos.lock().unwrap();
         apply_fingerprints(&mut repos, &stale_snapshot, &next, &changed)
     };
-    assert!(emits.is_empty(), "a stale snapshot must not emit");
+    assert!(outcome.changed.is_empty(), "a stale snapshot must not emit");
+    assert!(outcome.missing.is_empty());
     {
         let repos = state.repos.lock().unwrap();
         assert_eq!(
@@ -1187,13 +1188,14 @@ fn watcher_cas_writeback_never_resurrects_a_reset_baseline() {
     // Control: a snapshot that still MATCHES the live baseline writes the
     // new fingerprint and emits exactly one event.
     let fresh_snapshot = vec![(repo.repo_id, path, Some("post-open-reset".to_string()))];
-    let emits = {
+    let outcome = {
         let mut repos = state.repos.lock().unwrap();
         apply_fingerprints(&mut repos, &fresh_snapshot, &next, &changed)
     };
-    assert_eq!(emits.len(), 1);
-    assert_eq!(emits[0].repo_id, repo.repo_id);
-    assert_eq!(emits[0].path, dir.to_str().unwrap());
+    assert_eq!(outcome.changed.len(), 1);
+    assert_eq!(outcome.changed[0].repo_id, repo.repo_id);
+    assert_eq!(outcome.changed[0].path, dir.to_str().unwrap());
+    assert!(outcome.missing.is_empty());
     {
         let repos = state.repos.lock().unwrap();
         assert_eq!(
@@ -1205,7 +1207,58 @@ fn watcher_cas_writeback_never_resurrects_a_reset_baseline() {
     std::fs::remove_dir_all(&dir).expect("clean up temp dir");
 }
 
-/// Remote-only branch lanes: a remote-tracking ref whose short name has no
+/// repo-missing detection in the apply_fingerprints seam: a session whose
+/// fingerprint failed (absent from `next`) is reported missing ONLY when
+/// its directory is also gone from disk — a deleted worktree surfaces as
+/// repo-missing, while a transient failure with the directory still
+/// present (the repo being replaced mid-poll) stays quiet for the next
+/// tick. The missing session's cached attribution is invalidated, same as
+/// a detected change.
+#[test]
+fn watcher_reports_missing_only_when_the_directory_is_gone() {
+    let dir_gone = build_repo("missing", "gone");
+    let dir_kept = build_repo("missing", "kept");
+    let state = AppState::default();
+    let gone = open(&state, &dir_gone);
+    let kept = open(&state, &dir_kept);
+
+    // The delete happens after the open, so the snapshot still names the
+    // (now gone) path — exactly what a poll racing an external `rm -rf`
+    // sees. Neither id lands in `next`: both fingerprints "failed".
+    let gone_canonical = std::fs::canonicalize(&dir_gone).expect("canonicalize");
+    std::fs::remove_dir_all(&dir_gone).expect("delete the repo dir");
+    let snapshot: Vec<(u64, String, Option<String>)> = {
+        let repos = state.repos.lock().unwrap();
+        repos
+            .iter()
+            .map(|(id, s)| (*id, s.path.clone(), s.watch_baseline.clone()))
+            .collect()
+    };
+    let next: HashMap<u64, String> = HashMap::new();
+    let changed: Vec<u64> = Vec::new();
+
+    let outcome = {
+        let mut repos = state.repos.lock().unwrap();
+        apply_fingerprints(&mut repos, &snapshot, &next, &changed)
+    };
+    assert!(outcome.changed.is_empty(), "no fingerprint moved");
+    assert_eq!(outcome.missing.len(), 1, "only the deleted dir is missing");
+    assert_eq!(outcome.missing[0].repo_id, gone.repo_id);
+    assert_eq!(outcome.missing[0].path, gone_canonical.to_str().unwrap());
+    {
+        let repos = state.repos.lock().unwrap();
+        assert!(
+            repos.get(&gone.repo_id).unwrap().attribution.is_none(),
+            "a missing session's attribution must be invalidated"
+        );
+        assert!(
+            repos.get(&kept.repo_id).unwrap().attribution.is_some(),
+            "a transient failure must not touch the attribution cache"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir_kept).expect("clean up temp dir");
+}
 /// local counterpart seeds a lane named `origin/x` with is_remote = true;
 /// once a local branch of the same short name exists, the local seed
 /// shadows it (short name, is_remote = false).

@@ -150,7 +150,8 @@ export interface CheckoutAck {
 // --- Integrated terminal (bottom panel); mirrors models.rs ---
 // Event names: "terminal-output" (TerminalOutput), "terminal-exit"
 // (TerminalExit), "repo-changed" (RepoChanged: the registered repo whose
-// fingerprint moved -- listeners filter on payload.repo_id).
+// fingerprint moved -- listeners filter on payload.repo_id), "repo-missing"
+// (RepoChanged: the registered repo whose directory no longer exists).
 
 /** Live terminal session handle returned by terminalSpawn. */
 export interface TerminalInfo {
@@ -196,7 +197,8 @@ export interface OpenedRepo {
   data: GitData;
 }
 
-/** "repo-changed" payload: which registered repository moved. */
+/** "repo-changed" / "repo-missing" payload: which registered repository
+ *  moved, or whose directory disappeared. */
 export interface RepoChanged {
   repo_id: number;
   path: string;

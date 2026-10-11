@@ -95,16 +95,23 @@ src-tauri/src/
                   decision: credential fidelity + zero native-dep risk;
                   libgit2 stays default-features = off) and returns a
                   one-line failure summary; change_fingerprint powers the
-                  repo-change poller; filter_by_branches is TWO-PASS: pass 1
-                  builds the full view to read each selected lane's
-                  ancestor-lane closure (fork_point -> owner -> ... up to
-                  main), pass 2 walks the union of selected + closure seeds
-                  so fork edges anchor on the true parent lane even when it
-                  (e.g. main) is not selected; feeds layout::compute_layout
-                  and returns GitData
+                  repo-change poller; filter_by_branches builds the filtered
+                  view in ONE walk: the ancestor-lane closure (fork_point ->
+                  owner -> ... up to main) is read off the session's cached
+                  ViewAttribution (owner_of + fork_of maps extracted by
+                  attribution_of from the last full view — it depends only on
+                  refs+DAG, never on the branch selection), and the filtered
+                  walk covers the union of selected + closure seeds so fork
+                  edges anchor on the true parent lane even when it (e.g.
+                  main) is not selected; only a caller with no cache (the
+                  cold path) pays the old pass-1 full build; feeds
+                  layout::compute_layout and returns GitData
   commands.rs     #[tauri::command] handlers + AppState (repos registry:
                   repo_id -> RepoSession with view + pagination
-                  ViewSession + terminal, plus active/auto_fetch);
+                  ViewSession + terminal + attribution (the full-view
+                  ViewAttribution cache filter_by_branches reuses; written
+                  by the full-build paths open/rebuild_view only, narrow
+                  views never touch it), plus active/auto_fetch);
                   rebuild_view is the shared refresh path and never writes
                   include_stale; fetch_repository is the Fetch button's
                   manual fetch (same fetch_remotes write surface as the
@@ -115,8 +122,13 @@ src-tauri/src/
                   without a Tauri app
   watcher.rs      repo-change poller thread: fingerprints EVERY open
                   repository every 1.5s (multi-repo) and emits
-                  "repo-changed" per repo so the frontend reloads; the CAS
-                  write-back lives in the pure apply_fingerprints seam
+                  "repo-changed" per repo so the frontend reloads; a
+                  session whose fingerprint fails AND whose directory is
+                  gone from disk is emitted as "repo-missing" (an
+                  externally deleted worktree, no silent zombie retry);
+                  the CAS write-back and the missing detection live in the
+                  pure apply_fingerprints seam (ApplyOutcome{changed,
+                  missing})
   fetcher.rs      auto-fetch thread: 60s tick fetching the ACTIVE tab's
                   remotes (busy-skip, auto_fetch gate, silent failure log)
 src-tauri/tests/
@@ -134,6 +146,8 @@ src-tauri/tests/
                   remotes (write-surface whitelist acceptance), the Fetch
                   button's manual fetch (caller-targeted, ungated), the
                   include_stale single-writer pin, and the watcher CAS race
+                  + repo-missing detection (deleted dir => missing,
+                  transient failure with the dir present => quiet)
   terminal_multi.rs  per-repo terminals: spawn routing/idempotency, output
                   isolation, close-linked kill, unknown ids
   pagination.rs   builds a temp repo via the git CLI and pages through it in
@@ -158,9 +172,10 @@ src-tauri/tests/
                   on commit/branch/tag/checkout, ignores worktree noise
   lane_attribution.rs  lane-ownership integration tests on git-CLI temp repos:
                   branch-from-branch with merge evidence (R2 keeps the parent's
-                  internal commits on the parent lane) and the two-pass
-                  filter_by_branches ancestor-lane closure (fork edges anchor
-                  on an unselected main)
+                  internal commits on the parent lane), the filter_by_branches
+                  ancestor-lane closure (fork edges anchor
+                  on an unselected main), and the attribution-cache
+                  transparency pin (cached filter == cold pass-1 filter)
 src-tauri/examples/
   dump_json.rs    dev tool: dump a repo's GitData as JSON
   dump_links.rs   dev tool: dump a repo's patch links (cherry-pick/rebase) as JSON
@@ -195,7 +210,12 @@ src/
                   Timeline's useDelayedBusy wraps it with setTimeout
   App.tsx         tab shell: open funnel (picker/Cmd+T/drag-drop/restore all
                   through openTab with backend dedup), two-level tab bar,
-                  family snapshots + repo-changed refresh, restore, error strip
+                  family snapshots + repo-changed refresh, restore, error
+                  strip; the repo-missing listener reacts to an externally
+                  deleted worktree — a tab whose family still has a main
+                  member elsewhere is re-pointed at it through the normal
+                  member switch (openTab), otherwise the tab closes, either
+                  way with a notice in the error strip
   RepoView.tsx    per-repo view body (one instance per tab, kept alive via
                   display:none): data state, display pipeline, handlers,
                   header/toolbar, panels, per-tab terminal; the identity card
@@ -280,11 +300,18 @@ mock.html         browser-only preview harness + living contract document for
                   and E2E-driven in a plain browser without the Rust backend
 vscode-gtv/       the VS Code extension run mode: TypeScript engine over the
                   system git CLI (engine/reader.ts mirrors git_reader.rs —
-                  including the two-pass filterByBranches ancestor-lane
-                  closure; engine/layout.ts is the 1:1 port of layout.rs,
+                  including the filterByBranches ancestor-lane closure read
+                  off the cached ViewAttribution (cold path: pass-1 full
+                  build); engine/layout.ts is the 1:1 port of layout.rs,
                   R2 precedence (main exempt as source) + Kahn ordering
                   included; engine.ts
-                  mirrors commands.rs AppState), webview bridge in
+                  mirrors commands.rs AppState, Session.attribution
+                  included, and its pollFingerprints mirrors the watcher:
+                  repo-changed on a moved fingerprint, repo-missing when
+                  the session's directory is gone (a merely invalid repo
+                  with the directory present stays quiet — fingerprint()
+                  degrades rather than throws, so validity is probed
+                  first)), webview bridge in
                   media/bridge.js (the __TAURI_INTERNALS__ polyfill over
                   acquireVsCodeApi), frontend bundle synced into media/ by
                   `node esbuild.mjs --sync-web`. Tests: `npm test`
@@ -315,12 +342,14 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 181 cases across 17 files: `src/inactive.test.ts`,
+(`npm test`, 187 cases across 18 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
 `src/compare.test.ts`, `src/collapse.test.ts`, `src/tabs.test.ts`,
 `src/filetree.test.ts`, `src/diffparse.test.ts`, `src/delaygate.test.ts`,
-`src/components/minimap.test.ts`); all other automated testing lives in Rust.
+`src/components/minimap.test.ts`, plus the vscode-gtv engine/e2e files —
+`vscode-gtv/src/engine/worktree.test.ts` includes the repo-missing
+watcher cases); all other automated testing lives in Rust.
 
 ## Testing strategy
 
@@ -361,7 +390,8 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
   blocking, so heavy commands (`open_repository`, `switch_branch`,
   `filter_by_branches`) run inside `task::spawn_blocking`. Follow that pattern.
 - Backend errors cross IPC as `Result<T, String>` — error messages are user-facing.
-- Tauri events (`"terminal-output"`, `"terminal-exit"`, `"repo-changed"`) follow
+- Tauri events (`"terminal-output"`, `"terminal-exit"`, `"repo-changed"`,
+  `"repo-missing"`) follow
   the same mirroring rule: payload structs live in `models.rs` and `src/types.ts`,
   and the event-name strings are declared in the doc comments there. PTY output
   crosses IPC as base64 — chunk boundaries split UTF-8 sequences, so it must be

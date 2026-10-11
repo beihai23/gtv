@@ -242,4 +242,31 @@ describe('vscode extension full stack (no VS Code)', () => {
     expect(terminalCalls.length).toBe(before + 1);
     expect(terminalCalls[terminalCalls.length - 1]).toBe(wtDir);
   }, 60000);
+
+  // Deleting the VIEWED worktree's directory outside the app must not
+  // leave a zombie tab: the watcher emits repo-missing, and the frontend
+  // re-points the tab at the family's main worktree (in place) with a
+  // notice in the error strip.
+  it('repo-missing re-points the tab at the main worktree after its dir is deleted', async () => {
+    const wtDir = fs.realpathSync(`${repoDir}-wt`);
+    const mainDir = fs.realpathSync(repoDir);
+    // Precondition from the previous test: the tab views the worktree
+    // member.
+    await page.waitForFunction(
+      (dir) => document.querySelector('.repo-path')?.getAttribute('title') === dir,
+      wtDir,
+      { timeout: 10000 },
+    );
+    fs.rmSync(wtDir, { recursive: true, force: true });
+    // The harness drives the 1.5s watcher tick; repo-missing -> openTab
+    // (main) re-points the tab in place.
+    await page.waitForFunction(
+      (dir) => document.querySelector('.repo-path')?.getAttribute('title') === dir,
+      mainDir,
+      { timeout: 30000 },
+    );
+    await page.waitForSelector('.error', { timeout: 10000 });
+    const strip = await page.locator('.error').textContent();
+    expect(strip).toContain('worktree was deleted');
+  }, 60000);
 });

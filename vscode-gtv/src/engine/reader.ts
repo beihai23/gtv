@@ -28,6 +28,30 @@ export interface ViewResult {
   staleNames: string[];
 }
 
+/** Lane attribution extracted from a full (all-seeds) view: which lane owns
+ *  each commit and where each lane forks. It depends only on the refs+DAG
+ *  snapshot the full view was built from — never on which branches the user
+ *  selected — so filterByBranches can reuse it instead of rebuilding the
+ *  full view just to read the ancestor-lane closure.
+ *  Mirrors ViewAttribution in git_reader.rs. */
+export interface ViewAttribution {
+  /** commit id -> owning lane name. */
+  ownerOf: Map<string, string>;
+  /** lane name -> fork point commit id. */
+  forkOf: Map<string, string>;
+}
+
+/** Extract the attribution maps from a full view (pass-1 material for the
+ *  filtered view's ancestor-lane closure). Mirrors attribution_of. */
+export function attributionOf(data: GitData): ViewAttribution {
+  const ownerOf = new Map(data.commits.map((c) => [c.id, c.lane_owner]));
+  const forkOf = new Map<string, string>();
+  for (const b of data.branches) {
+    if (b.fork_point !== null) forkOf.set(b.name, b.fork_point);
+  }
+  return { ownerOf, forkOf };
+}
+
 const PAGE = 2000;
 const US = '\x1f'; // field separator in --format strings
 const RS = '\x1e'; // record separator
@@ -313,29 +337,34 @@ export class RepoReader {
     return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
   }
 
-  /** Filtered view over the selected branches' lineages, built in TWO
-   *  passes. Pass 1 builds the full view (all lane seeds) purely to read
-   *  off each selected lane's ancestry: fork_point -> the lane owning that
-   *  commit -> that lane's fork_point -> ... up to main. Pass 2 walks the
-   *  union of the selected seeds plus every ancestor lane's seed.
+  /** Filtered view over the selected branches' lineages. Pass 2 walks the
+   *  union of the selected seeds plus every lane in their ancestor closure:
+   *  fork_point -> the lane owning that commit -> that lane's fork_point ->
+   *  ... up to main. The closure is read off the full-view attribution —
+   *  either the caller's CACHED one (built by the last full view, identical
+   *  because attribution depends only on the refs+DAG snapshot) or, when
+   *  omitted, a pass-1 full view built here (the cold path).
    *
-   *  Why: a fork edge must anchor on the TRUE parent lane. When the parent
-   *  lane's seed is missing from the walk (e.g. main is not selected), its
-   *  commits have no owner and the first selected branch whose walk reaches
-   *  them claims them — the fork line then lands on the wrong lane. The
-   *  closure lanes are render context only; the frontend's chip selection
-   *  state is unaffected. Mirrors filter_by_branches. */
-  async filterByBranches(branchNames: string[]): Promise<ViewResult> {
+   *  Why the closure at all: a fork edge must anchor on the TRUE parent
+   *  lane. When the parent lane's seed is missing from the walk (e.g. main
+   *  is not selected), its commits have no owner and the first selected
+   *  branch whose walk reaches them claims them — the fork line then lands
+   *  on the wrong lane. The closure lanes are render context only; the
+   *  frontend's chip selection state is unaffected. Mirrors
+   *  filter_by_branches. */
+  async filterByBranches(
+    branchNames: string[],
+    attribution?: ViewAttribution,
+  ): Promise<ViewResult> {
     const all = await this.laneSeeds();
     const selected = all.filter((s) => branchNames.includes(s.name));
 
-    // Pass 1: full view, read only for lane ancestry.
-    const full = await this.buildView(all, PAGE);
-    const ownerOf = new Map(full.commits.map((c) => [c.id, c.lane_owner]));
-    const forkOf = new Map<string, string>();
-    for (const b of full.branches) {
-      if (b.fork_point !== null) forkOf.set(b.name, b.fork_point);
+    // Pass 1 (cold path only): full view, read only for lane ancestry.
+    if (attribution === undefined) {
+      const full = await this.buildView(all, PAGE);
+      attribution = attributionOf(full);
     }
+    const { ownerOf, forkOf } = attribution;
 
     // Ancestor-lane closure: lane -> owner of its fork point -> ..., with
     // a visited set as the cycle guard.
@@ -670,8 +699,15 @@ export class RepoReader {
     let cur: Partial<WorktreeMember> & { branchRef?: string } = {};
     const flush = () => {
       if (!cur.path) return;
-      let real = cur.path;
-      try { real = fs.realpathSync(cur.path); } catch { /* removed member: keep raw */ }
+      let real: string;
+      try {
+        real = fs.realpathSync(cur.path);
+      } catch {
+        // Removed member (deleted dir, not yet pruned by git): skip it,
+        // mirroring worktree_family's validate() skip.
+        cur = {};
+        return;
+      }
       members.push({
         name: path.basename(real),
         path: real,

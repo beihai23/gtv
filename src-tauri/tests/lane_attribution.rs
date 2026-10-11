@@ -2,7 +2,8 @@
 //! git CLI: branch-from-branch ownership with merge evidence (R2), and the
 //! two-pass filter_by_branches ancestor-lane closure.
 
-use gtv_lib::git_reader::GitReader;
+use gtv_lib::commands::{filter_by_branches_impl, open_repository_impl, AppState};
+use gtv_lib::git_reader::{attribution_of, GitReader};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,6 +42,14 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// Drive an async *_impl on a throwaway runtime (the impls use
+/// spawn_blocking, so they need a tokio context, never a tauri one).
+fn run<F: std::future::Future>(fut: F) -> F::Output {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(fut)
 }
 
 fn temp_repo(name: &str) -> PathBuf {
@@ -142,7 +151,7 @@ fn filtered_view_anchors_forks_on_unselected_main() {
 
     let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
     let view = reader
-        .filter_by_branches(&["feat/A".to_string(), "feat/B".to_string()])
+        .filter_by_branches(&["feat/A".to_string(), "feat/B".to_string()], None)
         .expect("filtered view");
     let owner = |id: &str| {
         view.data
@@ -376,6 +385,75 @@ fn sync_merge_of_main_does_not_demote_main() {
         .expect("feat/y lane");
     assert_eq!(lane_y.fork_point.as_deref(), Some(m[4].as_str()));
     assert_eq!(owner(&m[4]), "main", "feat/y's fork point must render on main");
+
+    fs::remove_dir_all(&dir).expect("clean up temp dir");
+}
+
+/// The session attribution cache must be transparent: a filtered view built
+/// through the cached path (filter_by_branches_impl after open wrote the
+/// cache) is byte-identical to one built through the cold pass-1 path, and
+/// repeated cached calls are identical to each other.
+#[test]
+fn cached_attribution_matches_cold_filter() {
+    let dir = temp_repo("filter-cache");
+    let _m1 = commit_at(&dir, "f.txt", "m1\n", "M1", "2025-09-01T09:00:00");
+    git_at(&dir, "2025-09-02T09:00:00", &["checkout", "-b", "feat/A"]);
+    let _a1 = commit_at(&dir, "a.txt", "a1\n", "A1", "2025-09-02T09:00:00");
+    git_at(&dir, "2025-09-03T09:00:00", &["checkout", "main"]);
+    let _m2 = commit_at(&dir, "f.txt", "m2\n", "M2", "2025-09-04T09:00:00");
+
+    let state = AppState::default();
+    let opened = run(open_repository_impl(
+        &state,
+        dir.to_str().unwrap().to_string(),
+        true,
+    ))
+    .expect("open repository");
+
+    let selection = vec!["feat/A".to_string()];
+    let first = run(filter_by_branches_impl(
+        &state,
+        opened.repo_id,
+        selection.clone(),
+    ))
+    .expect("cached filter");
+    let second = run(filter_by_branches_impl(&state, opened.repo_id, selection.clone()))
+        .expect("cached filter");
+    let first_json = serde_json::to_string(&first).unwrap();
+    assert_eq!(
+        first_json,
+        serde_json::to_string(&second).unwrap(),
+        "repeated cached filters must be identical"
+    );
+
+    // Cold path: a fresh reader with no attribution cache (pass 1 runs).
+    let mut reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let cold = reader
+        .filter_by_branches(&selection, None)
+        .expect("cold filter")
+        .data;
+    assert_eq!(
+        first_json,
+        serde_json::to_string(&cold).unwrap(),
+        "cached filter must equal the cold pass-1 filter"
+    );
+
+    // The cache itself must be exactly what pass 1 would have extracted
+    // from the full view.
+    let cached = {
+        let repos = state.repos.lock().unwrap();
+        repos
+            .get(&opened.repo_id)
+            .expect("session")
+            .attribution
+            .clone()
+            .expect("attribution cache written at open")
+    };
+    let mut full_reader = GitReader::new(dir.to_str().unwrap()).expect("open fixture");
+    let full = full_reader.read_git_data(2000).expect("full view");
+    let expected = attribution_of(&full.data);
+    assert_eq!(cached.owner_of, expected.owner_of);
+    assert_eq!(cached.fork_of, expected.fork_of);
 
     fs::remove_dir_all(&dir).expect("clean up temp dir");
 }

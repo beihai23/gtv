@@ -126,7 +126,7 @@ fn tour_repo_lane_ownership_matches_gmaster_ground_truth() {
 fn tour_repo_filter_keeps_full_lineage() {
     let mut reader = GitReader::new(tour_repo_path().to_str().unwrap()).expect("open tour repo");
     let data = reader
-        .filter_by_branches(&["MoveMethod".to_string()])
+        .filter_by_branches(&["MoveMethod".to_string()], None)
         .expect("filter")
         .data;
 

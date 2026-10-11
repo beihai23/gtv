@@ -19,6 +19,35 @@ pub struct ViewResult {
     pub stale_names: Vec<String>,
 }
 
+/// Lane attribution extracted from a full (all-seeds) view: which lane owns
+/// each commit and where each lane forks. It depends only on the refs+DAG
+/// snapshot the full view was built from — never on which branches the user
+/// selected — so filter_by_branches can reuse it instead of rebuilding the
+/// full view just to read the ancestor-lane closure.
+#[derive(Debug, Clone, Default)]
+pub struct ViewAttribution {
+    /// commit id -> owning lane name.
+    pub owner_of: HashMap<String, String>,
+    /// lane name -> fork point commit id.
+    pub fork_of: HashMap<String, String>,
+}
+
+/// Extract the attribution maps from a full view (pass-1 material for the
+/// filtered view's ancestor-lane closure).
+pub fn attribution_of(data: &GitData) -> ViewAttribution {
+    let owner_of = data
+        .commits
+        .iter()
+        .map(|c| (c.id.clone(), c.lane_owner.clone()))
+        .collect();
+    let fork_of = data
+        .branches
+        .iter()
+        .filter_map(|b| b.fork_point.as_ref().map(|fp| (b.name.clone(), fp.clone())))
+        .collect();
+    ViewAttribution { owner_of, fork_of }
+}
+
 impl GitReader {
     pub fn new(path: &str) -> Result<Self, String> {
         let repo =
@@ -933,20 +962,26 @@ impl GitReader {
         })
     }
 
-    /// Filtered view over the selected branches' lineages, built in TWO
-    /// passes. Pass 1 builds the full view (all lane seeds) purely to read
-    /// off each selected lane's ancestry: fork_point -> the lane owning
-    /// that commit -> that lane's fork_point -> ... up to main. Pass 2
-    /// walks the union of the selected seeds plus every ancestor lane's
-    /// seed.
+    /// Filtered view over the selected branches' lineages. Pass 2 walks the
+    /// union of the selected seeds plus every lane in their ancestor
+    /// closure: fork_point -> the lane owning that commit -> that lane's
+    /// fork_point -> ... up to main. The closure is read off the full-view
+    /// attribution — either the caller's CACHED one (built by the last full
+    /// view, identical because attribution depends only on the refs+DAG
+    /// snapshot) or, when None, a pass-1 full view built here (the cold
+    /// path, e.g. a session that never went through a full build).
     ///
-    /// Why: a fork edge must anchor on the TRUE parent lane. When the
-    /// parent lane's seed is missing from the walk (e.g. main is not
-    /// selected), its commits have no owner and the first selected branch
-    /// whose walk reaches them claims them — the fork line then lands on
-    /// the wrong lane. The closure lanes are render context only; the
-    /// frontend's chip selection state is unaffected.
-    pub fn filter_by_branches(&mut self, branch_names: &[String]) -> Result<ViewResult, String> {
+    /// Why the closure at all: a fork edge must anchor on the TRUE parent
+    /// lane. When the parent lane's seed is missing from the walk (e.g.
+    /// main is not selected), its commits have no owner and the first
+    /// selected branch whose walk reaches them claims them — the fork line
+    /// then lands on the wrong lane. The closure lanes are render context
+    /// only; the frontend's chip selection state is unaffected.
+    pub fn filter_by_branches(
+        &mut self,
+        branch_names: &[String],
+        attribution: Option<&ViewAttribution>,
+    ) -> Result<ViewResult, String> {
         let all_seeds = self.collect_lane_seeds()?;
         let selected: Vec<LaneSeed> = all_seeds
             .iter()
@@ -954,18 +989,18 @@ impl GitReader {
             .cloned()
             .collect();
 
-        // Pass 1: full view, read only for lane ancestry.
-        let full = self.build_view(&all_seeds, 2000)?;
-        let owner_of: HashMap<&str, &str> = full
-            .commits
-            .iter()
-            .map(|c| (c.id.as_str(), c.lane_owner.as_str()))
-            .collect();
-        let fork_of: HashMap<&str, &str> = full
-            .branches
-            .iter()
-            .filter_map(|b| b.fork_point.as_deref().map(|fp| (b.name.as_str(), fp)))
-            .collect();
+        // Pass 1 (cold path only): full view, read only for lane ancestry.
+        let cold;
+        let attribution = match attribution {
+            Some(a) => a,
+            None => {
+                let full = self.build_view(&all_seeds, 2000)?;
+                cold = attribution_of(&full);
+                &cold
+            }
+        };
+        let owner_of = &attribution.owner_of;
+        let fork_of = &attribution.fork_of;
 
         // Ancestor-lane closure: lane -> owner of its fork point -> ...,
         // with a visited set as the cycle guard.
@@ -974,7 +1009,7 @@ impl GitReader {
         while let Some(name) = stack.pop() {
             let Some(fp) = fork_of.get(name) else { continue };
             let Some(owner) = owner_of.get(fp) else { continue };
-            if owner.is_empty() || !closure.insert(owner.to_string()) {
+            if owner.is_empty() || !closure.insert(owner.clone()) {
                 continue;
             }
             stack.push(owner);

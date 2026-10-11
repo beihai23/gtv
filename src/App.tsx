@@ -96,6 +96,13 @@ function App() {
   // applyTabs, the single writer) instead of stale closures.
   const tabsRef = useRef<TabInfo[]>([]);
   const activeRepoIdRef = useRef<number | null>(null);
+  // Family snapshots and the translator, mirrored for the repo-missing
+  // listener (families has several writers, so it syncs by effect; t is
+  // re-created every render, so a dep would re-register the listener).
+  const familiesRef = useRef<Record<number, WorktreeMember[]>>({});
+  useEffect(() => { familiesRef.current = families; }, [families]);
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; });
   // The include-stale policy for new opens; App reads it from settings but
   // openTab must never capture a stale render's value.
   const staleRef = useRef(showStaleBranches);
@@ -363,6 +370,53 @@ function App() {
       familyTimers.current.clear();
     };
   }, [refreshFamily]);
+
+  // The repo-missing listener: the watcher reports a session whose
+  // directory was deleted externally (an `rm -rf`'d worktree leaves a
+  // zombie session that would otherwise retry its fingerprint forever).
+  // A tab whose family still has a main worktree at a DIFFERENT path is
+  // re-pointed at it through the normal member switch (openTab dedups on
+  // the commondir and retires the dead session); anything else — the
+  // deleted directory WAS the main worktree, or the family is unknown —
+  // closes the tab. Either way the error strip says what happened.
+  useEffect(() => {
+    let dead = false;
+    let un: (() => void) | null = null;
+    try {
+      listen<RepoChanged>('repo-missing', (e) => {
+        const repoId = e.payload?.repo_id;
+        if (repoId == null) return;
+        const tab = tabsRef.current.find(tb => tb.repoId === repoId);
+        if (!tab) return;
+        const main = (familiesRef.current[repoId] ?? []).find(m => m.is_main);
+        if (main && main.path !== tab.path) {
+          // integrateOpened clears openError on a successful open, so the
+          // notice lands only after the switch has actually re-pointed a
+          // tab at the main member.
+          void openTab(main.path).then(() => {
+            if (!dead && tabsRef.current.some(tb => tb.path === main.path)) {
+              setOpenError(tRef.current('worktreeGone'));
+            }
+          });
+        } else {
+          setOpenError(tRef.current('repoGone'));
+          setOpenErrorPath(null);
+          closeTab(repoId);
+        }
+      })
+        .then(fn => {
+          if (dead) fn();
+          else un = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // browser mock preview: no event API
+    }
+    return () => {
+      dead = true;
+      un?.();
+    };
+  }, [openTab, closeTab]);
 
   // Auto-fetch sync (spec 4.3). The backend AppState defaults auto_fetch
   // to TRUE (commands.rs), so this effect's startup job is the OFF

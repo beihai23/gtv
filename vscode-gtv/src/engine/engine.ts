@@ -3,9 +3,10 @@
 // keyed by repo_id with the same dedup rules (canonical path →
 // already_open reactivation, never a rebuilt session).
 
-import { RepoReader, type ViewResult } from './reader';
+import { RepoReader, attributionOf, type ViewAttribution, type ViewResult } from './reader';
 import type { LaneSeed } from './layout';
 import type { GitData, OpenedRepo } from '../../../src/types';
+import * as fs from 'node:fs';
 
 const PAGE = 2000;
 
@@ -20,6 +21,11 @@ interface Session {
   staleNames: string[];
   seen: Set<string>;
   includeStale: boolean;
+  /** Full-view lane attribution cached from the last full build (open /
+   *  refresh); filterByBranches reuses it to skip its pass-1 full view.
+   *  Narrow views (branch/commit/filter) never write it — the cache always
+   *  describes a FULL view. Mirrors RepoSession.attribution. */
+  attribution?: ViewAttribution;
   /** Watcher baseline: set at open so the first poll never fires. */
   baseline?: string;
 }
@@ -81,6 +87,7 @@ export class Engine {
     };
     this.repos.set(repoId, session);
     this.storeView(session, result, includeStale);
+    session.attribution = attributionOf(result.data);
     this.active = repoId;
     return { repo_id: repoId, already_open: false, commondir, family, data: result.data };
   }
@@ -109,7 +116,9 @@ export class Engine {
     const s = this.session(repoId);
     const result = await s.reader.viewResult(PAGE);
     // Never writes include_stale (the single-writer pin from the desktop).
-    return this.storeView(s, result, s.includeStale);
+    const data = this.storeView(s, result, s.includeStale);
+    s.attribution = attributionOf(result.data);
+    return data;
   }
 
   async fetchRepository(repoId: number): Promise<string | null> {
@@ -146,7 +155,9 @@ export class Engine {
 
   async filterByBranches(repoId: number, branchNames: string[]): Promise<GitData> {
     const s = this.session(repoId);
-    const result = await s.reader.filterByBranches(branchNames);
+    // The cached full-view attribution lets the reader skip its pass-1
+    // full build; when absent the reader falls back to the cold path.
+    const result = await s.reader.filterByBranches(branchNames, s.attribution);
     return this.storeView(s, result, true);
   }
 
@@ -196,11 +207,29 @@ export class Engine {
   async pollFingerprints(): Promise<void> {
     for (const [id, s] of this.repos) {
       try {
+        // Mirrors the desktop watcher's apply_fingerprints: a fingerprint
+        // failure (GitReader::new failing there, the path no longer being
+        // a git repo here — fingerprint() itself degrades, never throws)
+        // stays quiet for the next tick UNLESS the directory is also gone
+        // from disk. That is an externally deleted worktree: report it as
+        // repo-missing (with the same attribution invalidation as a
+        // change) so the frontend can react instead of the session
+        // zombie-retrying forever.
+        if (!(await RepoReader.isValid(s.path))) {
+          if (!fs.existsSync(s.path)) {
+            s.attribution = undefined;
+            this.emit('repo-missing', { repo_id: id, path: s.path });
+          }
+          continue;
+        }
         const fp = await s.reader.fingerprint();
         if (s.baseline === undefined) {
           s.baseline = fp;
         } else if (s.baseline !== fp) {
           s.baseline = fp;
+          // Same invalidation as the desktop watcher: the cached fork
+          // attribution is a function of refs+DAG.
+          s.attribution = undefined;
           this.emit('repo-changed', { repo_id: id, path: s.path });
         }
       } catch { /* a repo mid-replacement is quiet; the next tick retries */ }

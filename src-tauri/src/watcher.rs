@@ -4,7 +4,10 @@
 //! 1.5 s, computes `GitReader::change_fingerprint` for every open repository
 //! in a short-lived reader (it never touches a session's own reader, so it
 //! cannot contend with command-side git work), and emits "repo-changed"
-//! with a RepoChanged payload when a fingerprint moved. Deliberately no
+//! with a RepoChanged payload when a fingerprint moved. A session whose
+//! fingerprint fails AND whose directory is gone from disk is reported
+//! once per tick through "repo-missing" (same payload) instead of being
+//! retried silently forever. Deliberately no
 //! filesystem watcher: `notify` would add a dependency and fire on
 //! transient index lock files, while the timeline only depends on refs +
 //! HEAD anyway.
@@ -44,6 +47,14 @@ pub fn diff_fingerprints(prev: &HashMap<u64, String>, next: &HashMap<u64, String
         .collect()
 }
 
+/// The events one apply_fingerprints pass wants emitted: `changed` carries
+/// the repo-changed payloads, `missing` the repo-missing ones (sessions
+/// whose fingerprint failed AND whose directory no longer exists).
+pub struct ApplyOutcome {
+    pub changed: Vec<RepoChanged>,
+    pub missing: Vec<RepoChanged>,
+}
+
 /// One poll's compare-and-set write-back (final-review FR-L6 test seam,
 /// extracted from poll_loop): for each session still registered, write
 /// the freshly computed fingerprint -- and report a RepoChanged event --
@@ -54,17 +65,34 @@ pub fn diff_fingerprints(prev: &HashMap<u64, String>, next: &HashMap<u64, String
 /// reset) must neither resurrect its old baseline over the reset value
 /// nor emit. Sessions closed mid-poll (id gone from the map) and repos
 /// whose fingerprint could not be computed (absent from `next`) are
-/// skipped. Pure over its arguments so the race is unit-testable without
-/// a Tauri app.
+/// skipped -- with one exception: a session whose fingerprint failed AND
+/// whose directory is gone from disk is reported in `missing` (and its
+/// cached attribution dropped, same invalidation as a change), so the
+/// frontend can react to an externally deleted worktree instead of
+/// silently retrying forever. A failure with the directory still present
+/// (the repo being replaced mid-poll) stays quiet. Pure over its
+/// arguments so the race is unit-testable without a Tauri app.
 pub fn apply_fingerprints(
     repos: &mut HashMap<u64, RepoSession>,
     snapshot: &[(u64, String, Option<String>)],
     next: &HashMap<u64, String>,
     changed: &[u64],
-) -> Vec<RepoChanged> {
-    let mut emits: Vec<RepoChanged> = Vec::new();
+) -> ApplyOutcome {
+    let mut outcome = ApplyOutcome {
+        changed: Vec::new(),
+        missing: Vec::new(),
+    };
     for (id, path, snapshot_baseline) in snapshot {
         let Some(fingerprint) = next.get(id) else {
+            if !std::path::Path::new(path).exists() {
+                if let Some(session) = repos.get_mut(id) {
+                    session.attribution = None;
+                    outcome.missing.push(RepoChanged {
+                        repo_id: *id,
+                        path: path.clone(),
+                    });
+                }
+            }
             continue;
         };
         let Some(session) = repos.get_mut(id) else {
@@ -72,7 +100,11 @@ pub fn apply_fingerprints(
         };
         if session.watch_baseline == *snapshot_baseline {
             if changed.contains(id) {
-                emits.push(RepoChanged {
+                // The cached fork-ancestry attribution is a function of
+                // refs+DAG, so any detected change invalidates it: filters
+                // fall back to the cold pass until the refresh rebuilds it.
+                session.attribution = None;
+                outcome.changed.push(RepoChanged {
                     repo_id: *id,
                     path: path.clone(),
                 });
@@ -80,7 +112,7 @@ pub fn apply_fingerprints(
             session.watch_baseline = Some(fingerprint.clone());
         }
     }
-    emits
+    outcome
 }
 
 fn poll_loop(app: AppHandle) {
@@ -116,12 +148,18 @@ fn poll_loop(app: AppHandle) {
 
         // Write the baselines back through the CAS seam (see
         // apply_fingerprints); emits happen after the lock is dropped.
-        let emits = {
+        let outcome = {
             let mut repos = state.repos.lock().unwrap();
             apply_fingerprints(&mut repos, &snapshot, &next, &changed)
         };
 
-        for event in emits {
+        for event in outcome.missing {
+            log::info!("Repository directory disappeared: {}", event.path);
+            if let Err(e) = app.emit("repo-missing", event) {
+                log::warn!("repo-missing emit failed: {}", e);
+            }
+        }
+        for event in outcome.changed {
             log::info!("Repository changed externally: {}", event.path);
             if let Err(e) = app.emit("repo-changed", event) {
                 log::warn!("repo-changed emit failed: {}", e);

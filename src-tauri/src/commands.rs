@@ -1,4 +1,4 @@
-use crate::git_reader::{GitReader, ViewResult};
+use crate::git_reader::{attribution_of, GitReader, ViewAttribution, ViewResult};
 use crate::layout::LaneSeed;
 use crate::models::*;
 use crate::terminal::PtySession;
@@ -31,6 +31,11 @@ pub struct RepoSession {
     /// Last built view; patch-link detection runs against these commits.
     pub view: Option<GitData>,
     pub session: Option<ViewSession>,
+    /// Full-view lane attribution (owner/fork-point maps) cached from the
+    /// last full build (open / rebuild); filter_by_branches reuses it to
+    /// skip its pass-1 full view. Narrow views (branch/commit/filter)
+    /// never write it — the cache always describes a FULL view.
+    pub attribution: Option<ViewAttribution>,
     /// Settings toggle: whether stale branches are processed and shown.
     pub include_stale: bool,
     /// Watcher baseline: last change_fingerprint. Reset by open_repository
@@ -118,18 +123,24 @@ fn session_path(state: &AppState, repo_id: u64) -> Result<String, String> {
 }
 
 /// Store a freshly built ViewResult as the repo's view + pagination
-/// session (short lock; the git work is already done).
+/// session (short lock; the git work is already done). A full build also
+/// hands over its lane attribution (the filter path's closure cache);
+/// narrow views pass None and leave the existing cache untouched.
 fn update_view_session(
     state: &AppState,
     repo_id: u64,
     result: &ViewResult,
     include_stale: bool,
+    attribution: Option<ViewAttribution>,
 ) -> Result<GitData, String> {
     let data = result.data.clone();
     let mut repos = state.repos.lock().unwrap();
     let session = repos.get_mut(&repo_id).ok_or("No repository opened")?;
     session.session = Some(build_session(result, include_stale));
     session.view = Some(data.clone());
+    if let Some(attribution) = attribution {
+        session.attribution = Some(attribution);
+    }
     Ok(data)
 }
 
@@ -246,6 +257,7 @@ pub async fn open_repository_impl(
     };
 
     let session = build_session(&result, include_stale);
+    let attribution = attribution_of(&result.data);
     let data = result.data;
     let repo_id = state.next_repo_id.fetch_add(1, Ordering::Relaxed);
     // Atomic check+insert: the dedup lookup above and this insert straddle a
@@ -274,6 +286,7 @@ pub async fn open_repository_impl(
                     path: canonical,
                     view: Some(data.clone()),
                     session: Some(session),
+                    attribution: Some(attribution),
                     include_stale,
                     watch_baseline: Some(fingerprint),
                     family: family.clone(),
@@ -407,7 +420,8 @@ async fn rebuild_view(state: &AppState, repo_id: u64) -> Result<GitData, String>
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
-    let data = update_view_session(state, repo_id, &result, include_stale)?;
+    let attribution = attribution_of(&result.data);
+    let data = update_view_session(state, repo_id, &result, include_stale, Some(attribution))?;
     log::info!(
         "Rebuilt view with include_stale={} ({} commits)",
         include_stale,
@@ -639,7 +653,7 @@ pub async fn jump_to_commit_impl(
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
-    let data = update_view_session(state, repo_id, &result, true)?;
+    let data = update_view_session(state, repo_id, &result, true, None)?;
     log::info!("Jumped to commit with {} commits", data.commits.len());
     Ok(data)
 }
@@ -746,7 +760,7 @@ pub async fn switch_branch_impl(
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
-    let data = update_view_session(state, repo_id, &result, true)?;
+    let data = update_view_session(state, repo_id, &result, true, None)?;
     log::info!("Switched to branch with {} commits", data.commits.len());
     Ok(data)
 }
@@ -819,16 +833,23 @@ pub async fn filter_by_branches_impl(
     repo_id: u64,
     branch_names: Vec<String>,
 ) -> Result<GitData, String> {
-    let path = session_path(state, repo_id)?;
+    // Short lock: the path plus the cached full-view attribution (cloned
+    // out so the git work below never holds the repos lock). With the
+    // cache present the reader skips its pass-1 full build.
+    let (path, attribution) = {
+        let repos = state.repos.lock().unwrap();
+        let session = repos.get(&repo_id).ok_or("No repository opened")?;
+        (session.path.clone(), session.attribution.clone())
+    };
 
     let result = task::spawn_blocking(move || {
         let mut reader = GitReader::new(&path)?;
-        reader.filter_by_branches(&branch_names)
+        reader.filter_by_branches(&branch_names, attribution.as_ref())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
-    let data = update_view_session(state, repo_id, &result, true)?;
+    let data = update_view_session(state, repo_id, &result, true, None)?;
     log::info!("Filtered to {} commits", data.commits.len());
     Ok(data)
 }

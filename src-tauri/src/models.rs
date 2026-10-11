@@ -273,7 +273,9 @@ pub struct OpenedRepo {
     pub data: GitData,
 }
 
-/// "repo-changed" payload: which registered repository moved.
+/// "repo-changed" / "repo-missing" payload: which registered repository
+/// moved, or whose directory disappeared (the watcher reports a missing
+/// directory through the same shape).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoChanged {
     pub repo_id: u64,
@@ -283,7 +285,8 @@ pub struct RepoChanged {
 // --- Integrated terminal (bottom panel) ---
 // Event names used with `emit`/`listen`: "terminal-output" (TerminalOutput),
 // "terminal-exit" (TerminalExit), "repo-changed" (RepoChanged, emitted by
-// the watcher poller in watcher.rs).
+// the watcher poller in watcher.rs), "repo-missing" (RepoChanged, emitted
+// by the same poller when a session's directory no longer exists).
 
 /// Live terminal session handle returned by terminal_spawn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
