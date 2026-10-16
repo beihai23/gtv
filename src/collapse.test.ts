@@ -67,12 +67,26 @@ describe('collapsedRuns', () => {
     expect(runs).toEqual([]);
   });
 
-  it('chip x is the midpoint of the run ends (sorted by x, not list order)', () => {
+  it('chip x is the midpoint of the run ends when no visible bracket exists', () => {
     const commits = [commit('b', 40), commit('a', 10), commit('c', 30)];
     const runs = collapsedRuns(commits, [lane('feature', 2)], NO_HIDDEN, NO_LANES, NO_IDS);
     expect(runs).toHaveLength(1);
     expect(runs[0].ids).toEqual(['a', 'c', 'b']);
     expect(runs[0].x).toBe(25); // (10 + 40) / 2
+  });
+
+  it('chip x is the gap midpoint between the bracketing visible commits', () => {
+    // k0 at 0, folded run at 10..30, k1 at 40: the chip centers in the
+    // k0..k1 gap, not over the run — so it never covers a node.
+    const commits = [
+      commit('k0', 0, { is_key: true }),
+      commit('a', 10),
+      commit('b', 20),
+      commit('c', 30),
+      commit('k1', 40, { is_key: true }),
+    ];
+    const runs = collapsedRuns(commits, [lane('feature', 2)], NO_HIDDEN, NO_LANES, NO_IDS);
+    expect(runs[0].x).toBe(20); // (0 + 40) / 2
   });
 
   it('hiddenIds (inactive-lane collapse) never take part', () => {

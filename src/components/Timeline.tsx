@@ -902,7 +902,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         .enter()
         .append('g')
         .attr('class', 'collapse-chip')
-        .attr('transform', d => `translate(${d.x}, ${d.lane_index * LANE_HEIGHT})`)
+        // The chip floats just ABOVE the lane line: centered in the gap
+        // between the run's bracketing nodes (collapse.ts), so it never
+        // covers a node and never blocks a merge edge's origin.
+        .attr('transform', d => `translate(${d.x}, ${d.lane_index * LANE_HEIGHT - 16})`)
         .style('cursor', 'pointer')
         .on('click', (_e, d) => {
           setExpandedIds(prev => new Set([...prev, ...d.ids]));
@@ -1349,7 +1352,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         })
         .style('top', d => `${d.lane_index * LANE_HEIGHT * t.k + t.y - 9}px`);
       g.selectAll<SVGGElement, CollapsedRun>('.collapse-chip')
-        .style('display', d => (inView(d.x, d.lane_index * LANE_HEIGHT) ? null : 'none'));
+        .style('display', d => (inView(d.x, d.lane_index * LANE_HEIGHT - 16) ? null : 'none'));
       g.selectAll<SVGLineElement, TraceBar>('.trace-bar')
         .style('display', d => (d.x2 >= x0 && d.x1 <= x1 ? null : 'none'));
       g.selectAll<SVGRectElement, TraceRow>('.trace-hit')

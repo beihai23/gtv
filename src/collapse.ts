@@ -21,7 +21,10 @@ export interface CollapsedRun {
 /** Maximal consecutive runs of invisible commits, grouped per lane_owner
  *  and ordered by x. A commit is invisible when it is not a key commit and
  *  neither its lane nor the commit itself is expanded. hiddenIds (inactive-
- *  lane collapse) and unattributed commits (lane_owner '') never take part. */
+ *  lane collapse) and unattributed commits (lane_owner '') never take part.
+ *  The chip sits in the GAP between the visible commits bracketing the run
+ *  (not at the run's own midpoint, which lands on top of those nodes when
+ *  the spacing is tight); a run at a lane end falls back to its own span. */
 export function collapsedRuns(
   commits: CommitNode[],
   branches: BranchLane[],
@@ -42,21 +45,27 @@ export function collapsedRuns(
     if (expandedLanes.has(owner)) continue;
     list.sort((a, b) => a.x - b.x);
     let run: CommitNode[] = [];
-    const flush = () => {
+    let prevVisibleX: number | null = null;
+    const flush = (nextVisibleX: number | null) => {
       if (run.length === 0) return;
       runs.push({
         lane_index: run[0].lane,
         color: colorByLane.get(run[0].lane) ?? '#666',
         ids: run.map(c => c.id),
-        x: (run[0].x + run[run.length - 1].x) / 2,
+        x: prevVisibleX !== null && nextVisibleX !== null
+          ? (prevVisibleX + nextVisibleX) / 2
+          : (run[0].x + run[run.length - 1].x) / 2,
       });
       run = [];
     };
     for (const c of list) {
       if (!c.is_key && !expandedIds.has(c.id)) run.push(c);
-      else flush();
+      else {
+        flush(c.x);
+        prevVisibleX = c.x;
+      }
     }
-    flush();
+    flush(null);
   }
   return runs;
 }
