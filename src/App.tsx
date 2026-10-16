@@ -283,7 +283,20 @@ function App() {
       const family = await listWorktreeMembers(repoId);
       // Tab may have closed while the call was in flight -- write only
       // into an existing entry so a closed tab's key is not resurrected.
-      setFamilies(prev => (prev[repoId] ? { ...prev, [repoId]: family } : prev));
+      // An UNCHANGED list also keeps the old array: `family` feeds
+      // memberLanes, a Timeline draw dep, so a fresh identity per
+      // repo-changed event would force a pointless full-scene redraw on
+      // every watcher tick that noticed anything (the flicker report).
+      setFamilies(prev => {
+        const before = prev[repoId];
+        if (!before) return prev;
+        if (before.length === family.length
+          && before.every((m, i) => m.path === family[i].path
+            && m.name === family[i].name
+            && m.head_branch === family[i].head_branch
+            && m.is_main === family[i].is_main)) return prev;
+        return { ...prev, [repoId]: family };
+      });
     } catch {
       // Best effort: the menus keep the last known list on failure.
     }

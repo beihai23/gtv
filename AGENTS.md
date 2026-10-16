@@ -208,6 +208,14 @@ src/
   delaygate.ts    delay-gate state machine for busy indicators (350ms show-up
                   delay + 500ms minimum show, pure step(gate, busy, now));
                   Timeline's useDelayedBusy wraps it with setTimeout
+  viewpersist.ts  per-repo view memory: the timeline camera (zoom k + pan
+                  x/y, gtv_viewport:<path>) and the date-range pref with its
+                  Custom input strings (gtv_daterange:<path>), same defensive
+                  localStorage shape as persist.ts; Timeline restores the
+                  camera on a repo's first draw (rejected when it aims far
+                  outside the scene) and saves it on zoom-end (250ms
+                  trailing debounce), so webview reloads and re-opens land
+                  where the user left off
   App.tsx         tab shell: open funnel (picker/Cmd+T/drag-drop/restore all
                   through openTab with backend dedup), two-level tab bar,
                   family snapshots + repo-changed refresh, restore, error
@@ -228,7 +236,13 @@ src/
                   and it re-applies a narrowed branch selection through
                   filterByBranches (refresh_repository only knows the full
                   seed set), so a pinned/recent lens or chip filter survives
-                  refreshes instead of flashing back to all lanes
+                  refreshes instead of flashing back to all lanes; the
+                  background refresh is deliberately SILENT (no UI twin of
+                  refreshingRef — it must never light Timeline's render
+                  badge) and activation does NOT bump the fit signal (the
+                  remembered camera survives tab switches); the date-range
+                  pref persists per repo (viewpersist.ts) and is restored on
+                  mount
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core.
                                 The zoom handler applies the transform per event
@@ -237,12 +251,25 @@ src/
                                 rAF (the callback reads transformRef, so the last
                                 frame of a gesture always culls the resting
                                 camera). Full redraws of scenes over
-                                HEAVY_SCENE_COMMITS (2500) visible commits light
-                                the centered render overlay (dimmed scrim +
-                                spinner card) first and draw inside a double
-                                rAF (a synchronous block could never paint it);
-                                async rebuilds (filter/refresh, RepoView's `busy`
-                                prop) light the same overlay through useDelayedBusy.
+                                HEAVY_SCENE_COMMITS (2500) visible commits
+                                light the centered render overlay (dimmed
+                                scrim + spinner card) first and draw inside a
+                                double rAF (a synchronous block could never
+                                paint it) — but ONLY when the draw resets the
+                                viewport (repo open, date re-crop,
+                                view-from-branch): camera-preserving redraws
+                                (watcher refresh, older-history paging,
+                                diff-stats merge) swap the scene in place
+                                silently; async USER-initiated rebuilds
+                                (RepoView's `busy` prop — filter/lens only,
+                                never background refresh) light the same
+                                overlay through useDelayedBusy. The camera is
+                                remembered per repo path (viewpersist.ts):
+                                restored on the repo's first draw, saved on
+                                zoom-end, and every draw strips the previous
+                                draw's d3 zoom listeners (svg.on('.zoom',
+                                null)) so redraws never stack gesture
+                                handlers.
                                 Label system: fork/merge 🌱/🔀 annotations are
                                 off by default (view-menu toggle, hover tooltip
                                 recalls them); remote-tracking pills render as
@@ -342,9 +369,10 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 187 cases across 18 files: `src/inactive.test.ts`,
+(`npm test`, 203 cases across 19 files: `src/inactive.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
-`src/refs.test.ts`, `src/persist.test.ts`, `src/terminalSize.test.ts`,
+`src/refs.test.ts`, `src/persist.test.ts`, `src/viewpersist.test.ts`,
+`src/terminalSize.test.ts`,
 `src/compare.test.ts`, `src/collapse.test.ts`, `src/tabs.test.ts`,
 `src/filetree.test.ts`, `src/diffparse.test.ts`, `src/delaygate.test.ts`,
 `src/components/minimap.test.ts`, plus the vscode-gtv engine/e2e files —
@@ -400,7 +428,10 @@ watcher cases); all other automated testing lives in Rust.
   others rotate through `LANE_PALETTE`). Don't invent colors elsewhere.
 - The frontend persists the open tab list in `localStorage` (key `gtv_tabs`,
   `{ members: [{path, commondir}], active }`); a legacy `gtv_latest_repo`
-  single value migrates into a one-member restore, read-once.
+  single value migrates into a one-member restore, read-once. Per-repo view
+  state uses the same store: branch selection `gtv_branch_sel:<path>`, pins
+  `gtv_branch_pins:<path>`, date scope `gtv_daterange:<path>`, and the
+  timeline camera `gtv_viewport:<path>` (viewpersist.ts).
 - Language: code comments, README, and this file are English; the design docs in
   `docs/` (roadmap.md, design-v2.md, gmaster-research.md) are written in Chinese.
   Match the language of the file you are editing.

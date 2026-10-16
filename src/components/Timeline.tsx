@@ -9,6 +9,7 @@ import type { TraceRow, TraceBar, DeadKind } from '../inactive';
 import { headToLaneTip, type ComparePair } from '../compare';
 import { collapsedRuns, type CollapsedRun } from '../collapse';
 import { createDelayGate, step as delayGateStep, type DelayGate } from '../delaygate';
+import { saveViewport, loadViewport } from '../viewpersist';
 
 /** A busy indicator must hold off for a beat (sub-frame async waits never
  *  flash it) and, once visible, stay long enough to read as a state rather
@@ -37,6 +38,12 @@ function useDelayedBusy(busy: boolean, delayMs = 350, minShowMs = 500): boolean 
 
 interface TimelineProps {
   data: GitData;
+  /** Repo path keying the camera persistence (viewpersist.ts): the first
+   *  draw of a mounted repo restores the user's last zoom/pan for THIS path
+   *  instead of the default anchor, and every gesture end saves it back --
+   *  a webview reload, tab switch or background refresh can no longer throw
+   *  the view away. Empty string disables persistence (mock preview). */
+  viewKey: string;
   onCommitClick: (commitId: string) => void;
   selectedCommitId: string | null;
   /** Increments when a repository is (re)opened — the only time the viewport resets. */
@@ -71,9 +78,10 @@ interface TimelineProps {
   hasMore: boolean;
   /** An older-history page load is in flight. */
   loadingOlder: boolean;
-  /** An async view rebuild is in flight (branch filter / repo refresh).
+  /** A USER-initiated async rebuild is in flight (branch filter / lens swap).
    *  Fed through the delay gate — only waits that outlast the gate show the
-   *  render badge. */
+   *  render badge. Background refreshes deliberately never set this: they
+   *  must keep the canvas on screen. */
   busy: boolean;
   /** Called when the user pans near the oldest (left) edge of the scene. */
   onLoadOlder: () => void;
@@ -173,7 +181,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
+export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -197,6 +205,10 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   /** A frame-coalesced cull scheduled by the zoom handler; component-level
    *  so draw() can cancel a stale frame before rebuilding the scene. */
   const pendingCullRef = useRef(0);
+  /** Trailing debounce for camera persistence: wheel-pan programs one zoom
+   *  transform per wheel tick, each firing the behavior's 'end' -- one
+   *  localStorage write per burst, not per tick. */
+  const viewportSaveTimer = useRef(0);
 
   // View-local state (options themselves live in the app header)
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
@@ -386,7 +398,22 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         g.attr('transform', event.transform.toString());
         scheduleFrame();
         maybeLoadOlder(event.transform);
+      })
+      .on('end', () => {
+        // Remember the camera wherever a gesture (or a programmatic camera
+        // move -- refresh anchoring, jumps) leaves it. The transform is
+        // captured now: a viewKey switch racing the debounce must not file
+        // this camera under the new repo's path.
+        if (!viewKey) return;
+        const t = transformRef.current;
+        window.clearTimeout(viewportSaveTimer.current);
+        viewportSaveTimer.current = window.setTimeout(() => saveViewport(viewKey, t), 250);
       });
+    // Every draw installs a fresh zoom behavior; d3 registers its DOM
+    // listeners under the .zoom namespace, so strip the previous draw's set
+    // first -- without this, stacked behaviors accumulate one listener set
+    // per redraw and all of them fight over the same gesture.
+    svg.on('.zoom', null);
     svg.call(zoom);
     zoomRef.current = zoom;
 
@@ -1489,6 +1516,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
 
     // --- viewport: reset only when a repo was (re)opened ------------------------------
+    const initialDraw = resetKeyRef.current === -1;
     const shouldReset = resetKeyRef.current !== resetKey;
     resetKeyRef.current = resetKey;
     if (data.commits.length > 0 && shouldReset) {
@@ -1502,9 +1530,26 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
         : null;
       const target = head ?? newestVisible ?? data.commits.find(c => c.is_head) ?? newest;
       const k = 1;
-      const t = d3.zoomIdentity
+      let t = d3.zoomIdentity
         .translate(width * 0.7 - target.x * k, height / 2 - target.y * k)
         .scale(k);
+      // First draw of a mounted repo: the user's remembered camera replaces
+      // the default anchor, so a webview reload / repo re-open lands where
+      // they left off instead of zooming back out to the overview. Rejected
+      // when it aims far outside the scene (stale memory of a shrunken
+      // filtered view would restore into empty space) and k is clamped into
+      // the zoom behavior's scaleExtent.
+      if (initialDraw && viewKey) {
+        const saved = loadViewport(viewKey);
+        if (saved) {
+          const sk = Math.min(40, Math.max(0.005, saved.k));
+          const st = d3.zoomIdentity.translate(saved.x, saved.y).scale(sk);
+          const cx = (width / 2 - st.x) / sk;
+          const cy = (height / 2 - st.y) / sk;
+          const M = 800; // scene-px of slack around the bounds
+          if (cx >= minX - M && cx <= maxX + M && cy >= minY - M && cy <= maxY + M) t = st;
+        }
+      }
       svg.call(zoom.transform, t);
       transformRef.current = t;
     } else {
@@ -1537,7 +1582,7 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
+  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
 
   // Full redraw. Small scenes draw synchronously (zero badge, zero flicker).
   // A heavy scene's join blocks the main thread past a frame budget, and a
@@ -1551,7 +1596,15 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
   useEffect(() => {
     let rafOuter = 0;
     let rafInner = 0;
-    const heavy = visibleCommits.length > HEAVY_SCENE_COMMITS;
+    // Only a viewport-RESET draw replaces the whole view wholesale (repo
+    // open, date re-crop, view-from-branch) -- there the dimmed scrim +
+    // spinner card honestly explain the freeze. Camera-preserving redraws
+    // (watcher refresh, older-history paging, diff-stats merge) swap the
+    // scene in place around a stable camera; scrimming those read as "the
+    // graph disappeared" (the VS Code flicker report) for a hitch the user
+    // never asked for.
+    const heavy = visibleCommits.length > HEAVY_SCENE_COMMITS
+      && resetKeyRef.current !== resetKey;
     if (heavy) {
       setRendering(true);
       rafOuter = requestAnimationFrame(() => {
@@ -1589,6 +1642,11 @@ export function Timeline({ data, onCommitClick, selectedCommitId, resetKey, acti
     ro.observe(el);
     return () => ro.disconnect();
   }, [draw]);
+
+  // Unmount-only: cancel a pending debounced camera save (the draw effect's
+  // cleanup must NOT do this -- a redraw landing inside the debounce window
+  // would drop the save with no later gesture to reschedule it).
+  useEffect(() => () => window.clearTimeout(viewportSaveTimer.current), []);
 
   /** Fit the whole scene into the viewport (toolbar "Fit" button). */
   const fitToView = useCallback(() => {

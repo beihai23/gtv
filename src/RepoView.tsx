@@ -15,6 +15,7 @@ import type { DeadKind } from './inactive';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
 import type { DateRange } from './daterange';
 import { saveSelection, loadSelection, restoreSelection, savePinned, loadPinned } from './persist';
+import { saveDateRange, loadDateRange } from './viewpersist';
 import { pruneRemoteLanes } from './refs';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
@@ -54,8 +55,10 @@ interface RepoViewProps {
   // True while this tab is the active one. Keyboard handlers bail when
   // inactive (N kept-alive tabs must not double-fire shortcuts) and the
   // issue-report dialog renders only here (exactly one z-80 dialog, the
-  // active tab's -- T4 review Low-3). Activation false -> true bumps the
-  // internal fit signal (D3 re-measures after display:none).
+  // active tab's -- T4 review Low-3). Activation itself re-runs Timeline's
+  // draw (`active` is in its deps) so D3 re-measures after display:none;
+  // the camera is deliberately NOT touched on activation -- a remembered
+  // zoom/pan must survive tab switches.
   active: boolean;
   // Global display preferences (App-owned so every tab shares them).
   showTags: boolean;
@@ -216,18 +219,14 @@ export default function RepoView({
   // user was typing into.
   const handleTermUnavailable = useCallback(() => setTermAvailable(false), []);
 
-  // Fit signal is internal to the tab (Task 5): the Fit button bumps it,
-  // and so does activation -- a tab re-shown from display:none must have
-  // its D3 canvas re-measured (zero-size while hidden).
+  // Fit signal is internal to the tab (Task 5): the Fit button bumps it.
+  // (Activation deliberately does NOT: the draw re-run via the `active` dep
+  // re-measures the canvas, and fitting would throw the user's remembered
+  // zoom/pan away on every tab switch.)
   const [fitSignal, setFitSignal] = useState(0);
   // "Go home" (Age-of-Empires camera snap to HEAD): the header button and
   // the H key both bump this; Timeline owns the camera work.
   const [headSignal, setHeadSignal] = useState(0);
-  const prevActiveRef = useRef(active);
-  useEffect(() => {
-    if (!prevActiveRef.current && active) setFitSignal(n => n + 1);
-    prevActiveRef.current = active;
-  }, [active]);
 
   // A popover left open in this tab while the user switched away would sit
   // stale on a keep-alive tab -- close it on deactivate (and its backdrop
@@ -479,6 +478,15 @@ export default function RepoView({
   // stable for the tab's lifetime.
   useEffect(() => {
     let cancelled = false;
+    // Remembered date scope (viewpersist.ts), restored before the first
+    // rangedData memo runs: the view opens already cropped the way the user
+    // left it, custom inputs' strings included.
+    const savedRange = loadDateRange(path);
+    if (savedRange) {
+      setDateRange(savedRange.range);
+      setCustomFrom(savedRange.customFrom);
+      setCustomTo(savedRange.customTo);
+    }
     loadDiffStats(initialData);
     (async () => {
       try {
@@ -572,10 +580,11 @@ export default function RepoView({
   // back to all lanes. setIncludeStale went back to serving only the
   // settings toggle.
   const refreshingRef = useRef(false);
-  // UI twin of refreshingRef (the ref gates re-entry, the state feeds
-  // Timeline's render badge through the delay gate). Set only after the
-  // re-entry gate is taken, so a skipped duplicate refresh never lights it.
-  const [refreshBusy, setRefreshBusy] = useState(false);
+  // Deliberately NO UI twin of refreshingRef: the background refresh swaps
+  // data in place around a stable camera and must stay SILENT -- feeding it
+  // to Timeline's delay-gated render badge made every auto-fetch-triggered
+  // refresh dim the whole graph (the VS Code flicker report). Re-entry is
+  // gated by the ref alone.
   // Set when a change event arrives while a refresh is in flight: the
   // running refresh's finally replays the latest handler once, so a
   // one-shot event (branch delete) is never dropped.
@@ -589,7 +598,6 @@ export default function RepoView({
       return;
     }
     refreshingRef.current = true;
-    setRefreshBusy(true);
     // A pending checkout confirm holds preflight counts this rebuild just
     // invalidated -- close it (the world changed, re-ask) instead of
     // letting the user confirm against stale numbers. SAFE checkout stays
@@ -643,7 +651,6 @@ export default function RepoView({
       recordFrontendError(errText(err));
     } finally {
       refreshingRef.current = false;
-      setRefreshBusy(false);
       if (refreshPendingRef.current) {
         refreshPendingRef.current = false;
         void refreshHandlerRef.current();
@@ -946,6 +953,15 @@ export default function RepoView({
   useEffect(() => {
     savePinned(path, pinnedBranches);
   }, [path, pinnedBranches]);
+
+  // Date-scope persistence (viewpersist.ts): the remembered window rides
+  // with the repo, not the session -- "last week" survives a webview reload
+  // and a restart. Every change is written, including the stale-toggle
+  // sweep's reset to 'all' (an explicit policy change; resetting the memory
+  // matches the sweep's old re-open semantics).
+  useEffect(() => {
+    saveDateRange(path, { range: dateRange, customFrom, customTo });
+  }, [path, dateRange, customFrom, customTo]);
 
   const togglePin = useCallback((name: string) => {
     setPinnedBranches(prev =>
@@ -2329,6 +2345,7 @@ export default function RepoView({
             <div style={{ display: detailsWide && (comparePair?.target || selectedCommit) ? 'none' : 'contents' }}>
             <Timeline
               data={view?.data ?? gitData}
+              viewKey={path}
               onCommitClick={handleNodeClick}
               selectedCommitId={selectedCommit?.id ?? null}
               resetKey={viewResetKey}
@@ -2344,7 +2361,10 @@ export default function RepoView({
               headSignal={headSignal}
               hasMore={gitData.has_more ?? false}
               loadingOlder={loadingOlder}
-              busy={filterBusy || refreshBusy}
+              // User-initiated rebuilds only: a background watcher refresh
+              // must keep the canvas on screen (the delay-gated scrim read
+              // as "the graph disappeared" every time an auto-fetch landed).
+              busy={filterBusy}
               onLoadOlder={handleLoadOlder}
               focusCommit={focusTarget}
               hiddenIds={hiddenIds}
