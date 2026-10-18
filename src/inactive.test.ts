@@ -285,4 +285,47 @@ describe('collapseLanes', () => {
     expect(u1.lane).toBe(1); // dorm1 kept, compacted
     expect(v.hiddenIds.has('u1')).toBe(false);
   });
+
+  it("excluded lanes (view modes) VANISH: no trace row, no bars, commits dropped", () => {
+    // The starred view shows exactly the kept lanes — everything else is
+    // 'excluded' and must not even leave a sediment line behind.
+    const dead: Map<string, DeadKind> = new Map([
+      ['arch1', 'excluded'], ['dorm1', 'excluded'],
+    ]);
+    const v = collapseLanes(mk(), dead);
+    expect(v.traceRows).toEqual([]);
+    expect(v.traceBars).toEqual([]);
+    expect(v.data.branches.map(b => b.name)).toEqual(['main', 'keep1']);
+    const byName = new Map(v.data.branches.map(b => [b.name, b.lane_index]));
+    expect(byName.get('main')).toBe(0);
+    expect(byName.get('keep1')).toBe(1); // compacted, no hole
+    // Commits of excluded lanes are REMOVED from the data (not retargeted):
+    // the time ruler and minimap then describe exactly what is on screen.
+    expect(v.data.commits.some(c => c.id === 'a1')).toBe(false);
+    expect(v.data.commits.some(c => c.id === 'u1')).toBe(false);
+    expect(v.data.commits.map(c => c.id)).toEqual(['m1', 'm2', 'k1']);
+    // ...but the ids stay in hiddenIds so arrow-key stepping and the
+    // details panel keep treating them as absent.
+    expect(v.hiddenIds.has('a1')).toBe(true);
+    expect(v.hiddenIds.has('u1')).toBe(true);
+    expect(v.hiddenIds.has('m1')).toBe(false);
+    const k1 = v.data.commits.find(c => c.id === 'k1')!;
+    expect(k1.lane).toBe(1);
+    expect(k1.y).toBe(LANE_HEIGHT);
+  });
+
+  it('excluded and sediment kinds mix: only sediment kinds leave trace rows', () => {
+    const dead: Map<string, DeadKind> = new Map([
+      ['arch1', 'excluded'],
+      ['dorm1', 'dormant'],
+    ]);
+    const v = collapseLanes(mk(), dead);
+    expect(v.traceRows.map(r => r.kind)).toEqual(['dormant']);
+    expect(v.traceRows[0].laneIndex).toBe(2); // after main + keep1
+    expect(v.traceBars).toHaveLength(1);
+    expect(v.data.commits.some(c => c.id === 'a1')).toBe(false); // excluded
+    const u1 = v.data.commits.find(c => c.id === 'u1')!;
+    expect(u1.lane).toBe(2); // sediment row
+    expect(v.hiddenIds.has('u1')).toBe(true);
+  });
 });

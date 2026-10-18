@@ -210,10 +210,10 @@ src/
                   delay + 500ms minimum show, pure step(gate, busy, now));
                   Timeline's useDelayedBusy wraps it with setTimeout
   laneview.ts     lane view modes (the map model): modeHiddenLanes computes
-                  the DISPLAY-level fold set for the header trio (all / ★
-                  starred / active top-N) — HEAD's lane and manually restored
-                  lanes always survive, and a mode that would fold every
-                  alive lane is a no-op (a blank canvas helps nobody)
+                  the DISPLAY-level exclusion set for the header trio (all /
+                  ★ starred / active top-N) — HEAD's lane and manually
+                  restored lanes always survive, and a mode that would fold
+                  every alive lane is a no-op (a blank canvas helps nobody)
   viewpersist.ts  per-repo view memory: the timeline camera (zoom k + pan
                   x/y, gtv_viewport:<path>) and the date-range pref with its
                   Custom input strings (gtv_daterange:<path>), same defensive
@@ -259,10 +259,15 @@ src/
                   header trio (all / ★ starred / active top-N,
                   laneview.ts's computed fold set; ★ also expands starred
                   dead lanes via restoredSet), per-lane fold (chip hover × /
-                  lane menu, session-only userCollapsed) and per-lane focus
-                  all reuse the dead-lane sediment pipeline (the DeadKind
-                  'hidden' row), while include/exclude (the LOADED set,
-                  backend rebuild) is the manager panel's advanced verb and
+                  lane menu, session-only userCollapsed) reuses the
+                  dead-lane sediment pipeline (the DeadKind 'hidden' row),
+                  while the narrowed view modes go further: everything
+                  outside the keep set is DeadKind 'excluded' and VANISHES
+                  (no sediment row, commits dropped from the display data —
+                  collapseLanes skips trace rows/bars for 'excluded'), so ★
+                  starred/active show exactly those lanes. Manual folds win
+                  over the mode; include/exclude (the LOADED set, backend
+                  rebuild) is the manager panel's advanced verb and
                   "全部" is the one heavy header verb (restores the full
                   loaded set); the panel is a single-list manager (★
                   starred section, then branches, then folded/archived/
@@ -298,7 +303,13 @@ src/
                                 handlers.
                                 Label system: fork/merge 🌱/🔀 annotations are
                                 off by default (view-menu toggle, hover tooltip
-                                recalls them); remote-tracking pills render as
+                                recalls them); a merge whose source lane is
+                                excluded/folded always draws a compact 🔀
+                                badge on the target node (the edge vanished
+                                with its source — the badge is the only
+                                evidence of the merge, so it ignores the
+                                annotation toggles and never mutes), and
+                                remote-tracking pills render as
                                 outline style vs the local pills' solid fill,
                                 fold into their local twin (name ⤒), and dim
                                 the origin/ prefix; below a 28px row height the

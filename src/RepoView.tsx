@@ -10,8 +10,8 @@ import { listen } from '@tauri-apps/api/event';
 import { useSettings } from './settings';
 import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refreshRepository, fetchRepository, switchBranch, getPatchLinks, getCommitStats, loadOlderCommits, searchCommits, jumpToCommit, getWorktreeStatus, checkoutBranch, openHostTerminal } from './api';
 import { recordFrontendError } from './issueContext';
-import { computeInactive, collapseLanes } from './inactive';
-import type { DeadKind } from './inactive';
+import { computeInactive, collapseLanes, DEAD_KINDS } from './inactive';
+import type { DeadKind, SedimentKind } from './inactive';
 import { modeHiddenLanes, ACTIVE_MODE_SIZE } from './laneview';
 import type { LaneViewMode } from './laneview';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
@@ -395,35 +395,50 @@ export default function RepoView({
     for (const name of rangeEmpty?.dead.keys() ?? []) s.add(name);
     return s;
   }, [inactive, rangeEmpty]);
-  // Display-level fold map (map model): the header view mode folds alive
-  // lanes by starred/activity; individual folds come from the canvas (chip
-  // × / lane menu). Both are subtracted by expandedDead -- the same restore
-  // set the dead lanes' eye toggles use. Explicit dead classification
-  // (archived/dormant) wins over 'hidden' when a lane qualifies for both,
-  // so the dead union below is layered ON TOP of this map.
+  // Display-level fold map (map model). 'all' keeps today's semantics:
+  // manual canvas folds become 'hidden' sediment rows on top of the
+  // freshness/date-window rules. Narrowed modes (★ starred / active) go
+  // further — every lane outside the keep set is 'excluded' and VANISHES
+  // from the canvas outright (no sediment row, no bars; the mode means
+  // "show exactly these"), with the freshness classification skipped
+  // entirely. Manual folds still win over the mode (a folded starred lane
+  // stays folded), and restoredSet -- the eye toggles, plus the stars
+  // themselves in the starred mode ("at hand") -- always survives.
   const modeDead = useMemo(() => {
     const hidden = new Map<string, DeadKind>();
     if (!rangedData || !gitData) return hidden;
+    if (viewMode === 'all') {
+      for (const name of userCollapsed) {
+        if (!baseDeadNames.has(name) && !restoredSet.has(name)) hidden.set(name, 'hidden');
+      }
+      return hidden;
+    }
     const names = modeHiddenLanes(
       viewMode,
-      rangedData.branches.filter(b => !b.is_tag && !baseDeadNames.has(b.name)),
+      rangedData.branches.filter(b => !b.is_tag),
       new Set(pinnedBranches),
       gitData.head_branch,
       name => refActivity.get(name) ?? 0,
-      expandedDead,
+      restoredSet,
     );
-    for (const name of names) hidden.set(name, 'hidden');
+    for (const name of names) hidden.set(name, 'excluded');
     for (const name of userCollapsed) {
-      if (!baseDeadNames.has(name) && !expandedDead.has(name)) hidden.set(name, 'hidden');
+      if (!restoredSet.has(name)) hidden.set(name, 'hidden');
     }
     return hidden;
-  }, [rangedData, gitData, viewMode, pinnedBranches, refActivity, expandedDead, userCollapsed, baseDeadNames]);
+  }, [rangedData, gitData, viewMode, pinnedBranches, refActivity, restoredSet, userCollapsed]);
   const dead = useMemo(() => {
     const m = new Map(modeDead);
-    for (const [k, v] of inactive?.dead ?? []) m.set(k, v);
-    for (const [k, v] of rangeEmpty?.dead ?? []) m.set(k, v);
+    // Narrowed modes carry their own universe (kept lanes + excluded
+    // everything else) — layering the freshness/date-window rules on top
+    // would reclassify vanishing lanes as sediment rows behind the mode's
+    // back.
+    if (viewMode === 'all') {
+      for (const [k, v] of inactive?.dead ?? []) m.set(k, v);
+      for (const [k, v] of rangeEmpty?.dead ?? []) m.set(k, v);
+    }
     return m;
-  }, [modeDead, inactive, rangeEmpty]);
+  }, [modeDead, inactive, rangeEmpty, viewMode]);
   // Sibling members' checkouts (branch -> member name), current member
   // excluded: Timeline badges those lanes with a house marker. Memoized
   // for identity -- it sits in Timeline's draw-effect deps.
@@ -470,7 +485,7 @@ export default function RepoView({
   // Same lane can sit in both maps (own commits all outside the window AND
   // stale by wall clock) -- classification is identical (merged_into ?
   // archived : dormant), so first occurrence wins.
-  const mergedGroups = useMemo(() => {
+  const mergedGroups = useMemo((): Record<SedimentKind, BranchLane[]> => {
     const merge = (kind: 'archived' | 'dormant'): BranchLane[] => {
       const seen = new Set<string>();
       const out: BranchLane[] = [];
@@ -1104,7 +1119,7 @@ export default function RepoView({
   // but one misclick on a 500-lane sediment row must be reversible without
   // reopening the repo — when EVERY lane of the group is expanded, the same
   // click collapses them all back into the trace row.
-  const expandTraceGroup = useCallback((kind: DeadKind) => {
+  const expandTraceGroup = useCallback((kind: SedimentKind) => {
     setExpandedDead(prev => {
       const group = mergedGroups[kind];
       const collapse = group.length > 0 && group.every(l => prev.has(l.name));
@@ -1119,7 +1134,7 @@ export default function RepoView({
   // Action label follows the toggle state ("Collapse" once every lane of the
   // group is expanded). One helper feeds both the panel group buttons and
   // Timeline's trace-chip titles, so they can never disagree.
-  const traceGroupLabel = useCallback((kind: DeadKind) => {
+  const traceGroupLabel = useCallback((kind: SedimentKind) => {
     const group = mergedGroups[kind];
     const expanded = group.length > 0 && group.every(l => expandedDead.has(l.name));
     return t(expanded ? 'collapseGroup' : 'expandGroup');
@@ -1238,7 +1253,7 @@ export default function RepoView({
     [searchQuery]
   );
   const deadSectionRows = useCallback(
-    (kind: DeadKind): BranchLane[] =>
+    (kind: SedimentKind): BranchLane[] =>
       [...mergedGroups[kind]].filter(deadNameMatches).sort(byActivity),
     [mergedGroups, refActivity, deadNameMatches]
   );
@@ -2195,7 +2210,7 @@ export default function RepoView({
                     </div>
                   </div>
                 )}
-                {(['hidden', 'archived', 'dormant'] as DeadKind[]).map(kind => {
+                {DEAD_KINDS.map(kind => {
                   const rows = deadSectionRows(kind);
                   if (rows.length === 0) return null;
                   const label = kind === 'hidden' ? 'hiddenLanes'

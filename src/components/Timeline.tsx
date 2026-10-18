@@ -5,7 +5,7 @@ import { useSettings, cssVar } from '../settings';
 import { filterRefs } from '../refs';
 import { minimapMap, viewportRect, type MinimapMap } from './minimap';
 import { LANE_HEIGHT } from '../inactive';
-import type { TraceRow, TraceBar, DeadKind } from '../inactive';
+import type { TraceRow, TraceBar, SedimentKind } from '../inactive';
 import { headToLaneTip, type ComparePair } from '../compare';
 import { collapsedRuns, type CollapsedRun } from '../collapse';
 import { createDelayGate, step as delayGateStep, type DelayGate } from '../delaygate';
@@ -93,10 +93,10 @@ interface TimelineProps {
   traceRows: TraceRow[];
   traceBars: TraceBar[];
   /** Trace-row / trace-chip click: toggle (expand/collapse) the whole group. */
-  onExpandTraceGroup: (kind: DeadKind) => void;
+  onExpandTraceGroup: (kind: SedimentKind) => void;
   /** Action label for a trace group's title ("Collapse" when the group is
    *  fully expanded, "Expand" otherwise) — App owns the toggle state. */
-  traceGroupLabel: (kind: DeadKind) => string;
+  traceGroupLabel: (kind: SedimentKind) => string;
   /** Shorthand of the branch HEAD is on; null while detached. Drives the
    *  current-branch lane chip marker (spec 4.3). */
   headBranch: string | null;
@@ -1105,6 +1105,38 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     const boxCollides = (b: TextBox) =>
       placedBoxes.some(p => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
 
+    // --- hidden-source merge badges ------------------------------------------
+    // With a merge edge's source lane excluded (★/active view modes) or
+    // folded, the edge vanishes together with its source commit — the merge
+    // becomes undetectable on the canvas. A compact 🔀 glyph on the target
+    // node keeps the fact visible at any zoom, independent of the
+    // annotation toggles; when the full merge annotations are on they
+    // already draw "🔀 name" and the badge stands down to avoid doubles.
+    if (!(showAnnotations && showMergeLinks)) {
+      const hiddenSourceMerges = new Set<string>();
+      for (const e of data.edges) {
+        if (e.edge_type !== 'Merge') continue;
+        if (visibleIds.has(e.to) && !visibleIds.has(e.from)) hiddenSourceMerges.add(e.to);
+      }
+      const targets = visibleCommits.filter(c => hiddenSourceMerges.has(c.id));
+      if (targets.length > 0) {
+        const badges = g.selectAll('.merge-badge')
+          .data(targets)
+          .enter()
+          .append('g')
+          .attr('class', 'merge-badge')
+          .attr('transform', (d: CommitNode) => `translate(${d.x}, ${d.y - nodeRadius(d) - 8})`)
+          .attr('opacity', (d: CommitNode) => laneOpacity(d.lane_owner));
+        badges.append('text')
+          .attr('text-anchor', 'middle')
+          .attr('y', -2)
+          .attr('font-size', '10px')
+          .text('🔀');
+        badges.append('title')
+          .text((d: CommitNode) => t('hiddenMergeTip', { name: d.merge_branch_name ?? '' }));
+      }
+    }
+
     // --- ref badges, collision-resolved against all placed text ------------
     // A commit shows at most two pills (first ref + "+N"). A pill group that
     // would overlap any already-placed text box is pushed to a higher level;
@@ -1366,6 +1398,10 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         .style('display', d => (labelsMuted && !d.is_tag ? 'none' : null));
       g.selectAll<SVGGElement, AnnSpec>('.fork-label,.merge-label')
         .style('display', d => (labelsMuted || !inView(d.c.x, d.c.y) ? 'none' : null));
+      // The hidden-source merge badge is load-bearing at any zoom (often
+      // the only evidence of the merge) — cull by view, never mute.
+      g.selectAll<SVGGElement, CommitNode>('.merge-badge')
+        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
       // Cull by bounding box, not endpoints: a fork polyline's long vertical
       // run (or a merge curve's midsection) can cross the viewport while both
       // endpoint nodes are offscreen — endpoint testing made such edges

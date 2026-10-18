@@ -1,4 +1,4 @@
-import type { BranchLane, GitData } from './types';
+import type { BranchLane, CommitNode, GitData } from './types';
 
 // ---------------------------------------------------------------------------
 // Inactive-lane collapsing (roadmap M1.2). Pure frontend display state: the
@@ -12,7 +12,13 @@ export const LANE_HEIGHT = 80;
  *  top — they are deliberate and the user will look for them first). */
 export const DEAD_KINDS = ['hidden', 'archived', 'dormant'] as const;
 
-export type DeadKind = (typeof DEAD_KINDS)[number];
+/** The kinds that render as sediment trace rows (panel eye groups). */
+export type SedimentKind = (typeof DEAD_KINDS)[number];
+
+/** Full dead-map vocabulary: the sediment kinds plus 'excluded' -- view-mode
+ *  narrowing that VANISHES lanes outright (no trace row, commits dropped
+ *  from the display data). */
+export type DeadKind = SedimentKind | 'excluded';
 
 export interface InactiveInfo {
   /** Collapsed lanes only (user-expanded ones excluded); lane name -> group. */
@@ -130,7 +136,7 @@ export function computeInactive(
 export interface TraceRow {
   /** Pseudo-lane row index the group's sediment bars draw on. */
   laneIndex: number;
-  kind: DeadKind;
+  kind: SedimentKind;
   count: number;
 }
 
@@ -163,7 +169,12 @@ export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): Colla
   }
 
   // Row compaction: active lanes keep their relative order; trace rows go
-  // below all of them (sediment settles at the bottom).
+  // below all of them (sediment settles at the bottom). The 'excluded' kind
+  // (view-mode narrowing) gets NO trace row at all — its lanes vanish from
+  // branches, its commits drop out of the data entirely (ids stay in
+  // hiddenIds so arrow-key stepping and the details panel keep treating
+  // them as absent), which is what "the starred view shows only starred
+  // lanes" means visually.
   const rowOf = new Map<number, number>();
   let row = 0;
   for (const b of data.branches) {
@@ -172,25 +183,32 @@ export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): Colla
   }
   const traceRowOfKind = new Map<DeadKind, number>();
   const counts = Object.fromEntries(DEAD_KINDS.map(k => [k, 0])) as Record<DeadKind, number>;
-  for (const kind of dead.values()) counts[kind]++;
+  for (const kind of dead.values()) {
+    if (kind !== 'excluded') counts[kind]++;
+  }
   for (const kind of DEAD_KINDS) {
     if (counts[kind] > 0) traceRowOfKind.set(kind, row++);
   }
 
   // Commits: kept lanes get compacted lane/y; dead-lane commits are hidden
   // and retargeted to the trace row so fit-bounds (min/max over ALL commit
-  // y) cannot explode from rows that no longer exist.
+  // y) cannot explode from rows that no longer exist. Excluded-lane commits
+  // are removed outright — the time ruler and the minimap then describe
+  // exactly the lanes on screen.
   const hiddenIds = new Set<string>();
-  const commits = data.commits.map(c => {
+  const commits: CommitNode[] = [];
+  for (const c of data.commits) {
     if (!deadIdx.has(c.lane)) {
       const r = rowOf.get(c.lane)!;
-      return r === c.lane ? c : { ...c, lane: r, y: r * LANE_HEIGHT };
+      commits.push(r === c.lane ? c : { ...c, lane: r, y: r * LANE_HEIGHT });
+      continue;
     }
     hiddenIds.add(c.id);
-    const kind = dead.get(c.lane_owner) ?? 'archived';
+    const kind = dead.get(c.lane_owner) ?? 'hidden';
+    if (kind === 'excluded') continue;
     const tr = traceRowOfKind.get(kind) ?? row - 1;
-    return { ...c, lane: tr, y: tr * LANE_HEIGHT };
-  });
+    commits.push({ ...c, lane: tr, y: tr * LANE_HEIGHT });
+  }
 
   const branches = data.branches
     .filter(b => !deadIdx.has(b.lane_index))
