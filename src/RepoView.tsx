@@ -1899,6 +1899,38 @@ export default function RepoView({
               >
                 {t('modeStarred')}
               </button>
+              {/* Starred quick bar: one colored dot per favorite (lane colors,
+                  so it doubles as a legend), click = the starred view. It
+                  belongs to the ★ mode, so it sits INSIDE the trio, right
+                  against the ★ button — parked after 全部 it read as an
+                  unrelated third group. Over STAR_DOT_MAX the rest collapse
+                  into +N, which opens the manager where every star is
+                  listed. */}
+              {starDots.length > 0 && (
+                <div className="star-dots" role="group" aria-label={t('modeStarredTip')}>
+                  {starDots.map(b => (
+                    <button
+                      key={b.name}
+                      type="button"
+                      className="star-dot"
+                      style={{ background: b.color }}
+                      title={t('starDotTip', { name: b.name })}
+                      aria-label={t('starDotTip', { name: b.name })}
+                      onClick={() => setViewMode('starred')}
+                    />
+                  ))}
+                  {starredOverflow > 0 && (
+                    <button
+                      type="button"
+                      className="star-dot more"
+                      title={t('starMoreTip', { n: starredOverflow })}
+                      onClick={() => setShowAllTags(true)}
+                    >
+                      +{starredOverflow}
+                    </button>
+                  )}
+                </div>
+              )}
               <button
                 className={`panel-pill lens${viewMode === 'all' ? ' on' : ''}`}
                 onClick={resetLanes}
@@ -1907,35 +1939,6 @@ export default function RepoView({
                 {t('modeAll')}
               </button>
             </div>
-            {/* Starred quick bar: one colored dot per favorite (lane colors,
-                so it doubles as a legend), click = the starred view. Over
-                STAR_DOT_MAX the rest collapse into +N, which opens the
-                manager where every star is listed. */}
-            {starDots.length > 0 && (
-              <div className="star-dots" role="group" aria-label={t('modeStarredTip')}>
-                {starDots.map(b => (
-                  <button
-                    key={b.name}
-                    type="button"
-                    className="star-dot"
-                    style={{ background: b.color }}
-                    title={t('starDotTip', { name: b.name })}
-                    aria-label={t('starDotTip', { name: b.name })}
-                    onClick={() => setViewMode('starred')}
-                  />
-                ))}
-                {starredOverflow > 0 && (
-                  <button
-                    type="button"
-                    className="star-dot more"
-                    title={t('starMoreTip', { n: starredOverflow })}
-                    onClick={() => setShowAllTags(true)}
-                  >
-                    +{starredOverflow}
-                  </button>
-                )}
-              </div>
-            )}
             {/* Lane manager trigger: a BUTTON, not a text field -- the old
                 field-as-trigger made focus imply typing. The label carries
                 the honest lane count, N/M while the loaded set is narrowed
