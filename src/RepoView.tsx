@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
-import type { Dispatch, SetStateAction } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import type { Dispatch, SetStateAction, CSSProperties } from 'react';
 import { Timeline } from './components/Timeline';
 import { CommitDetails } from './components/CommitDetails';
 import { CompareDetails } from './components/CompareDetails';
@@ -12,10 +12,13 @@ import { getCommitDetail, getBranchList, filterByBranches, setIncludeStale, refr
 import { recordFrontendError } from './issueContext';
 import { computeInactive, collapseLanes } from './inactive';
 import type { DeadKind } from './inactive';
+import { modeHiddenLanes, ACTIVE_MODE_SIZE } from './laneview';
+import type { LaneViewMode } from './laneview';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
 import type { DateRange } from './daterange';
 import { saveSelection, loadSelection, restoreSelection, savePinned, loadPinned } from './persist';
 import { saveDateRange, loadDateRange } from './viewpersist';
+import { clampDetailsWidth, loadDetailsWidth, saveDetailsWidth } from './detailSize';
 import { pruneRemoteLanes } from './refs';
 import { relatedLanes } from './related';
 import { matchLoaded, mergeLocate, SEARCH_LIMIT } from './locate';
@@ -189,6 +192,31 @@ export default function RepoView({
   // panels report through onWideChange. Only honored while a panel is
   // actually open (splitOpen below).
   const [detailsWide, setDetailsWide] = useState(false);
+  // Narrow panel width (the same slot serves CommitDetails and
+  // CompareDetails): drag the divider at its left edge, clamp, persist on
+  // release (gtv_details_width -- the terminal panel's idiom mirrored).
+  // The value reaches the panel's CSS as a custom property; .wide ignores
+  // it (width:auto wins).
+  const [detailsWidth, setDetailsWidth] = useState(() => loadDetailsWidth(window.innerWidth));
+  const detailsDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const onResizerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // preventDefault keeps the drag from starting a text selection.
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    detailsDragRef.current = { startX: e.clientX, startWidth: detailsWidth };
+  };
+  const onResizerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!detailsDragRef.current) return;
+    setDetailsWidth(clampDetailsWidth(
+      detailsDragRef.current.startWidth - (e.clientX - detailsDragRef.current.startX),
+      window.innerWidth,
+    ));
+  };
+  const onResizerPointerUp = () => {
+    if (!detailsDragRef.current) return;
+    detailsDragRef.current = null;
+    saveDetailsWidth(detailsWidth);
+  };
   // Integrated terminal (bottom panel). `termOpen` is deliberately not
   // persisted: auto-restoring it would silently spawn a login shell on
   // every launch — a terminal should be an explicit user action.
@@ -294,6 +322,22 @@ export default function RepoView({
 
   // Inactive-lane collapse: which dead lanes the user has restored.
   const [expandedDead, setExpandedDead] = useState<Set<string>>(new Set());
+  // Map-model narrowing, both DISPLAY-level (instant, no backend trip):
+  // userCollapsed = lanes folded from the canvas (chip × / lane menu),
+  // deliberately session-only -- reopening the app must never start with
+  // lanes missing. viewMode = the header trio (all / ★ starred / active N),
+  // a COMPUTED fold set that re-derives from current activity on every
+  // refresh, so the lit pill never lies (the old lens presets did).
+  const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<LaneViewMode>('all');
+  // The restore set the whole fold pipeline respects: the eye toggles, plus
+  // -- in the starred mode -- the stars themselves. A star means "at hand":
+  // a starred dormant lane must surface in the starred view, not stay
+  // buried under the freshness rule.
+  const restoredSet = useMemo(
+    () => (viewMode === 'starred' ? new Set([...expandedDead, ...pinnedBranches]) : expandedDead),
+    [viewMode, expandedDead, pinnedBranches],
+  );
 
   // Display pipeline (M2.2 order iron rule): gitData -> applyDateRange ->
   // computeInactive(filtered) -> dead union -> collapseLanes. collapseLanes
@@ -319,18 +363,67 @@ export default function RepoView({
   // active by wall-clock but empty inside the window is still noise in this
   // view.
   const rangeEmpty = useMemo(
-    () => (dateRange.kind !== 'all' && rangedData ? emptyLaneDead(rangedData, expandedDead) : null),
-    [dateRange.kind, rangedData, expandedDead],
+    () => (dateRange.kind !== 'all' && rangedData ? emptyLaneDead(rangedData, restoredSet) : null),
+    [dateRange.kind, rangedData, restoredSet],
   );
   const inactive = useMemo(
-    () => (rangedData ? computeInactive(rangedData, inactiveDays, expandedDead) : null),
-    [rangedData, inactiveDays, expandedDead],
+    () => (rangedData ? computeInactive(rangedData, inactiveDays, restoredSet) : null),
+    [rangedData, inactiveDays, restoredSet],
   );
+  // Latest activity time per ref (branch lane or tag), derived from the
+  // loaded commits; feeds the branch-chip ordering AND the `active` view
+  // mode's top-N (declared here because the mode fold set reads it).
+  const refActivity = useMemo(() => {
+    const map = new Map<string, number>();
+    if (gitData) {
+      for (const c of gitData.commits) {
+        const prev = map.get(c.lane_owner);
+        if (prev === undefined || c.timestamp > prev) map.set(c.lane_owner, c.timestamp);
+        for (const r of c.branch_refs) {
+          const p = map.get(r.name);
+          if (p === undefined || c.timestamp > p) map.set(r.name, c.timestamp);
+        }
+      }
+    }
+    return map;
+  }, [gitData]);
+  // Names the freshness rule / date window already fold (BEFORE any display
+  // narrowing): the view modes compute over what is still alive.
+  const baseDeadNames = useMemo(() => {
+    const s = new Set<string>();
+    for (const name of inactive?.dead.keys() ?? []) s.add(name);
+    for (const name of rangeEmpty?.dead.keys() ?? []) s.add(name);
+    return s;
+  }, [inactive, rangeEmpty]);
+  // Display-level fold map (map model): the header view mode folds alive
+  // lanes by starred/activity; individual folds come from the canvas (chip
+  // × / lane menu). Both are subtracted by expandedDead -- the same restore
+  // set the dead lanes' eye toggles use. Explicit dead classification
+  // (archived/dormant) wins over 'hidden' when a lane qualifies for both,
+  // so the dead union below is layered ON TOP of this map.
+  const modeDead = useMemo(() => {
+    const hidden = new Map<string, DeadKind>();
+    if (!rangedData || !gitData) return hidden;
+    const names = modeHiddenLanes(
+      viewMode,
+      rangedData.branches.filter(b => !b.is_tag && !baseDeadNames.has(b.name)),
+      new Set(pinnedBranches),
+      gitData.head_branch,
+      name => refActivity.get(name) ?? 0,
+      expandedDead,
+    );
+    for (const name of names) hidden.set(name, 'hidden');
+    for (const name of userCollapsed) {
+      if (!baseDeadNames.has(name) && !expandedDead.has(name)) hidden.set(name, 'hidden');
+    }
+    return hidden;
+  }, [rangedData, gitData, viewMode, pinnedBranches, refActivity, expandedDead, userCollapsed, baseDeadNames]);
   const dead = useMemo(() => {
-    const m = new Map(inactive?.dead ?? []);
+    const m = new Map(modeDead);
+    for (const [k, v] of inactive?.dead ?? []) m.set(k, v);
     for (const [k, v] of rangeEmpty?.dead ?? []) m.set(k, v);
     return m;
-  }, [inactive, rangeEmpty]);
+  }, [modeDead, inactive, rangeEmpty]);
   // Sibling members' checkouts (branch -> member name), current member
   // excluded: Timeline badges those lanes with a house marker. Memoized
   // for identity -- it sits in Timeline's draw-effect deps.
@@ -387,10 +480,20 @@ export default function RepoView({
       }
       return out;
     };
-    return { archived: merge('archived'), dormant: merge('dormant') };
-  }, [inactive, rangeEmpty]);
+    // Folded lanes (user × / view mode), resolved to their BranchLane for
+    // the panel section; lanes the dead rules already classify stay there.
+    const byName = new Map(branchList.map(b => [b.name, b]));
+    const hidden: BranchLane[] = [];
+    for (const name of modeDead.keys()) {
+      if (baseDeadNames.has(name)) continue;
+      const b = byName.get(name);
+      if (b) hidden.push(b);
+    }
+    return { hidden, archived: merge('archived'), dormant: merge('dormant') };
+  }, [inactive, rangeEmpty, modeDead, baseDeadNames, branchList]);
   const allDeadNames = useMemo(() => {
     const s = new Set<string>();
+    for (const l of mergedGroups.hidden) s.add(l.name);
     for (const l of mergedGroups.archived) s.add(l.name);
     for (const l of mergedGroups.dormant) s.add(l.name);
     return s;
@@ -535,6 +638,8 @@ export default function RepoView({
         setCheckoutDialog(null);
         setSwitchedBranch(null);
         setExpandedDead(new Set());
+        setUserCollapsed(new Set());
+        setViewMode('all');
         setViewResetKey(k => k + 1);
         setDateRange({ kind: 'all' });
         setCustomFrom('');
@@ -758,6 +863,18 @@ export default function RepoView({
     setDetailsWide(false);
   }, []);
 
+  // Empty-canvas click closes the details slot (the canvas acts as the
+  // panel's "outside"): the whole slot clears, whatever it holds -- a
+  // half-open compare pair included? NO: plain-canvas mirrors plain-node
+  // semantics minus the selection, and a pending HALF-pair (target '')
+  // survives plain clicks by spec 4.4. A COMPLETE pair is an open panel:
+  // it closes. Timeline filters pan-drag endings; nodes/edges stop
+  // propagation, so this fires for genuinely empty canvas only.
+  const handleCanvasClick = useCallback(() => {
+    setComparePair(p => (p && p.target !== '' ? null : p));
+    handleCloseDetails();
+  }, [handleCloseDetails]);
+
   // Plain NODE click (Timeline only) = exit compare + open single-commit
   // details (spec 4.4 panel-competition rule). Deliberately a wrapper
   // around handleCommitClick rather than a line inside it: arrow-key
@@ -824,8 +941,12 @@ export default function RepoView({
       setGitData(data);
       loadDiffStats(data);
       setSelectedCommit(null);
-      // The viewed branch is the user's focus: it starts expanded.
+      // The viewed branch is the user's focus: it starts expanded, and any
+      // display narrowing (view mode, manual folds) stands down -- a
+      // deliberate re-anchor shows the whole map.
       setExpandedDead(new Set([branchName]));
+      setUserCollapsed(new Set());
+      setViewMode('all');
       setViewResetKey(k => k + 1);
     } catch (err) {
       recordFrontendError(errText(err));
@@ -1004,35 +1125,12 @@ export default function RepoView({
     return t(expanded ? 'collapseGroup' : 'expandGroup');
   }, [mergedGroups, expandedDead, t]);
 
-  // Latest activity time per ref (branch lane or tag), derived from the
-  // loaded commits. Used to order the branch chips newest-first.
-  const refActivity = useMemo(() => {
-    const map = new Map<string, number>();
-    if (gitData) {
-      for (const c of gitData.commits) {
-        const prev = map.get(c.lane_owner);
-        if (prev === undefined || c.timestamp > prev) map.set(c.lane_owner, c.timestamp);
-        for (const r of c.branch_refs) {
-          const p = map.get(r.name);
-          if (p === undefined || c.timestamp > p) map.set(r.name, c.timestamp);
-        }
-      }
-    }
-    return map;
-  }, [gitData]);
-
+  // Latest activity time per ref: see the memo above the pipeline (the
+  // `active` view mode reads it too).
   const sortedBranches = useMemo(() => {
     return [...branchList].sort((a, b) =>
       (refActivity.get(b.name) ?? 0) - (refActivity.get(a.name) ?? 0));
   }, [branchList, refActivity]);
-
-  const filteredBranches = useMemo(() => {
-    const visible = (showTags ? sortedBranches : sortedBranches.filter(b => !b.is_tag))
-      .filter(b => !hideRemotes || !b.is_remote);
-    if (!searchQuery) return visible;
-    const query = searchQuery.toLowerCase();
-    return visible.filter(b => b.name.toLowerCase().includes(query));
-  }, [sortedBranches, searchQuery, showTags, hideRemotes]);
 
   // Active-only ref view, TWO DOMAINS with one boundary: the header owns
   // the state at rest, the panel owns the search. activeBranches
@@ -1054,66 +1152,47 @@ export default function RepoView({
   );
 
 
-  // --- lenses ----------------------------------------------------------------
-  // A lens is a one-gesture selection PRESET, not a mode: it writes the
-  // selection once, and a pill stays lit only while the current selection
-  // equals that preset -- any manual edit unlights it, honestly. "Recent"
-  // is rank-based (top N by activity) rather than time-based because the
-  // date scope already crops time; the lens keeps full history and only
-  // shrinks the lane set, which is what "browse just the active few"
-  // actually wants.
-  const RECENT_LENS_SIZE = 5;
-  const recentNames = useMemo(
-    () => activeBranches.slice(0, RECENT_LENS_SIZE).map(b => b.name),
-    [activeBranches]
+  // --- lane manager rows -----------------------------------------------------
+  // Single-list manager (the transfer zones are gone): the sections render
+  // in this order — ★ starred, then alive branches — and the search field's
+  // keyboard walk follows the same order. Include/exclude (the LOADED set)
+  // is the ADVANCED verb here: day-to-day narrowing lives on the canvas
+  // (fold / view modes), so rows keep their checkboxes but no drag, no
+  // FLIP, no second list to read.
+  const starredBranches = useMemo(
+    () => pinnedBranches
+      .map(name => sortedBranches.find(b => b.name === name))
+      .filter((b): b is BranchLane => !!b && !b.is_tag),
+    [pinnedBranches, sortedBranches]
   );
-  // Pins intersected with currently-alive lanes: dormant/archived pins
-  // stay selected (dead lanes never leave the selection) but cannot light
-  // the pill.
-  const pinnedNames = useMemo(
-    () => activeBranches.filter(b => pinnedBranches.includes(b.name)).map(b => b.name),
-    [activeBranches, pinnedBranches]
+  const starredSet = useMemo(() => new Set(pinnedBranches), [pinnedBranches]);
+  // Starred quick bar: starred lanes resolved to their BranchLane (for the
+  // lane colors), capped in the header; the overflow opens the manager.
+  const STAR_DOT_MAX = 7;
+  const starDots = starredBranches.slice(0, STAR_DOT_MAX);
+  const starredOverflow = Math.max(0, starredBranches.length - STAR_DOT_MAX);
+  const matchesSearch = useCallback(
+    (b: BranchLane) => !searchQuery || b.name.toLowerCase().includes(searchQuery.toLowerCase()),
+    [searchQuery]
   );
-  const aliveSelection = useMemo(
-    () => {
-      const alive = selectedBranches.filter(n => !allDeadNames.has(n));
-      // Compare against the same domain the remotes toggle shows: with
-      // remote lanes hidden, the lit state of the All lens judges the
-      // local-only selection.
-      return hideRemotes ? pruneRemoteLanes(alive, remoteLaneNames) : alive;
-    },
-    [selectedBranches, allDeadNames, hideRemotes, remoteLaneNames]
+  const mgrStarredRows = useMemo(
+    () => starredBranches.filter(matchesSearch),
+    [starredBranches, matchesSearch]
   );
-  const sameSet = (a: string[], b: string[]) =>
-    a.length === b.length && a.every(x => b.includes(x));
-  const recentLit = sameSet(aliveSelection, recentNames);
-  const allLit = sameSet(aliveSelection, activeBranches.map(b => b.name));
-  const pinnedLit = pinnedNames.length > 0 && sameSet(aliveSelection, pinnedNames);
+  const mgrBranchRows = useMemo(() => {
+    const rows: BranchLane[] = [];
+    for (const b of activeBranches) {
+      if (starredSet.has(b.name) || !matchesSearch(b)) continue;
+      rows.push(b);
+    }
+    return rows;
+  }, [activeBranches, starredSet, matchesSearch]);
+  // The keyboard walk's flat order = the visual section order.
+  const mgrRows = useMemo(() => [...mgrStarredRows, ...mgrBranchRows], [mgrStarredRows, mgrBranchRows]);
+  const highlightedRefName = showAllTags && mgrRows.length > 0
+    ? mgrRows[Math.min(rowHighlight, mgrRows.length - 1)].name
+    : null;
 
-  // A lens swap never drops dead lanes from the selection: they are
-  // invisible but loaded, and dropping them would collapse lanes the user
-  // never touched.
-  const applyLens = useCallback((names: string[]) => {
-    const deadKept = selectedBranches.filter(n => allDeadNames.has(n));
-    handleFilterChange([...new Set([...names, ...deadKept])]);
-  }, [selectedBranches, allDeadNames, handleFilterChange]);
-  // The pinned lens also expands dormant/archived pins: a pin means "at
-  // hand", and a lane collapsed into the sediment is not at hand.
-  const applyPinnedLens = useCallback(() => {
-    if (pinnedNames.length === 0) return;
-    setExpandedDead(prev => {
-      const next = new Set(prev);
-      for (const n of pinnedBranches) if (allDeadNames.has(n)) next.add(n);
-      return next;
-    });
-    applyLens(pinnedNames);
-  }, [pinnedNames, pinnedBranches, allDeadNames, applyLens]);
-
-  // Panel-listing domain: search narrows only what the panel SHOWS.
-  const panelRows = useMemo(
-    () => filteredBranches.filter(b => !allDeadNames.has(b.name)),
-    [filteredBranches, allDeadNames]
-  );
   // Footer count = the GLOBAL answer ("how many lanes is the canvas
   // drawing"), so it deliberately ignores the panel query. Dead lanes
   // never render as lanes (they live in their own groups and only
@@ -1123,114 +1202,31 @@ export default function RepoView({
     return activeBranches.filter(b => selected.has(b.name)).length;
   }, [activeBranches, selectedBranches]);
 
-  // Zone split: position IS the state — unselected candidates on the
-  // left, the curated selection on the right (the transfer/shuttle
-  // convention: moving right joins the selection). Both zones keep the
-  // activity order, so a chip's neighbors are stable; toggling moves it
-  // across the divider with a FLIP animation (see withFlip), so the eye
-  // can follow the chip that changed instead of rescanning two lists.
-  // Dead lanes stay out — they keep their own visibility sections below.
-  const zoneCandidates = useMemo(
-    () => panelRows.filter(b => !selectedBranches.includes(b.name)),
-    [panelRows, selectedBranches]
-  );
-  const zoneSelected = useMemo(
-    () => panelRows.filter(b => selectedBranches.includes(b.name)),
-    [panelRows, selectedBranches]
-  );
-
-  // FLIP move: capture every chip's rect BEFORE a selection change, then
-  // after commit animate each chip from its old position to the new one
-  // (Web Animations, so there is no transition state to clean up). A
-  // toggled chip visibly flies across the divider and displaced
-  // neighbors slide to make room -- position IS the state now, so the
-  // motion is what keeps the eye on the chip that changed.
-  const chipEls = useRef(new Map<string, HTMLElement>());
-  const flipBefore = useRef<Map<string, DOMRect> | null>(null);
-  const withFlip = (mutate: () => void) => {
-    const rects = new Map<string, DOMRect>();
-    chipEls.current.forEach((el, name) => rects.set(name, el.getBoundingClientRect()));
-    flipBefore.current = rects;
-    mutate();
-  };
-  useLayoutEffect(() => {
-    const before = flipBefore.current;
-    if (!before) return;
-    // Chips gone (panel closed / refs re-filtered away): cancel the
-    // pending snapshot, nothing can animate.
-    if (chipEls.current.size === 0) {
-      flipBefore.current = null;
-      return;
+  // Include/exclude from the LOADED set — the manager panel's ADVANCED
+  // verb (the zone drag-and-drop and its FLIP animation are gone; the
+  // day-to-day narrowing verbs are fold and the view modes, both instant).
+  const toggleInclude = useCallback((names: string[], select: boolean) => {
+    if (select) {
+      handleFilterChange([...new Set([...selectedBranches, ...names])]);
+    } else {
+      const drop = new Set(names);
+      handleFilterChange(selectedBranches.filter(n => !drop.has(n)));
     }
-    // A selection toggle rides an async backend round-trip, so commits
-    // can land BETWEEN the snapshot and the state change (loading
-    // states, unrelated updates). A commit where NOTHING moved is not
-    // the toggle's commit -- retain the snapshot for the one that is.
-    const plays: Array<() => void> = [];
-    let moved = false;
-    chipEls.current.forEach((el, name) => {
-      const prev = before.get(name);
-      const now = el.getBoundingClientRect();
-      if (!prev) {
-        moved = true;
-        plays.push(() => el.animate(
-          [{ opacity: 0, transform: 'scale(.8)' }, { opacity: 1, transform: 'none' }],
-          { duration: 150, easing: 'ease-out' },
-        ));
-        return;
-      }
-      const dx = prev.left - now.left;
-      const dy = prev.top - now.top;
-      if (dx || dy) {
-        moved = true;
-        plays.push(() => el.animate(
-          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
-          { duration: 220, easing: 'cubic-bezier(.2,.8,.25,1)' },
-        ));
-      }
-    });
-    before.forEach((_rect, name) => {
-      if (!chipEls.current.has(name)) moved = true;
-    });
-    if (!moved) return;
-    flipBefore.current = null;
-    plays.forEach(play => play());
-  });
-
-  // Zone toggle (chip click / drag-drop / zone bulk): select ADDS to the
-  // curated set, deselect removes exactly the named rows. Bulk verbs act
-  // on the rows the zone CURRENTLY lists (search + class filter
-  // applied), so "select everything matching release/*" composes from
-  // the toolbar query. Declared after panelRows: a useCallback dep array
-  // is read during render, and an earlier declaration would be a TDZ
-  // error (the M1.3 landmine).
-  const applyZoneToggle = useCallback((names: string[], select: boolean) => {
-    withFlip(() => {
-      if (select) {
-        handleFilterChange([...new Set([...selectedBranches, ...names])]);
-      } else {
-        const drop = new Set(names);
-        handleFilterChange(selectedBranches.filter(n => !drop.has(n)));
-      }
-    });
   }, [selectedBranches, handleFilterChange]);
 
-  // HTML5 drag between zones: the payload is the plain ref name (never
-  // trusted on drop -- it must exist in panelRows), the zones highlight
-  // only while a crossing drop would land.
-  const [dragName, setDragName] = useState<string | null>(null);
-  const [hoverZone, setHoverZone] = useState<'cand' | 'sel' | null>(null);
-  const dropOnZone = useCallback((zone: 'cand' | 'sel') => (e: React.DragEvent) => {
-    e.preventDefault();
-    setHoverZone(null);
-    setDragName(null);
-    const name = e.dataTransfer.getData('text/plain');
-    const lane = panelRows.find(b => b.name === name);
-    if (!lane) return;
-    const isSel = selectedBranches.includes(lane.name);
-    const wantsSel = zone === 'sel';
-    if (isSel !== wantsSel) applyZoneToggle([lane.name], wantsSel);
-  }, [panelRows, selectedBranches, applyZoneToggle]);
+  // Map-model canvas verbs: fold a lane into its sediment row (instant,
+  // session-only), and "全部" -- the one HEAVY verb in the header trio,
+  // because include was the only state that could actually remove lanes
+  // from the backend view. It restores the full loaded set and clears
+  // every display-level fold.
+  const foldLane = useCallback((name: string) => {
+    setUserCollapsed(prev => new Set(prev).add(name));
+  }, []);
+  const resetLanes = useCallback(() => {
+    setViewMode('all');
+    setUserCollapsed(new Set());
+    handleFilterChange(branchList.map(b => b.name));
+  }, [branchList, handleFilterChange]);
 
   // Dead-lane panel groups (newest activity first, matching the rows
   // above). The search box filters them too: a lane collapsed into the
@@ -1241,12 +1237,9 @@ export default function RepoView({
     (b: BranchLane) => !searchQuery || b.name.toLowerCase().includes(searchQuery.toLowerCase()),
     [searchQuery]
   );
-  const panelArchived = useMemo(
-    () => [...mergedGroups.archived].filter(deadNameMatches).sort(byActivity),
-    [mergedGroups, refActivity, deadNameMatches]
-  );
-  const panelDormant = useMemo(
-    () => [...mergedGroups.dormant].filter(deadNameMatches).sort(byActivity),
+  const deadSectionRows = useCallback(
+    (kind: DeadKind): BranchLane[] =>
+      [...mergedGroups[kind]].filter(deadNameMatches).sort(byActivity),
     [mergedGroups, refActivity, deadNameMatches]
   );
 
@@ -1344,6 +1337,22 @@ export default function RepoView({
   useEffect(() => {
     if (locateOpen) locateInputRef.current?.focus();
   }, [locateOpen]);
+  // Esc closes the floating search from ANY focus position. The input's
+  // own Escape branch below only fires while the input holds focus, but a
+  // scan (hover/arrow preview, a click into the graph or a node) hands
+  // focus elsewhere -- then Esc did nothing and the float hung over the
+  // canvas. While the float is open it is the TOPMOST Esc consumer: the
+  // compare-panel and ref-panel Esc handlers bail while locateOpen, so Esc
+  // peels one layer per press. An IME composition owns Esc first (it
+  // cancels the pinyin), so a composing keydown never closes the box.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!active || e.key !== 'Escape' || !locateOpen || e.isComposing) return;
+      setLocateOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active, locateOpen]);
 
   // Keep the keyboard-highlighted ref row inside the panel's scroll area
   // (same contract as the locate dropdown's highlight effect above). Safe
@@ -1352,8 +1361,14 @@ export default function RepoView({
   // the panel is open, so at most one match exists.
   useEffect(() => {
     if (!showAllTags) return;
-    document.querySelector('.zone-chip.hl')?.scrollIntoView({ block: 'nearest' });
+    document.querySelector('.mgr-row.hl')?.scrollIntoView({ block: 'nearest' });
   }, [rowHighlight, showAllTags]);
+
+  // Opening the manager puts the cursor in its search field (the header
+  // trigger is a button now; "/" opens AND focuses through this effect).
+  useEffect(() => {
+    if (showAllTags) filterInputRef.current?.focus();
+  }, [showAllTags]);
 
   // ←/→ step to the previous/next commit on the SAME lane while the
   // detail panel is open. commits are in ascending (time, topo) order —
@@ -1386,24 +1401,39 @@ export default function RepoView({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, selectedCommit, gitData, handleCommitClick, hiddenIds, outOfRange]);
 
-  // Esc closes ONLY the compare panel (spec 4.4): selectedCommit is left
-  // untouched, and no global Esc-for-single-details behavior is added
-  // (none exists today). A half-pair (target '') is not an open panel --
-  // Esc leaves it for a plain click or the next ctrl+click to resolve.
-  // While the wide split view is open, Esc belongs to IT (collapse to the
-  // narrow panel first; the next Esc closes the panel). Inputs keep their
-  // own Esc handling (locate dropdown), so typing in one never closes the
-  // panel behind it. Active tab only.
+  // Esc peels the right-side panel slot one layer per press: a COMPLETE
+  // compare pair closes first, then the plain details panel (the user
+  // asked for a keyboard quick-hide; the × was mouse-only). A half-pair
+  // (target '') is not an open panel -- Esc leaves it for a plain click or
+  // the next ctrl+click to resolve (spec 4.4). While the wide split view
+  // is open, Esc belongs to IT (collapse to the narrow panel first; the
+  // next Esc closes the panel). Inputs keep their own Esc handling (locate
+  // dropdown), so typing in one never closes the panel behind it. Active
+  // tab only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!active || e.key !== 'Escape' || detailsWide || !comparePair || comparePair.target === '') return;
+      // locateOpen first: the floating search sits above the panel and owns
+      // the Esc -- one press peels it, the NEXT press closes the pair.
+      if (!active || e.key !== 'Escape' || detailsWide || locateOpen) return;
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-      setComparePair(null);
+      // A COMPLETE pair is an open panel: Esc closes it. A half-pair is
+      // not (spec 4.4) -- it falls through, so the press can close the
+      // details panel underneath instead.
+      if (comparePair && comparePair.target !== '') {
+        setComparePair(null);
+        return;
+      }
+      // The plain details panel has no other keyboard exit; its × is
+      // mouse-only.
+      if (selectedCommit) {
+        setSelectedCommit(null);
+        setDetailsWide(false);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, comparePair, detailsWide]);
+  }, [active, comparePair, detailsWide, locateOpen, selectedCommit]);
 
   // H = "go home" (Age of Empires): snap the camera back to HEAD. Plain H
   // only — with Cmd/Ctrl it means something else (Cmd+H hides the window,
@@ -1425,10 +1455,11 @@ export default function RepoView({
     return () => window.removeEventListener('keydown', onKey);
   }, [active, gitData]);
 
-  // "/" focuses the lane-filter combobox (the Gmail/HE idiom: plain slash
-  // = "filter what I'm looking at"). Same guards as H: no modifiers, bail
-  // on inputs (a '/' typed into the locate box or the terminal must not
-  // move focus), active tab only. Focusing the field opens the panel.
+  // "/" opens the lane manager with its search focused (the Gmail/HE idiom:
+  // plain slash = "filter what I'm looking at"). Same guards as H: no
+  // modifiers, bail on inputs (a '/' typed into the locate box or the
+  // terminal must not move focus), active tab only. The effect above puts
+  // the cursor in the panel's search field once it exists.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!active || !gitData) return;
@@ -1437,7 +1468,7 @@ export default function RepoView({
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       e.preventDefault();
-      filterInputRef.current?.focus();
+      setShowAllTags(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1451,7 +1482,13 @@ export default function RepoView({
   // Active tab only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!active || e.key !== 'Escape' || !showAllTags) return;
+      // locateOpen first: the floating search sits above the panel and owns
+      // the Esc -- one press peels it, the NEXT press closes the panel.
+      // The right-side details/compare slot sits between the two: while it
+      // is open it consumes the press (its own handler above), so Esc
+      // always peels exactly one layer.
+      if (!active || e.key !== 'Escape' || !showAllTags || locateOpen || detailsWide) return;
+      if ((comparePair && comparePair.target !== '') || selectedCommit) return;
       const el = e.target as HTMLElement | null;
       if (!el) return;
       if (el === filterInputRef.current) return;
@@ -1461,7 +1498,7 @@ export default function RepoView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, showAllTags, closePanel]);
+  }, [active, showAllTags, locateOpen, detailsWide, comparePair, selectedCommit, closePanel]);
 
   const handleLocate = useCallback(async (r: LocateResult) => {
     const id = r.kind === 'branch' ? r.commitId : r.id;
@@ -1477,6 +1514,8 @@ export default function RepoView({
         loadDiffStats(data);
         setSelectedCommit(null);
         setExpandedDead(new Set());
+        setUserCollapsed(new Set());
+        setViewMode('all');
         setViewResetKey(k => k + 1);
         focusSeqRef.current += 1;
         setFocusTarget({ id, seq: focusSeqRef.current });
@@ -1512,100 +1551,57 @@ export default function RepoView({
     handleCommitClick(head.id);
   }, [gitData, inactive, handleCommitClick]);
 
-  // Header chip doubles as the lane legend: a small color dot keeps the
-  // lane<->color mapping visible while the chip's own surface stays
-  // NEUTRAL — selected = filled, off = ghost. The old solid lane-color
-  // fill stacked identity and state at the same intensity and turned the
-  // rest state into a wall of unrelated saturated hues. The hidden
-  // double-click solo is gone too (each double-click burned two toggle
-  // rebuilds before the solo landed); the panel's explicit per-row solo
-  // button replaces it.
-  // Keyboard highlight as a NAME: ↑/↓ walk the flat "candidates then
-  // selected" order (the zones' visual left-to-right reading order);
-  // names are unique keys, so name equality maps the flat index onto
-  // whichever zone holds the chip -- and the highlight FOLLOWS a chip
-  // across the divider when Enter moves it.
-  const highlightedRefName = showAllTags && (zoneCandidates.length > 0 || zoneSelected.length > 0)
-    ? [...zoneCandidates, ...zoneSelected][Math.min(rowHighlight, zoneCandidates.length + zoneSelected.length - 1)].name
-    : null;
-
-
-  // Panel chip for a live ref. The chip IS the toggle (click or drag
-  // across the divider); the checkbox idiom is gone because position
-  // now carries the state. Hover actions sit in a reserved trailing
-  // slot (opacity swap, no layout shift): pin toggle + "only this".
-  // Right-click copies the name -- the same desktop convention as the
-  // toolbar chips. Pin also rides at rest as a front glyph, matching
-  // the toolbar chip, so pinned lanes are visible without hovering.
-  const renderLaneChip = (branch: BranchLane) => {
+  // Manager row: [★][dot][name][solo]. The WHOLE row is the include/exclude
+  // hit target (the loaded-set toggle, the panel's advanced verb), the star
+  // is the persisted favorite, solo replaces the whole loaded set with this
+  // one lane. Right-click copies the name -- the same desktop convention as
+  // everywhere else. No drag, no FLIP: the row never moves on toggle, so
+  // the eye re-orientes by position instead of chasing an animation.
+  const renderMgrRow = (branch: BranchLane) => {
     const on = selectedBranches.includes(branch.name);
-    const pinned = pinnedBranches.includes(branch.name);
+    const starred = pinnedBranches.includes(branch.name);
     return (
       <div
         key={branch.name}
-        ref={el => { if (el) chipEls.current.set(branch.name, el); else chipEls.current.delete(branch.name); }}
-        className={`zone-chip${on ? ' sel' : ''}${highlightedRefName === branch.name ? ' hl' : ''}${dragName === branch.name ? ' dragging' : ''}`}
-        draggable
+        className={`mgr-row${on ? ' sel' : ''}${highlightedRefName === branch.name ? ' hl' : ''}`}
         role="checkbox"
         aria-checked={on}
         title={`${branch.name} · ${t('chipHint')}`}
-        onClick={() => applyZoneToggle([branch.name], !on)}
+        onClick={() => toggleInclude([branch.name], !on)}
         onContextMenu={e => {
           e.preventDefault();
           copyName(branch.name);
         }}
-        onDragStart={e => {
-          e.dataTransfer.setData('text/plain', branch.name);
-          e.dataTransfer.effectAllowed = 'move';
-          setDragName(branch.name);
-        }}
-        onDragEnd={() => {
-          setDragName(null);
-          setHoverZone(null);
-        }}
       >
-        <span className="zone-chip-dot" style={{ background: branch.color }} />
-        {pinned && (
-          <svg className="zone-chip-pin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="12" x2="12" y1="17" y2="22" />
-            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-          </svg>
-        )}
+        <button
+          type="button"
+          className={`mgr-row-star${starred ? ' on' : ''}`}
+          title={starred ? t('unpin') : t('pin')}
+          aria-label={starred ? t('unpin') : t('pin')}
+          onClick={e => { e.stopPropagation(); togglePin(branch.name); }}
+        >
+          {starred ? '★' : '☆'}
+        </button>
+        <span className="branch-row-dot" style={{ background: branch.color }} />
         {branch.is_tag && (
           <svg className="branch-row-tag-ico" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
             <circle cx="5.3" cy="5.3" r="0.8" fill="currentColor" stroke="none" />
           </svg>
         )}
-        <span className="zone-chip-name">{truncateMiddle(branch.name)}</span>
-        <span className="zone-chip-actions">
-          <button
-            type="button"
-            className="zone-chip-act"
-            draggable={false}
-            title={pinned ? t('unpin') : t('pin')}
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); togglePin(branch.name); }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="12" x2="12" y1="17" y2="22" />
-              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="zone-chip-act"
-            draggable={false}
-            title={t('onlyThis')}
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); handleFilterChange([branch.name]); }}
-          >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-              <circle cx="8" cy="8" r="5" />
-              <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
-            </svg>
-          </button>
-        </span>
+        <span className="mgr-row-name">{truncateMiddle(branch.name)}</span>
+        <button
+          type="button"
+          className="mgr-row-solo"
+          title={t('onlyThis')}
+          aria-label={t('onlyThis')}
+          onClick={e => { e.stopPropagation(); handleFilterChange([branch.name]); }}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            <circle cx="8" cy="8" r="5" />
+            <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
       </div>
     );
   };
@@ -1641,12 +1637,12 @@ export default function RepoView({
     );
   };
 
-  // Combobox keys, handled in the field (focus never leaves it while
-  // navigating): ↑/↓ walk the chips in visual order (candidates zone
-  // then selected zone), Enter moves the highlighted chip across the
-  // divider -- the highlight then jumps WITH the chip, so a second
-  // Enter moves it back -- and Esc exits in layers: clear the query
-  // first, close the panel second.
+  // Manager search keys, handled in the field (focus never leaves it while
+  // navigating): ↑/↓ walk the flat section order (starred first, then
+  // branches), Enter toggles the highlighted row's include state -- the
+  // list never reorders on toggle, so the highlight stays on the row --
+  // and Esc exits in layers: clear the query first, close the panel
+  // second.
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       if (searchQuery) {
@@ -1658,24 +1654,16 @@ export default function RepoView({
       }
       return;
     }
-    const rows = [...zoneCandidates, ...zoneSelected];
-    if (rows.length === 0) return;
+    if (mgrRows.length === 0) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       setRowHighlight(i =>
-        Math.min(Math.max(i + (e.key === 'ArrowDown' ? 1 : -1), 0), rows.length - 1));
+        Math.min(Math.max(i + (e.key === 'ArrowDown' ? 1 : -1), 0), mgrRows.length - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const row = rows[Math.min(rowHighlight, rows.length - 1)];
+      const row = mgrRows[Math.min(rowHighlight, mgrRows.length - 1)];
       if (!row) return;
-      const willSelect = !selectedBranches.includes(row.name);
-      applyZoneToggle([row.name], willSelect);
-      // The chip just changed zones: recompute the walk order the memos
-      // will hold after the toggle and pin the index to the SAME chip.
-      const sel = new Set(selectedBranches);
-      if (willSelect) sel.add(row.name); else sel.delete(row.name);
-      const next = [...panelRows.filter(b => !sel.has(b.name)), ...panelRows.filter(b => sel.has(b.name))];
-      setRowHighlight(Math.max(next.findIndex(b => b.name === row.name), 0));
+      toggleInclude([row.name], !selectedBranches.includes(row.name));
     }
   };
 
@@ -1888,102 +1876,92 @@ export default function RepoView({
                 </>
               )}
             </div>
-            {/* Lens group: one-gesture lane-selection presets. The 📌
-                pill renders only once something has been pinned (no dead
-                chrome), and disables when no pin is currently visible
-                (all dormant/archived). Lit = current selection equals
-                the preset; manual edits unlight. The row is expected to
-                grow -- it sits after the date scope precisely so new
-                presets append without reshuffling the cluster. */}
-            <div className="lens-group" role="group" aria-label={t('lensGroup')}>
+            {/* View-mode trio (the map model's header controls): narrowing
+                here is DISPLAY-level -- stars and activity decide what
+                folds, switching is instant, and the lit state is the mode
+                itself so it can never silently unlight (the old lens
+                presets did). "全部" is the one heavy verb: it also restores
+                the full LOADED set. Toggling a narrowed mode off returns to
+                'all' without touching the loaded set. */}
+            <div className="lens-group" role="group" aria-label={t('modeGroup')}>
               <button
-                className={`panel-pill lens${recentLit ? ' on' : ''}`}
-                onClick={() => applyLens(recentNames)}
-                title={t('lensRecentTip')}
+                className={`panel-pill lens${viewMode === 'active' ? ' on' : ''}`}
+                onClick={() => setViewMode(m => (m === 'active' ? 'all' : 'active'))}
+                title={t('modeActiveTip', { n: ACTIVE_MODE_SIZE })}
               >
-                {t('lensRecent')}
+                {t('modeActive')}
               </button>
-              {pinnedBranches.length > 0 && (
-                <button
-                  className={`panel-pill lens${pinnedLit ? ' on' : ''}`}
-                  onClick={applyPinnedLens}
-                  disabled={pinnedNames.length === 0}
-                  title={t('lensPinnedTip')}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <line x1="12" x2="12" y1="17" y2="22" />
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                  </svg>
-                  {t('lensPinned')}
-                </button>
-              )}
               <button
-                className={`panel-pill lens${allLit ? ' on' : ''}`}
-                onClick={() => applyLens(activeBranches.map(b => b.name))}
-                title={t('lensAllTip')}
+                className={`panel-pill lens${viewMode === 'starred' ? ' on' : ''}`}
+                onClick={() => setViewMode(m => (m === 'starred' ? 'all' : 'starred'))}
+                disabled={pinnedBranches.length === 0}
+                title={t('modeStarredTip')}
               >
-                {t('lensAll')}
+                {t('modeStarred')}
+              </button>
+              <button
+                className={`panel-pill lens${viewMode === 'all' ? ' on' : ''}`}
+                onClick={resetLanes}
+                title={t('modeAllTip')}
+              >
+                {t('modeAll')}
               </button>
             </div>
-            {/* The filter combobox: one query, one results surface, and
-                ONE entry -- it absorbed the old "+N more" overflow button,
-                so the field is the panel's only trigger. Focus or typing
-                opens the panel anchored below the header; the query drives
-                the panel's candidate rows only (the leak-bug rule: an
-                input mutates what sits under it, not the answer display
-                elsewhere). "/" focuses it from anywhere in the tab. */}
-            <input
-              ref={filterInputRef}
-              type="text"
-              className={`filter-field${showAllTags ? ' open' : ''}`}
-              placeholder={t('filterShort')}
-              title={t('filterTip')}
-              aria-label={t('filterRefs')}
-              value={searchQuery}
-              onChange={e => {
-                setSearchQuery(e.target.value);
-                setShowAllTags(true);
-                setRowHighlight(0);
-              }}
-              onFocus={() => setShowAllTags(true)}
-              onKeyDown={onFilterKeyDown}
-            />
-            {/* Selection status pill: the header's replacement for the
-                per-lane chips. Lane identity already lives on the canvas
-                labels and per-lane control lives in the panel, so the one
-                thing the header still owed the user is the honest
-                at-a-glance answer to "am I looking at everything?" -- the
-                subset count, plus the one verb the header never had: a
-                single click back to all lanes. Rendered only while a
-                filter is actually narrowing the canvas (all-shown needs
-                no badge; "0 of N" shows and is exactly the state the ×
-                rescues). */}
-            {selectedActiveCount < activeBranches.length && (
-              <div className="filter-status" title={t('filterStatusTip')}>
-                <button
-                  type="button"
-                  className="filter-status-main"
-                  onClick={() => filterInputRef.current?.focus()}
-                >
-                  {t('filterStatusCount', {
-                    n: selectedActiveCount,
-                    m: activeBranches.length,
-                  })}
-                </button>
-                <button
-                  type="button"
-                  className="filter-status-x"
-                  title={t('filterStatusClear')}
-                  aria-label={t('filterStatusClear')}
-                  onClick={() => applyLens(activeBranches.map(b => b.name))}
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                  </svg>
-                </button>
+            {/* Starred quick bar: one colored dot per favorite (lane colors,
+                so it doubles as a legend), click = the starred view. Over
+                STAR_DOT_MAX the rest collapse into +N, which opens the
+                manager where every star is listed. */}
+            {starDots.length > 0 && (
+              <div className="star-dots" role="group" aria-label={t('modeStarredTip')}>
+                {starDots.map(b => (
+                  <button
+                    key={b.name}
+                    type="button"
+                    className="star-dot"
+                    style={{ background: b.color }}
+                    title={t('starDotTip', { name: b.name })}
+                    aria-label={t('starDotTip', { name: b.name })}
+                    onClick={() => setViewMode('starred')}
+                  />
+                ))}
+                {starredOverflow > 0 && (
+                  <button
+                    type="button"
+                    className="star-dot more"
+                    title={t('starMoreTip', { n: starredOverflow })}
+                    onClick={() => setShowAllTags(true)}
+                  >
+                    +{starredOverflow}
+                  </button>
+                )}
               </div>
             )}
+            {/* Lane manager trigger: a BUTTON, not a text field -- the old
+                field-as-trigger made focus imply typing. The label carries
+                the honest lane count, N/M while the loaded set is narrowed
+                (it absorbed the old filter-status pill; "全部" above is the
+                one-click way back). Opens the manager panel, whose own
+                search field takes the query. */}
+            <button
+              type="button"
+              className={`lanes-trigger${showAllTags ? ' open' : ''}`}
+              onClick={() => setShowAllTags(v => !v)}
+              title={t('lanesTriggerTip')}
+              aria-expanded={showAllTags}
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                <line x1="2" y1="4" x2="14" y2="4" />
+                <line x1="2" y1="8" x2="14" y2="8" />
+                <line x1="2" y1="12" x2="14" y2="12" />
+                <circle cx="10" cy="4" r="1.5" fill="currentColor" stroke="none" />
+                <circle cx="5" cy="8" r="1.5" fill="currentColor" stroke="none" />
+                <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+              </svg>
+              {selectedActiveCount < activeBranches.length
+                ? `${selectedActiveCount}/${activeBranches.length}`
+                : `${activeBranches.length}`}
+              {t('lanesTrigger')}
+            </button>
           </div>
         )}
 
@@ -2156,13 +2134,26 @@ export default function RepoView({
                 height varies with the identity card. */}
             <div className="branch-panel-backdrop" onClick={closePanel} />
             <div className="branch-panel">
-              {/* Head = class scope + dismiss. The Tags chip (pressed = tag
+              {/* Head = the search field (moved in from the header: the
+                  trigger is a BUTTON now, the query lives where the results
+                  are) + class scope + dismiss. The Tags chip (pressed = tag
                   rows listed) is the one scope control the panel needs --
-                  version tags can flood the list, branches cannot, so the
-                  class toggle is one-directional by design. It moved up
-                  from the old toolbar row, which shrank the panel by a row
-                  and left bulk verbs on the group headers where they act. */}
+                  version tags can flood the list, branches cannot. */}
               <div className="branch-panel-head">
+                <input
+                  ref={filterInputRef}
+                  type="text"
+                  className="panel-search"
+                  placeholder={t('filterShort')}
+                  title={t('filterTip')}
+                  aria-label={t('filterRefs')}
+                  value={searchQuery}
+                  onChange={e => {
+                    setSearchQuery(e.target.value);
+                    setRowHighlight(0);
+                  }}
+                  onKeyDown={onFilterKeyDown}
+                />
                 <button
                   className={`panel-pill${showTags ? ' on' : ''}`}
                   onClick={toggleShowTags}
@@ -2181,110 +2172,46 @@ export default function RepoView({
                 </button>
               </div>
               <div className="branch-panel-list">
-                {/* The two zones: candidates left, selection right (the
-                    transfer convention -- moving right joins). Each zone
-                    header carries ONE quiet bulk verb acting on what the
-                    query currently lists there; the empty-zone hints keep
-                    the drop target alive so a drag still lands. */}
-                <div className="lane-zones">
-                  <div
-                    className={`lane-zone${hoverZone === 'cand' ? ' over' : ''}`}
-                    onDragOver={e => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = 'move';
-                      setHoverZone('cand');
-                    }}
-                    onDragLeave={e => {
-                      if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverZone(z => (z === 'cand' ? null : z));
-                    }}
-                    onDrop={dropOnZone('cand')}
-                  >
-                    <div className="lane-zone-head">
-                      <span className="lane-zone-title">{t('zoneCandidates', { n: zoneCandidates.length })}</span>
-                      {zoneCandidates.length > 0 && (
-                        <button
-                          type="button"
-                          className="lane-zone-bulk"
-                          title={t('zoneSelectAll')}
-                          onClick={() => applyZoneToggle(zoneCandidates.map(b => b.name), true)}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M18 6 7 17l-5-5" />
-                            <path d="m22 10-7.5 7.5L13 16" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                    <div className="lane-zone-body">
-                      {zoneCandidates.map(renderLaneChip)}
-                      {zoneCandidates.length === 0 && (
-                        <span className="lane-zone-empty">{t('zoneAllSelected')}</span>
-                      )}
-                    </div>
-                  </div>
-                  <div
-                    className={`lane-zone selz${hoverZone === 'sel' ? ' over' : ''}`}
-                    onDragOver={e => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = 'move';
-                      setHoverZone('sel');
-                    }}
-                    onDragLeave={e => {
-                      if (!e.currentTarget.contains(e.relatedTarget as Node)) setHoverZone(z => (z === 'sel' ? null : z));
-                    }}
-                    onDrop={dropOnZone('sel')}
-                  >
-                    <div className="lane-zone-head">
-                      <span className="lane-zone-title">{t('zoneSelected', { n: zoneSelected.length })}</span>
-                      {zoneSelected.length > 0 && (
-                        <button
-                          type="button"
-                          className="lane-zone-bulk"
-                          title={t('zoneClearAll')}
-                          onClick={() => applyZoneToggle(zoneSelected.map(b => b.name), false)}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M18 6 6 18" />
-                            <path d="m6 6 12 12" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                    <div className="lane-zone-body">
-                      {zoneSelected.map(renderLaneChip)}
-                      {zoneSelected.length === 0 && (
-                        <span className="lane-zone-empty">{t('zoneNoneSelected')}</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                {panelArchived.length > 0 && (
+                {/* The single list: ★ starred first (the favorites, whatever
+                    their state), then alive branches. Rows do not move on
+                    toggle -- include/exclude only flips the row's state, so
+                    the eye stays put (the old transfer zones are gone). */}
+                {mgrStarredRows.length > 0 && (
                   <div className="branch-panel-group">
-                    <div className="branch-panel-group-title">
-                      {t('archivedLanes', { n: panelArchived.length })}
-                      <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('archived')}>
-                        {traceGroupLabel('archived')}
-                      </button>
-                    </div>
+                    <div className="branch-panel-group-title">★ {t('sectionStarred', { n: mgrStarredRows.length })}</div>
                     <div className="branch-panel-rows">
-                      {panelArchived.map(renderDeadRow)}
+                      {mgrStarredRows.map(renderMgrRow)}
                     </div>
                   </div>
                 )}
-                {panelDormant.length > 0 && (
+                {mgrBranchRows.length > 0 && (
                   <div className="branch-panel-group">
-                    <div className="branch-panel-group-title">
-                      {t('dormantLanes', { n: panelDormant.length })}
-                      <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup('dormant')}>
-                        {traceGroupLabel('dormant')}
-                      </button>
-                    </div>
+                    <div className="branch-panel-group-title">{t('sectionBranches', { n: mgrBranchRows.length })}</div>
                     <div className="branch-panel-rows">
-                      {panelDormant.map(renderDeadRow)}
+                      {mgrBranchRows.map(renderMgrRow)}
                     </div>
                   </div>
                 )}
-                {zoneCandidates.length === 0 && zoneSelected.length === 0 && panelArchived.length === 0 && panelDormant.length === 0 && (
+                {(['hidden', 'archived', 'dormant'] as DeadKind[]).map(kind => {
+                  const rows = deadSectionRows(kind);
+                  if (rows.length === 0) return null;
+                  const label = kind === 'hidden' ? 'hiddenLanes'
+                    : kind === 'archived' ? 'archivedLanes' : 'dormantLanes';
+                  return (
+                    <div className="branch-panel-group" key={kind}>
+                      <div className="branch-panel-group-title">
+                        {t(label, { n: rows.length })}
+                        <button className="view-btn dead-group-btn" onClick={() => expandTraceGroup(kind)}>
+                          {traceGroupLabel(kind)}
+                        </button>
+                      </div>
+                      <div className="branch-panel-rows">
+                        {rows.map(renderDeadRow)}
+                      </div>
+                    </div>
+                  );
+                })}
+                {mgrRows.length === 0 && mergedGroups.hidden.length === 0 && mergedGroups.archived.length === 0 && mergedGroups.dormant.length === 0 && (
                   <div className="branch-panel-empty">{t('noRefsMatch')}</div>
                 )}
               </div>
@@ -2332,7 +2259,9 @@ export default function RepoView({
         </div>
       )}
 
-      <main className="main">
+      {/* --details-w feeds the narrow panel's width (drag-resizable divider
+          below); .wide ignores it. */}
+      <main className="main" style={{ '--details-w': `${detailsWidth}px` } as CSSProperties}>
         {/* gitData is seeded from initialData, so this null branch is a
             defensive loading/error shape only -- the no-tabs welcome state
             lives in App (Task 5: "no tab" is shell-level, not view-level). */}
@@ -2380,6 +2309,10 @@ export default function RepoView({
               compareBaseId={compareBaseId}
               onComparePair={handleComparePair}
               onCopyName={copyName}
+              onCanvasClick={handleCanvasClick}
+              starredLanes={starredSet}
+              onToggleStarLane={togglePin}
+              onFoldLane={foldLane}
             />
             </div>
             {locateOpen && (
@@ -2402,7 +2335,10 @@ export default function RepoView({
                       const r = locateResults[locateIndex] ?? locateResults[0];
                       if (r) handleLocate(r);
                     } else if (e.key === 'Escape') {
-                      setLocateOpen(false);
+                      // During IME composition Esc cancels the pinyin — the
+                      // box must survive that (the window handler guards the
+                      // same case for every other focus position).
+                      if (!e.nativeEvent.isComposing) setLocateOpen(false);
                     }
                   }}
                 />
@@ -2446,6 +2382,22 @@ export default function RepoView({
                   </div>
                 )}
               </div>
+            )}
+            {/* Drag handle for the narrow panel's width (both panel kinds
+                share the slot and the width). Rendered only while the slot
+                is occupied and narrow -- the wide split view owns the whole
+                main area. Pointer capture keeps the gesture glued to the
+                handle even when the cursor races off it. */}
+            {(selectedCommit || (comparePair && comparePair.target !== '')) && !detailsWide && (
+              <div
+                className="panel-resizer"
+                role="separator"
+                aria-orientation="vertical"
+                onPointerDown={onResizerPointerDown}
+                onPointerMove={onResizerPointerMove}
+                onPointerUp={onResizerPointerUp}
+                onPointerCancel={onResizerPointerUp}
+              />
             )}
             {/* Panel slot is EXCLUSIVE (spec 4.4): a complete pair renders
                 CompareDetails instead of CommitDetails; a plain node click

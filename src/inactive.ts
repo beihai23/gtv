@@ -8,7 +8,11 @@ import type { BranchLane, GitData } from './types';
 /** One rendered lane row is this many px tall (must match src-tauri layout). */
 export const LANE_HEIGHT = 80;
 
-export type DeadKind = 'archived' | 'dormant';
+/** Sediment categories, in the order their trace rows stack (user folds on
+ *  top — they are deliberate and the user will look for them first). */
+export const DEAD_KINDS = ['hidden', 'archived', 'dormant'] as const;
+
+export type DeadKind = (typeof DEAD_KINDS)[number];
 
 export interface InactiveInfo {
   /** Collapsed lanes only (user-expanded ones excluded); lane name -> group. */
@@ -167,10 +171,11 @@ export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): Colla
     rowOf.set(b.lane_index, row++);
   }
   const traceRowOfKind = new Map<DeadKind, number>();
-  const counts: Record<DeadKind, number> = { archived: 0, dormant: 0 };
+  const counts = Object.fromEntries(DEAD_KINDS.map(k => [k, 0])) as Record<DeadKind, number>;
   for (const kind of dead.values()) counts[kind]++;
-  if (counts.archived > 0) traceRowOfKind.set('archived', row++);
-  if (counts.dormant > 0) traceRowOfKind.set('dormant', row++);
+  for (const kind of DEAD_KINDS) {
+    if (counts[kind] > 0) traceRowOfKind.set(kind, row++);
+  }
 
   // Commits: kept lanes get compacted lane/y; dead-lane commits are hidden
   // and retargeted to the trace row so fit-bounds (min/max over ALL commit
@@ -213,7 +218,7 @@ export function collapseLanes(data: GitData, dead: Map<string, DeadKind>): Colla
   }
 
   const traceRows: TraceRow[] = [];
-  for (const kind of ['archived', 'dormant'] as const) {
+  for (const kind of DEAD_KINDS) {
     const laneIndex = traceRowOfKind.get(kind);
     if (laneIndex !== undefined) traceRows.push({ laneIndex, kind, count: counts[kind] });
   }

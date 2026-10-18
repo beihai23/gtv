@@ -199,6 +199,7 @@ src/
                   after close, gtv_tabs persist/restore (legacy
                   gtv_latest_repo migration, read-once)
   terminalSize.ts bottom-terminal height clamp + persistence (gtv_term_height)
+  detailSize.ts   details-panel width clamp + persistence (gtv_details_width)
   compare.ts      compare-pairing pure functions: nextPair (Ctrl+click
                   base/target state machine) + headToLaneTip (pair for the
                   lane-menu "compare with HEAD" item)
@@ -208,6 +209,11 @@ src/
   delaygate.ts    delay-gate state machine for busy indicators (350ms show-up
                   delay + 500ms minimum show, pure step(gate, busy, now));
                   Timeline's useDelayedBusy wraps it with setTimeout
+  laneview.ts     lane view modes (the map model): modeHiddenLanes computes
+                  the DISPLAY-level fold set for the header trio (all / ★
+                  starred / active top-N) — HEAD's lane and manually restored
+                  lanes always survive, and a mode that would fold every
+                  alive lane is a no-op (a blank canvas helps nobody)
   viewpersist.ts  per-repo view memory: the timeline camera (zoom k + pan
                   x/y, gtv_viewport:<path>) and the date-range pref with its
                   Custom input strings (gtv_daterange:<path>), same defensive
@@ -235,14 +241,34 @@ src/
                   (a one-shot change like a branch delete is never dropped),
                   and it re-applies a narrowed branch selection through
                   filterByBranches (refresh_repository only knows the full
-                  seed set), so a pinned/recent lens or chip filter survives
-                  refreshes instead of flashing back to all lanes; the
-                  background refresh is deliberately SILENT (no UI twin of
+                  seed set), so a narrowed include-set survives refreshes
+                  instead of flashing back to all lanes; the background
+                  refresh is deliberately SILENT (no UI twin of
                   refreshingRef — it must never light Timeline's render
                   badge) and activation does NOT bump the fit signal (the
                   remembered camera survives tab switches); the date-range
                   pref persists per repo (viewpersist.ts) and is restored on
-                  mount
+                  mount; the details slot (CommitDetails AND CompareDetails)
+                  is drag-resizable (the .panel-resizer divider feeds
+                  --details-w, persisted in detailSize.ts) and Esc or an
+                  empty-canvas click dismisses it — Esc peels one layer per
+                  press (locate float → compare pair → details → ref panel),
+                  and canvas clicks that follow a pan drag are filtered by
+                  movement in Timeline; lane narrowing follows the MAP model
+                  — day-to-day verbs are display-level and instant: the
+                  header trio (all / ★ starred / active top-N,
+                  laneview.ts's computed fold set; ★ also expands starred
+                  dead lanes via restoredSet), per-lane fold (chip hover × /
+                  lane menu, session-only userCollapsed) and per-lane focus
+                  all reuse the dead-lane sediment pipeline (the DeadKind
+                  'hidden' row), while include/exclude (the LOADED set,
+                  backend rebuild) is the manager panel's advanced verb and
+                  "全部" is the one heavy header verb (restores the full
+                  loaded set); the panel is a single-list manager (★
+                  starred section, then branches, then folded/archived/
+                  dormant eye groups — the old transfer zones, drag-drop
+                  and FLIP are gone), stars live in the gtv_branch_pins
+                  storage under the hood
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core.
                                 The zoom handler applies the transform per event
@@ -284,7 +310,12 @@ src/
                                 click expands just that stretch (expandedIds), the
                                 lane context/search jump expands whole lanes
                                 (expandedLanes), and the toolbar's Collapse all
-                                clears both granularities
+                                clears both granularities; lane chips carry
+                                the canvas map-verbs — click focuses the lane
+                                (dims the rest), hover × folds it into its
+                                sediment row, the ★ glyph marks a favorite,
+                                and the context menu gains star/fold next to
+                                the existing ops
   components/CommitDetails.tsx  commit detail panel (narrow summary; file
                                 rows open the split view)
   components/CompareDetails.tsx two-commit compare panel (Ctrl+click pairing):
@@ -369,10 +400,11 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 203 cases across 19 files: `src/inactive.test.ts`,
+(`npm test`, 218 cases across 21 files: `src/inactive.test.ts`,
+`src/laneview.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/viewpersist.test.ts`,
-`src/terminalSize.test.ts`,
+`src/terminalSize.test.ts`, `src/detailSize.test.ts`,
 `src/compare.test.ts`, `src/collapse.test.ts`, `src/tabs.test.ts`,
 `src/filetree.test.ts`, `src/diffparse.test.ts`, `src/delaygate.test.ts`,
 `src/components/minimap.test.ts`, plus the vscode-gtv engine/e2e files —
@@ -431,7 +463,9 @@ watcher cases); all other automated testing lives in Rust.
   single value migrates into a one-member restore, read-once. Per-repo view
   state uses the same store: branch selection `gtv_branch_sel:<path>`, pins
   `gtv_branch_pins:<path>`, date scope `gtv_daterange:<path>`, and the
-  timeline camera `gtv_viewport:<path>` (viewpersist.ts).
+  timeline camera `gtv_viewport:<path>` (viewpersist.ts). Global (not
+  per-repo) UI prefs: `gtv_details_width` (detailSize.ts) and
+  `gtv_term_height` (terminalSize.ts).
 - Language: code comments, README, and this file are English; the design docs in
   `docs/` (roadmap.md, design-v2.md, gmaster-research.md) are written in Chinese.
   Match the language of the file you are editing.

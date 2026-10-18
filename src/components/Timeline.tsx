@@ -122,6 +122,18 @@ interface TimelineProps {
   /** Lane context menu "Copy name": RepoView owns the clipboard write and
    *  the confirmation toast (same channel as the ref-panel chips). */
   onCopyName: (name: string) => void;
+  /** A plain click on EMPTY canvas (nodes/edges stop propagation; a pan
+   *  gesture's trailing click is filtered by movement). The host closes
+   *  the details panel -- the canvas acts as the panel's "outside". */
+  onCanvasClick: () => void;
+  /** Starred (favorited) lane names -- the chip's ★ glyph and the lane
+   *  menu's star/unstar label both derive from this. */
+  starredLanes: Set<string>;
+  /** Lane menu "Star / Unstar" (RepoView owns the persisted set). */
+  onToggleStarLane: (name: string) => void;
+  /** Lane chip hover × / lane menu "Fold": fold the lane into its sediment
+   *  row -- pure display state, instant, session-only. */
+  onFoldLane: (name: string) => void;
 }
 
 const MINIMAP_W = 280;
@@ -181,7 +193,7 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName }: TimelineProps) {
+export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName, onCanvasClick, starredLanes, onToggleStarLane, onFoldLane }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -209,6 +221,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
    *  transform per wheel tick, each firing the behavior's 'end' -- one
    *  localStorage write per burst, not per tick. */
   const viewportSaveTimer = useRef(0);
+  /** Where the current canvas press began, so a pan gesture's trailing
+   *  click event can be told apart from a deliberate empty-canvas click. */
+  const canvasPressRef = useRef<{ x: number; y: number } | null>(null);
 
   // View-local state (options themselves live in the app header)
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
@@ -656,7 +671,8 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       .attr('opacity', 0.3)
       .attr('pointer-events', 'none');
     const traceLabel = (r: TraceRow) =>
-      t(r.kind === 'archived' ? 'archivedLanes' : 'dormantLanes', { n: r.count });
+      t(r.kind === 'hidden' ? 'hiddenLanes'
+        : r.kind === 'archived' ? 'archivedLanes' : 'dormantLanes', { n: r.count });
     g.selectAll('.trace-hit')
       .data(traceRows)
       .enter()
@@ -681,7 +697,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // (SVG-in-scene labels can't do backdrop blur). cull() repositions them on
     // every pan/zoom and thins them at heavy zoom-out.
     const rail = d3.select(laneRailRef.current);
-    rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
+    const chips = rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
       .data(data.branches, (d: BranchLane) => d.name)
       .join('div')
       // Current-branch marker (spec 4.3): the head-lane class adds the dot
@@ -700,13 +716,31 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       .style('color', (d: BranchLane) => d.color)
       .style('border-color', (d: BranchLane) => d.color)
       .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
-      .text((d: BranchLane) => middleEllipsis(d.name))
       .on('click', (_e: MouseEvent, d: BranchLane) => {
         setFocusedLane(prev => (prev === d.name ? null : d.name));
       })
       .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
         event.preventDefault();
         setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
+      });
+    // Chip content: [★][name][×]. The star marks a favorite (persisted),
+    // the × folds the lane into its sediment row (display-only, session
+    // state) -- the two map-model verbs that live on the canvas itself.
+    chips.html('');
+    chips.filter((d: BranchLane) => starredLanes.has(d.name))
+      .append('span')
+      .attr('class', 'lane-chip-star')
+      .text('★');
+    chips.append('span')
+      .attr('class', 'lane-chip-name')
+      .text((d: BranchLane) => middleEllipsis(d.name));
+    chips.append('span')
+      .attr('class', 'lane-chip-fold')
+      .attr('title', t('foldLane'))
+      .text('×')
+      .on('click', (event: MouseEvent, d: BranchLane) => {
+        event.stopPropagation();
+        onFoldLane(d.name);
       });
     // Trace-row chips ride the same rail; datum is BranchLane-shaped so the
     // shared cull() code path (lane_index-keyed) handles them unchanged.
@@ -934,7 +968,10 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         // covers a node and never blocks a merge edge's origin.
         .attr('transform', d => `translate(${d.x}, ${d.lane_index * LANE_HEIGHT - 16})`)
         .style('cursor', 'pointer')
-        .on('click', (_e, d) => {
+        .on('click', (e, d) => {
+          // The chip is a canvas control, not empty space: keep the
+          // container's empty-canvas handler (panel dismissal) out of it.
+          e.stopPropagation();
           setExpandedIds(prev => new Set([...prev, ...d.ids]));
         });
       chips.append('rect')
@@ -1582,7 +1619,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId]);
+  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId, starredLanes, onFoldLane]);
 
   // Full redraw. Small scenes draw synchronously (zero badge, zero flicker).
   // A heavy scene's join blocks the main thread past a frame budget, and a
@@ -1802,10 +1839,28 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   const headPair = laneMenu ? headToLaneTip(data, laneMenu.lane.name) : null;
 
   return (
-    <div ref={containerRef} className="timeline-container" onClick={() => { setLaneMenu(null); setEdgeHighlight(null); }}>
+    <div
+      ref={containerRef}
+      className="timeline-container"
+      onMouseDown={e => { canvasPressRef.current = { x: e.clientX, y: e.clientY }; }}
+      onClick={e => {
+        const press = canvasPressRef.current;
+        canvasPressRef.current = null;
+        // A drag-pan also ends with a click event on this container; only
+        // a nearly stationary press counts as a deliberate empty-canvas
+        // click (4px of slack for shaky hands).
+        if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
+        setLaneMenu(null);
+        setEdgeHighlight(null);
+        onCanvasClick();
+      }}
+    >
       <svg ref={svgRef}></svg>
       <div className="lane-rail-blur"></div>
-      <div ref={laneRailRef} className="lane-rail"></div>
+      {/* Lane chips are canvas controls, not empty space: their clicks must
+          not bubble to the container's empty-canvas handler (which closes
+          the details panel). */}
+      <div ref={laneRailRef} className="lane-rail" onClick={e => e.stopPropagation()}></div>
 
       {(rendering || busyDelayed) && (
         <div className="render-overlay" aria-live="polite" role="status">
@@ -1817,7 +1872,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         </div>
       )}
 
-      <div className="view-toolbar">
+      {/* Same non-empty-space rule as the lane rail: the toolbar's buttons
+          act on the graph, they must not also dismiss the details panel. */}
+      <div className="view-toolbar" onClick={e => e.stopPropagation()}>
         {loadingOlder && (
           <span className="view-btn loading-older">{t('loadingOlder')}</span>
         )}
@@ -1846,6 +1903,18 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
           </button>
           <button onClick={() => { setFocusedLane(f => f === laneMenu.lane.name ? null : laneMenu.lane.name); setLaneMenu(null); }}>
             {focusedLane === laneMenu.lane.name ? t('unfocusLane') : t('focusLane')}
+          </button>
+          {/* Map-model verbs on the lane itself: star = the persisted
+              favorite (feeds the ★ view mode), fold = instant display-level
+              hiding. Tags are not lane-star material (the starred view works
+              over branch lanes). */}
+          {!laneMenu.lane.is_tag && (
+            <button onClick={() => { onToggleStarLane(laneMenu.lane.name); setLaneMenu(null); }}>
+              {starredLanes.has(laneMenu.lane.name) ? t('unpin') : t('pin')}
+            </button>
+          )}
+          <button onClick={() => { onFoldLane(laneMenu.lane.name); setLaneMenu(null); }}>
+            {t('foldLane')}
           </button>
           <button onClick={() => { setExpandedLanes(prev => new Set(prev).add(laneMenu.lane.name)); setLaneMenu(null); }}>
             {t('expandAll')}

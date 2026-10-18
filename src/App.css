@@ -494,7 +494,10 @@
 }
 
 .commit-details {
-  width: 360px;
+  /* Drag-resizable via the .panel-resizer divider; RepoView feeds the
+     value in as a custom property. The old fixed 360px is the fallback. */
+  width: var(--details-w, 360px);
+  min-width: 280px;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   /* Elevation ladder level 1: docked panels float just above the canvas —
@@ -503,6 +506,20 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Divider between the canvas and the narrow details panel: drag to resize
+   (pointer capture in RepoView). Transparent at rest so it reads as the
+   panel's own edge; lights up to invite the drag. */
+.panel-resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.panel-resizer:hover {
+  background: var(--bg-input);
 }
 
 /* Wide split view (DiffSplitView): the panel takes the whole main area
@@ -1285,100 +1302,53 @@
   color: var(--text-dim);
 }
 
-/* Selection status pill: the header's replacement for the old per-lane
-   chip row. Lane identity lives on the canvas labels and per-lane
-   control lives in the ref panel; what the header still owes is the
-   at-a-glance "am I looking at everything?" answer plus a one-click way
-   back to all lanes. Two verbs, one constant-width pill: the count opens
-   the picker, the x resets to the full lane set. Quiet by default --
-   absent entirely while everything is shown. */
-.filter-status {
-  display: inline-flex;
-  align-items: stretch;
-  height: 22px;
+/* Lane manager trigger: a BUTTON (the old filter FIELD read as "type
+   here" when its real job was opening the panel). The label carries the
+   lane count -- N/M while the loaded set is narrowed. margin-left:auto
+   pins it to the row's end, where the old field sat. */
+.lanes-trigger {
+  margin-left: auto;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
   border: 1px solid var(--border);
   border-radius: 999px;
-  overflow: hidden;
-  background: var(--bg-input);
-}
-
-.filter-status-main {
-  border: none;
-  background: transparent;
-  padding: 0 8px;
-  font-size: 11px;
-  color: var(--text-dim);
   cursor: pointer;
   white-space: nowrap;
 }
+.lanes-trigger:hover { color: var(--text); border-color: var(--text-faint); }
+.lanes-trigger.open { background: var(--bg-input); color: var(--text); border-color: var(--text-faint); }
 
-.filter-status-main:hover {
-  color: var(--text);
-}
-
-.filter-status-x {
-  width: 20px;
-  border: none;
-  border-left: 1px solid var(--border);
-  background: transparent;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-faint);
+/* Starred quick bar: one colored dot per favorite (lane colors, so the bar
+   doubles as a legend); +N overflow opens the manager. */
+.star-dots { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.star-dot {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
   cursor: pointer;
+  transition: transform 0.12s;
 }
-
-.filter-status-x:hover {
-  color: var(--text);
-  background: var(--border);
-}
-
-/* Filter combobox at the end of the header's control row: collapsed it
-   is a quiet affordance (ghost pill); the open PANEL expands it and
-   fills it (not focus -- see .filter-field.open), and typing opens the
-   panel under the toolbar. margin-left:auto pins it to the row's end --
-   the empty flex space is spent before the field or the status pill
-   after it ever shifts. */
-.filter-field {
-  margin-left: auto;
-  flex-shrink: 1;
-  min-width: 72px;
-  width: 170px;
-  height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
-  color: var(--text);
+.star-dot:hover { transform: scale(1.25); }
+.star-dot.more {
+  width: auto;
+  min-width: 24px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text-dim);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  transition: width 0.15s ease, background 0.15s, border-color 0.15s;
 }
-
-.filter-field::placeholder {
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Expanded state follows the PANEL's lifecycle, not DOM focus: clicking
-   a chip inside the panel moves focus away, and the field must not
-   collapse then -- the user would come back and lose the input they were
-   typing into. The panel opens on focus and closes via its own paths
-   (close button, backdrop, Esc), so .open is exactly "panel is up".
-   Width is a HARD constraint while open -- width alone is only a
-   preference to a shrinkable flex item and neighboring controls could
-   crush it right back. Capped by container width for narrow windows. */
-.filter-field.open {
-  width: min(240px, 60cqw);
-  flex-shrink: 0;
-  background: var(--bg-input);
-}
-
-.filter-field:focus {
-  outline: none;
-  border-color: var(--accent);
-}
+.star-dot.more:hover { color: var(--text); border-color: var(--text-faint); }
 
 .tooltip {
   position: fixed;
@@ -1509,6 +1479,31 @@
   font-size: 10px;
   color: var(--success);
 }
+/* Chip content is [★][name][×]: the star marks a favorite, the × folds
+   the lane into its sediment row -- the two map-model verbs that live on
+   the canvas. The fold affordance appears on hover only; the chip click
+   itself stays "focus this lane". */
+.lane-chip { display: inline-flex; align-items: center; gap: 4px; }
+.lane-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lane-chip-star { flex-shrink: 0; font-size: 9px; color: #e8a33d; }
+.lane-chip-fold {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-right: -3px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lane-chip:hover .lane-chip-fold { display: inline-flex; }
+.lane-chip-fold:hover { background: var(--bg-input); color: var(--text); }
 
 /* --- view toolbar (top-left overlay, below the sticky time ruler) --- */
 .view-toolbar {
@@ -1773,6 +1768,79 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   color: var(--text);
   border-color: var(--text-faint);
 }
+
+/* Manager search field (inside the panel head; the header trigger is a
+   button and carries no query). */
+.panel-search {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.panel-search:focus { outline: none; border-color: var(--accent); }
+.panel-search::placeholder { color: var(--text-faint); }
+
+/* Manager row: [★][dot][name][solo]. The WHOLE row is the include/exclude
+   hit target; rows never move on toggle (the old FLIP zones are gone), so
+   position stays a stable address for the eye and the keyboard walk. */
+.mgr-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.mgr-row:hover { background: var(--bg-input); color: var(--text); }
+.mgr-row.sel { color: var(--text); }
+.mgr-row.hl { outline: 1px solid var(--text-faint); }
+.mgr-row-star {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mgr-row-star:hover { color: var(--text); }
+.mgr-row-star.on { color: #e8a33d; }
+.mgr-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.mgr-row-solo {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.mgr-row:hover .mgr-row-solo { display: inline-flex; }
+.mgr-row-solo:hover { color: var(--text); }
 .branch-panel-footer {
   padding: 8px 14px;
   border-top: 1px solid var(--border);
@@ -1791,10 +1859,8 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
    list: dead groups can be hundreds of rows (tens of thousands of px),
    and with default flex-shrink the shrink pressure they induce -- which
    they themselves cannot absorb (min-height: auto floors them at their
-   min-content height) -- lands on the zones grid instead, crushing it to
-   its 96px min-height while the zone cells still overflow visibly. The
-   archived group then paints straight through the overflowing chips.
-   Overflow belongs to the scroll container alone. */
+   min-content height) -- would crush the branch rows instead. Overflow
+   belongs to the scroll container alone. */
 .branch-panel-list > * {
   flex-shrink: 0;
 }
@@ -1805,165 +1871,6 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 6px;
-}
-
-/* Two-zone picker: unselected candidates LEFT, curated selection RIGHT
-   (the transfer convention -- moving right joins the selection).
-   Position carries the state, so no per-chip checkbox exists; toggling
-   animates the chip across the divider (JS FLIP, see withFlip in
-   RepoView). Zones stack vertically when the panel gets narrow. */
-.lane-zones {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-height: 96px;
-}
-.lane-zone {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0 12px;
-}
-.lane-zone + .lane-zone {
-  border-left: 1px solid var(--border);
-}
-@container (max-width: 680px) {
-  .lane-zones {
-    grid-template-columns: 1fr;
-  }
-  .lane-zone + .lane-zone {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    margin-top: 8px;
-    padding-top: 8px;
-  }
-}
-.lane-zone-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-  min-height: 20px;
-}
-.lane-zone-title {
-  font-size: 11px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.lane-zone-bulk {
-  margin-left: auto;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.lane-zone-bulk:hover {
-  color: var(--text);
-  background: var(--bg-input);
-}
-.lane-zone-body {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-content: flex-start;
-  /* Keeps the drop target (and the empty hint inside it) reachable even
-     when the zone holds nothing. */
-  min-height: 52px;
-}
-.lane-zone-empty {
-  align-self: center;
-  font-size: 11px;
-  color: var(--text-faint);
-}
-/* Drop feedback: the zone a crossing drag would land in tints. */
-.lane-zone.over {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border-radius: 8px;
-}
-
-/* A chip IS the toggle: click or drag moves it between zones. Hover
-   actions (pin, only-this) live in a reserved trailing slot whose width
-   never changes -- opacity swap only, so neighbors never jitter. */
-.zone-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 4px 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-  max-width: 100%;
-}
-.zone-chip:hover {
-  border-color: var(--text-faint);
-  background: var(--bg-input);
-}
-/* Chips in the right zone sit filled: a glance answers "what's on the
-   canvas" without reading position. */
-.zone-chip.sel {
-  background: var(--bg-input);
-  border-color: var(--text-faint);
-}
-.zone-chip.hl {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
-}
-.zone-chip.dragging {
-  opacity: 0.4;
-}
-.zone-chip-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.zone-chip-pin {
-  flex-shrink: 0;
-  color: var(--text-dim);
-}
-.zone-chip-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.zone-chip-actions {
-  display: inline-flex;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.zone-chip-act {
-  width: 16px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
-}
-.zone-chip:hover .zone-chip-act,
-.zone-chip-act:focus-visible {
-  opacity: 1;
-}
-.zone-chip-act:hover {
-  color: var(--text);
-  background: var(--border);
 }
 
 .branch-panel-rows {
