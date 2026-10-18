@@ -239,10 +239,12 @@ src/
                   refresh coalesces — an event landing mid-refresh sets a
                   pending flag the in-flight refresh's finally replays once
                   (a one-shot change like a branch delete is never dropped),
-                  and it re-applies a narrowed branch selection through
+                  and it re-applies a narrowed include-set through
                   filterByBranches (refresh_repository only knows the full
-                  seed set), so a narrowed include-set survives refreshes
-                  instead of flashing back to all lanes; the background
+                  seed set), UNIONING branches that appeared since the last
+                  refresh — new branches (fetch, colleague push) always join
+                  the view, the include-set never freezes a snapshot; the
+                  background
                   refresh is deliberately SILENT (no UI twin of
                   refreshingRef — it must never light Timeline's render
                   badge) and activation does NOT bump the fit signal (the
@@ -472,11 +474,14 @@ watcher cases); all other automated testing lives in Rust.
 - The frontend persists the open tab list in `localStorage` (key `gtv_tabs`,
   `{ members: [{path, commondir}], active }`); a legacy `gtv_latest_repo`
   single value migrates into a one-member restore, read-once. Per-repo view
-  state uses the same store: branch selection `gtv_branch_sel:<path>`, pins
-  `gtv_branch_pins:<path>`, date scope `gtv_daterange:<path>`, and the
-  timeline camera `gtv_viewport:<path>` (viewpersist.ts). Global (not
-  per-repo) UI prefs: `gtv_details_width` (detailSize.ts) and
-  `gtv_term_height` (terminalSize.ts).
+  state uses the same store: pins `gtv_branch_pins:<path>`, date scope
+  `gtv_daterange:<path>`, and the timeline camera `gtv_viewport:<path>`
+  (viewpersist.ts). The branch include-set is deliberately NOT persisted
+  (the old `gtv_branch_sel` inclusion snapshot locked newer branches out of
+  the view) -- it is session-only, starts full, and a refresh UNIONS
+  branches that appeared meanwhile. Global (not per-repo) UI prefs:
+  `gtv_details_width` (detailSize.ts) and `gtv_term_height`
+  (terminalSize.ts).
 - Language: code comments, README, and this file are English; the design docs in
   `docs/` (roadmap.md, design-v2.md, gmaster-research.md) are written in Chinese.
   Match the language of the file you are editing.

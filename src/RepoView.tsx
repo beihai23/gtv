@@ -16,7 +16,7 @@ import { modeHiddenLanes, ACTIVE_MODE_SIZE } from './laneview';
 import type { LaneViewMode } from './laneview';
 import { applyDateRange, emptyLaneDead, outOfRangeIds } from './daterange';
 import type { DateRange } from './daterange';
-import { saveSelection, loadSelection, restoreSelection, savePinned, loadPinned } from './persist';
+import { savePinned, loadPinned } from './persist';
 import { saveDateRange, loadDateRange } from './viewpersist';
 import { clampDetailsWidth, loadDetailsWidth, saveDetailsWidth } from './detailSize';
 import { pruneRemoteLanes } from './refs';
@@ -611,17 +611,19 @@ export default function RepoView({
         const branches = await getBranchList(repoId);
         if (cancelled) return;
         setBranchList(branches);
+        // Include-set is SESSION-ONLY and starts FULL: every mount shows the
+        // whole repo, so branches that appeared since the last visit (fetch,
+        // colleague push) are simply there. The old persisted inclusion
+        // snapshot restored a frozen branch list and locked every newer
+        // branch out of the view forever (the freshness report).
+        // Day-to-day personalization lives in the stars (persisted) and the
+        // one-click view modes.
         setSelectedBranches(branches.map(b => b.name));
         // Pins: intersect the saved marks with what still exists (a branch
         // deleted since last visit drops silently). Unlike the selection,
         // an empty result is legitimate -- [] is real state, not "absent".
         const avail = new Set(branches.map(b => b.name));
         setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
-        // M2.4: restore this repo's persisted focus set. handleFilterChange
-        // itself sets selectedBranches, so no duplicate set here; null ->
-        // keep the default full selection (no rebuild, no second flash).
-        const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
-        if (restored) handleFilterChange(restored);
       } catch (err) {
         recordFrontendError(errText(err));
         if (!cancelled) setError(errText(err));
@@ -667,11 +669,6 @@ export default function RepoView({
         // Re-prune the pin marks against the rebuilt lane list too.
         const avail = new Set(branches.map(b => b.name));
         setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
-        // M2.4: restore the persisted focus set for this repo path. null ->
-        // keep the default full selection; handleFilterChange sets
-        // selectedBranches itself.
-        const restored = restoreSelection(loadSelection(path), branches.map(b => b.name));
-        if (restored) handleFilterChange(restored);
         setSearchQuery('');
         setLocateQuery('');
         setLocateOpen(false);
@@ -730,10 +727,18 @@ export default function RepoView({
       // related-only) would flash back to all lanes on every refresh.
       // Prune the selection against the fresh branch list first, then
       // re-narrow through filterByBranches when it is a real subset.
+      // The include-set is "what the user removed", NOT a frozen snapshot:
+      // branches that appeared since the last refresh (a fetch brought in
+      // origin/x, a colleague pushed a branch) JOIN the view — leaving
+      // them out made every fetch look like a no-op (the freshness
+      // report). "全部" remains the way back to the complete set.
       const listed = await getBranchList(repoId);
       const listedNames = new Set(listed.map(b => b.name));
       const kept = selectedBranches.filter(n => listedNames.has(n));
-      const selection = kept.length ? kept : listed.map(b => b.name);
+      const added = listed
+        .filter(b => !selectedBranches.includes(b.name))
+        .map(b => b.name);
+      const selection = kept.length ? [...kept, ...added] : listed.map(b => b.name);
       // The remotes toggle hides remote-only lanes at the lane level too:
       // a full local-only selection counts as narrowed, so the refresh
       // goes through the (closure-anchored) filter path.
@@ -1072,16 +1077,9 @@ export default function RepoView({
   // longer needs a per-lane toggle -- the panel's applyZoneToggle is the
   // one selection verb now.)
 
-  // M2.4 focus-set persistence: mirror every selection change into
-  // localStorage under the repo path (click cadence, no debounce needed).
-  // An EMPTY selection is transient session state ("None" scratch state
-  // mid-curation) and is deliberately never written -- without the guard,
-  // that scratch state would overwrite the curated set, and an empty save
-  // restores as null (full default), losing it.
-  useEffect(() => {
-    if (selectedBranches.length === 0) return;
-    saveSelection(path, selectedBranches);
-  }, [path, selectedBranches]);
+  // The include-set is deliberately NOT persisted (the old M2.4 snapshot
+  // locked newer branches out of the view); every mount starts full and a
+  // refresh unions branches that appeared meanwhile. See the mount effect.
 
   // Pin marks persist unconditionally, empty set included (unpinning the
   // last branch is real state; skipping the write would resurrect the old
