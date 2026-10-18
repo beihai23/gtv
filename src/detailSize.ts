@@ -16,10 +16,20 @@ export function clampDetailsWidth(width: number, viewportWidth: number): number 
 }
 
 export function loadDetailsWidth(viewportWidth: number): number {
-  const raw = parseInt(localStorage.getItem(WIDTH_KEY) ?? '', 10);
-  return clampDetailsWidth(Number.isFinite(raw) ? raw : DEFAULT_DETAILS_WIDTH, viewportWidth);
+  // Best-effort like persist.ts: a storage-denied webview throws on
+  // getItem -- a width preference must never crash the render.
+  try {
+    const raw = parseInt(localStorage.getItem(WIDTH_KEY) ?? '', 10);
+    return clampDetailsWidth(Number.isFinite(raw) ? raw : DEFAULT_DETAILS_WIDTH, viewportWidth);
+  } catch {
+    return clampDetailsWidth(DEFAULT_DETAILS_WIDTH, viewportWidth);
+  }
 }
 
 export function saveDetailsWidth(width: number): void {
-  localStorage.setItem(WIDTH_KEY, String(width));
+  try {
+    localStorage.setItem(WIDTH_KEY, String(width));
+  } catch {
+    // Best-effort, never fatal.
+  }
 }
