@@ -592,7 +592,7 @@ export function computeLayout(
         c.x = timeX(c.timestamp);
       } else if (nextKey === null) {
         // After the last key: march right in fixed steps.
-        c.x = prevKey[1] + (k + 1) * MIN_SPACING * 0.4;
+        c.x = prevKey[1] + (k + 1) * MIN_SPACING * 0.7;
       } else {
         const [ta, xa] = prevKey;
         const [tb, xb] = nextKey;

@@ -208,6 +208,12 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   const [laneMenu, setLaneMenu] = useState<LaneMenu | null>(null);
   /** Endpoints of the last plain-clicked edge; drives the highlight rings. */
   const [edgeHighlight, setEdgeHighlight] = useState<{ from: string; to: string } | null>(null);
+  /** Open collapsed-run bubble: the +N chip opens THIS popover (commit list)
+   *  instead of exploding the run into overlapping nodes — expanded runs
+   *  space at ~11px, far under node size, and read as one blob. The bubble
+   *  browses the commits in place; "Expand on canvas" is the explicit,
+   *  opt-in spatial verb inside the popover. */
+  const [runMenu, setRunMenu] = useState<{ x: number; y: number; run: CollapsedRun } | null>(null);
 
   // Render badge: `rendering` covers the heavy full-join redraw (lit BEFORE
   // the blocking draw so the browser gets a frame to paint it); the async
@@ -969,10 +975,11 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         .attr('transform', d => `translate(${d.x}, ${d.lane_index * LANE_HEIGHT - 16})`)
         .style('cursor', 'pointer')
         .on('click', (e, d) => {
-          // The chip is a canvas control, not empty space: keep the
-          // container's empty-canvas handler (panel dismissal) out of it.
+          // The bubble verb: browse the run's commits in a popover. The old
+          // expand-in-place exploded N commits at ~11px spacing (layout's
+          // interpolated cascade) — a blob, not information.
           e.stopPropagation();
-          setExpandedIds(prev => new Set([...prev, ...d.ids]));
+          setRunMenu({ x: e.clientX, y: e.clientY, run: d });
         });
       chips.append('rect')
         .attr('x', -18).attr('y', -9)
@@ -1887,6 +1894,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         // click (4px of slack for shaky hands).
         if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
         setLaneMenu(null);
+        setRunMenu(null);
         setEdgeHighlight(null);
         onCanvasClick();
       }}
@@ -1927,6 +1935,47 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       </div>
 
       <svg ref={minimapRef} className="minimap"></svg>
+
+      {runMenu && (
+        <div
+          className="run-menu"
+          style={{ left: runMenu.x, top: runMenu.y }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="run-menu-head">{t('runCommits', { n: runMenu.run.ids.length })}</div>
+          <div className="run-menu-list">
+            {runMenu.run.ids.map(id => {
+              const c = commitMap.get(id);
+              if (!c) return null;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className="run-menu-row"
+                  title={`${formatTime(c.timestamp)} · ${c.message}`}
+                  onClick={() => { onCommitClick(id); setRunMenu(null); }}
+                >
+                  <span className="run-menu-time">{formatTime(c.timestamp)}</span>
+                  <span className="run-menu-msg">{c.message}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="run-menu-foot">
+            <button
+              type="button"
+              className="view-btn"
+              title={t('runExpandTip')}
+              onClick={() => {
+                setExpandedIds(prev => new Set([...prev, ...runMenu.run.ids]));
+                setRunMenu(null);
+              }}
+            >
+              {t('runExpand')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {laneMenu && (
         <div

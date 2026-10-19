@@ -206,7 +206,9 @@ src/
                   lane-menu "compare with HEAD" item)
   collapse.ts     compressed-view folded segments: collapsedRuns finds each
                   lane's maximal runs of hidden non-key commits (x-sorted) —
-                  one +N chip per run, click expands just that stretch
+                  one +N chip per run; click opens the run's bubble popover
+                  (browse/select commits in place), 'Expand on canvas' in
+                  the popover keeps the spatial expansion
   delaygate.ts    delay-gate state machine for busy indicators (350ms show-up
                   delay + 500ms minimum show, pure step(gate, busy, now));
                   Timeline's useDelayedBusy wraps it with setTimeout
@@ -325,7 +327,13 @@ src/
                                 into per-run +N chips (collapse.ts — one chip per
                                 maximal hidden stretch, centered on the stretch's
                                 x midpoint, hover title carries the count); a chip
-                                click expands just that stretch (expandedIds), the
+                                click opens the run's BUBBLE popover listing the
+                                commits (time + subject, click selects — the run
+                                never explodes by default: interpolated runs
+                                space at 0.7×MIN_SPACING ≈ 20px, under node
+                                size, and read as one blob), 'Expand on canvas'
+                                inside the popover keeps the spatial expansion
+                                (expandedIds), the
                                 lane context/search jump expands whole lanes
                                 (expandedLanes), and the toolbar's Collapse all
                                 clears both granularities; lane chips carry

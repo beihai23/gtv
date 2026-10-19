@@ -574,7 +574,7 @@ pub fn compute_layout(
                 // lane can be non-key): honest time-x, still monotone.
                 (None, _) => time_x(c.timestamp),
                 // After the last key: march right in fixed steps.
-                (Some((_, xa)), None) => xa + (k as f64 + 1.0) * MIN_SPACING * 0.4,
+                (Some((_, xa)), None) => xa + (k as f64 + 1.0) * MIN_SPACING * 0.7,
                 (Some((ta, xa)), Some((tb, xb))) => {
                     let ft = if tb > ta {
                         ((c.timestamp - ta) as f64 / (tb - ta) as f64).clamp(0.05, 0.95)
