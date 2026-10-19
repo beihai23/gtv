@@ -23,8 +23,9 @@ switch the user explicitly confirms (`checkout_branch` — SAFE mode: compatible
 uncommitted changes are carried over, never forced; a merge/cherry-pick/revert
 in progress is refused; a branch already checked out by a sibling worktree of
 the same family is refused up front) and fetching remotes (`fetch_remotes` —
-updates tracking refs (+auto-followed tags) & objects & FETCH_HEAD only,
-never the worktree/local branches/HEAD/stash), which runs in two user-visible
+`git fetch --all --prune`: updates tracking refs (+auto-followed tags) &
+objects & FETCH_HEAD and prunes stale remote-tracking refs, never the
+worktree/local branches/HEAD/stash), which runs in two user-visible
 forms: a background auto-fetch of the active tab every 60 s and the header's
 **Fetch** button (`fetch_repository` — same code path, caller-targeted,
 ungated by the auto_fetch setting). Those two exceptions are the entire write
@@ -91,7 +92,7 @@ src-tauri/src/
                   origin ref survives still
                   shows, clearly marked; the second sanctioned
                   write, auto-fetch, runs the SYSTEM git subprocess
-                  `git -C <path> fetch --all --quiet` (2026-09-18 user
+                  `git -C <path> fetch --all --prune --quiet` (2026-09-18 user
                   decision: credential fidelity + zero native-dep risk;
                   libgit2 stays default-features = off) and returns a
                   one-line failure summary; change_fingerprint powers the
@@ -275,7 +276,11 @@ src/
                   starred section, then branches, then folded/archived/
                   dormant eye groups — the old transfer zones, drag-drop
                   and FLIP are gone), stars live in the gtv_branch_pins
-                  storage under the hood
+                  storage under the hood: lazy-initialized from storage
+                  (an empty-init + async load wiped them on every mount —
+                  the save effect fires first) and pruned against the live
+                  branch list on every change, so a deleted branch leaves
+                  no zombie star behind
   components/Timeline.tsx       the D3 timeline (lanes, edges, badges, minimap,
                                 ruler, gestures) — ~1000 lines, the rendering core.
                                 The zoom handler applies the transform per event
@@ -413,7 +418,7 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 218 cases across 21 files: `src/inactive.test.ts`,
+(`npm test`, 211 cases across 22 files: `src/inactive.test.ts`,
 `src/laneview.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/viewpersist.test.ts`,
@@ -422,7 +427,10 @@ TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`
 `src/filetree.test.ts`, `src/diffparse.test.ts`, `src/delaygate.test.ts`,
 `src/components/minimap.test.ts`, plus the vscode-gtv engine/e2e files —
 `vscode-gtv/src/engine/worktree.test.ts` includes the repo-missing
-watcher cases); all other automated testing lives in Rust.
+watcher cases and `vscode-gtv/src/engine/refresh.test.ts` pins the
+branch-deletion freshness chain (local delete -> poll -> refresh drops the
+lane; fetch prune drops a remote-deleted lane)); all other automated
+testing lives in Rust.
 
 ## Testing strategy
 
@@ -495,7 +503,7 @@ watcher cases); all other automated testing lives in Rust.
   written; `force` appears nowhere in the codebase), it refuses while a
   merge/cherry-pick/revert is in progress, and it refuses a branch already
   checked out by a sibling worktree (git's own occupancy rule, mirrored). The
-  second write is fetching remotes: `git -C <path> fetch --all --quiet` as a
+  second write is fetching remotes: `git -C <path> fetch --all --prune --quiet` as a
   subprocess with the inherited environment — the ONE place gtv shells out to
   `git` (2026-09-18 user decision: the user's credential helpers/ssh-agent/
   proxy apply verbatim, and libgit2's transports would add openssl-sys/
@@ -504,8 +512,12 @@ watcher cases); all other automated testing lives in Rust.
   Fetch button (`fetch_repository`: same `GitReader::fetch_remotes` path,
   targeted at the caller's repo, ungated by the auto_fetch setting or the
   fetcher busy flag, its failure summary shown in a toast). Its write
-  surface is tracking refs (+auto-followed tags) & objects & FETCH_HEAD
-  only; `--prune` is deliberately absent. Outside those two paths,
+  surface is tracking refs (+auto-followed tags) & objects & FETCH_HEAD;
+  `--prune` (2026-10-18 user decision, revising the 2026-09-18
+  minimum-surface call) additionally deletes stale refs/remotes entries so
+  a remote-deleted branch disappears from the graph on the next fetch —
+  worktree/local branches/HEAD/stash are still never touched. Outside
+  those two paths,
   `GitReader` only opens repos and walks history/diffs; there is
   intentionally no other write path. Do not add commands that mutate the
   user's repository — that red line is unchanged and absolute. All other

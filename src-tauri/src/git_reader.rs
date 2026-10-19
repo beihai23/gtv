@@ -518,11 +518,15 @@ impl GitReader {
     /// loop and its Cred::ssh_key_from_agent callback died with the
     /// decision.
     ///
-    /// Write surface: `fetch --all` updates tracking refs
+    /// Write surface: `fetch --all --prune` updates tracking refs
     /// (+auto-followed tags -- git's default tag following) & objects &
     /// FETCH_HEAD ONLY (.git internals; worktree, local branches, HEAD,
     /// stash are never touched -- the second and last item of the write
-    /// whitelist). --prune is deliberately absent (minimum write surface).
+    /// whitelist). --prune (2026-10-18 user decision, revising the
+    /// 2026-09-18 minimum-surface call): a remote-deleted branch must
+    /// disappear from the graph on the next fetch, and without prune its
+    /// stale tracking ref survives forever -- prune deletes exactly those
+    /// stale refs/remotes entries, nothing else.
     ///
     /// Return shape: Ok(None) = clean; Ok(Some(summary)) = the fetch or
     /// its spawn failed (git not on PATH takes the same path) -- exit
@@ -550,7 +554,7 @@ impl GitReader {
         let mut child = match Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args(["fetch", "--all", "--quiet"])
+            .args(["fetch", "--all", "--prune", "--quiet"])
             // Inherited env: credential helpers live in the user's
             // environment and git config.
             .stdout(Stdio::null())

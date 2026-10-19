@@ -52,6 +52,20 @@ fn git_sha(dir: &Path, rev: &str) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
+/// `git_sha` for refs that may not exist (prune assertions): None when git
+/// rev-parse fails, the trimmed oid otherwise.
+fn git_sha_opt(dir: &Path, rev: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", rev])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn git rev-parse");
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(out.stdout).unwrap().trim().to_string())
+}
+
 fn commit(dir: &Path, msg: &str, date: &str) {
     git(dir, &["commit", "--allow-empty", "-m", msg], date);
 }
@@ -601,6 +615,55 @@ fn fetch_remotes_updates_tracking_refs_only() {
     let worktree_after = std::fs::read(clone.join("file.txt")).expect("worktree file");
     assert_eq!(worktree_after, worktree_before);
     assert_eq!(worktree_after, b"v1\n".to_vec());
+
+    std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
+}
+
+#[test]
+fn fetch_prunes_stale_tracking_refs() {
+    let (seed, upstream, clone) = build_fetch_fixture("prune");
+
+    // A second branch pushed upstream and fetched into the clone, so
+    // refs/remotes/origin/feat exists -- then deleted upstream (the GitHub
+    // "delete branch" button's effect). Without --prune the stale tracking
+    // ref survives every fetch and the lane never leaves the graph (the
+    // 2026-10-18 freshness report).
+    git(&seed, &["branch", "feat"], &day(2));
+    git(
+        &seed,
+        &[
+            "push",
+            format!("file://{}", upstream.display()).as_str(),
+            "feat",
+        ],
+        &day(2),
+    );
+    GitReader::new(clone.to_str().unwrap())
+        .expect("open clone")
+        .fetch_remotes()
+        .expect("first fetch brings origin/feat in");
+    assert!(git_sha_opt(&clone, "refs/remotes/origin/feat").is_some());
+
+    git(
+        &seed,
+        &[
+            "push",
+            format!("file://{}", upstream.display()).as_str(),
+            "--delete",
+            "feat",
+        ],
+        &day(2),
+    );
+
+    let summary = GitReader::new(clone.to_str().unwrap())
+        .expect("open clone")
+        .fetch_remotes()
+        .expect("fetch_remotes");
+    assert!(summary.is_none(), "clean prune reports no summary: {:?}", summary);
+    // The stale tracking ref is GONE (write surface: pruning touches only
+    // refs/remotes -- HEAD, local branches and the worktree stay put, which
+    // fetch_remotes_updates_tracking_refs_only already pins).
+    assert!(git_sha_opt(&clone, "refs/remotes/origin/feat").is_none());
 
     std::fs::remove_dir_all(seed.parent().unwrap()).expect("clean up temp dir");
 }

@@ -145,11 +145,15 @@ export default function RepoView({
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
-  // Pinned branches: the durable "branches I care about" marks behind the
-  // 📌 lens. Deliberately SEPARATE from selectedBranches -- the selection
-  // is the current answer, pins are the user's intent, so no selection
-  // edit (lens, panel, chip click) can clobber them.
-  const [pinnedBranches, setPinnedBranches] = useState<string[]>([]);
+  // Starred branches: the durable "branches I care about" marks behind the
+  // ★ view mode. Deliberately SEPARATE from selectedBranches -- the
+  // selection is the current answer, stars are the user's intent, so no
+  // selection edit (panel row, chip click) can clobber them. Persisted per
+  // repo (gtv_branch_pins) and lazy-initialized from storage: the save
+  // effect below fires on mount with whatever the state holds, so an
+  // empty-init + async load would WIPE the stored stars before the load
+  // landed (they vanished on every reopen -- the persistence report).
+  const [pinnedBranches, setPinnedBranches] = useState<string[]>(() => loadPinned(path) ?? []);
   const [showAllTags, setShowAllTags] = useState(false);
   // Combobox keyboard highlight: index into the panel's listed rows while
   // the toolbar filter field drives navigation (↑/↓ move, Enter toggles).
@@ -619,11 +623,8 @@ export default function RepoView({
         // Day-to-day personalization lives in the stars (persisted) and the
         // one-click view modes.
         setSelectedBranches(branches.map(b => b.name));
-        // Pins: intersect the saved marks with what still exists (a branch
-        // deleted since last visit drops silently). Unlike the selection,
-        // an empty result is legitimate -- [] is real state, not "absent".
-        const avail = new Set(branches.map(b => b.name));
-        setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
+        // Stale stars prune against this list via the branchList effect
+        // below (the stars themselves came from lazy storage init).
       } catch (err) {
         recordFrontendError(errText(err));
         if (!cancelled) setError(errText(err));
@@ -666,9 +667,7 @@ export default function RepoView({
         if (cancelled) return;
         setBranchList(branches);
         setSelectedBranches(branches.map(b => b.name));
-        // Re-prune the pin marks against the rebuilt lane list too.
-        const avail = new Set(branches.map(b => b.name));
-        setPinnedBranches((loadPinned(path) ?? []).filter(n => avail.has(n)));
+        // Stale stars prune via the branchList effect below.
         setSearchQuery('');
         setLocateQuery('');
         setLocateOpen(false);
@@ -1087,6 +1086,23 @@ export default function RepoView({
   useEffect(() => {
     savePinned(path, pinnedBranches);
   }, [path, pinnedBranches]);
+
+  // Stale stars drop as branches disappear: prune the pin set against the
+  // live branch list on every change. A deleted branch must not leave a
+  // zombie star in storage -- a same-named branch created later would
+  // resurrect it -- and the manager's ★ section reads the same state. The
+  // save effect above persists the pruned set. The empty-list bail matters:
+  // branchList starts [] and fills asynchronously, and pruning against the
+  // initial empty list would wipe the lazy-loaded stars before the first
+  // real list lands (the same race the lazy init fixed).
+  useEffect(() => {
+    if (branchList.length === 0) return;
+    setPinnedBranches(prev => {
+      const avail = new Set(branchList.map(b => b.name));
+      const next = prev.filter(n => avail.has(n));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [branchList]);
 
   // Date-scope persistence (viewpersist.ts): the remembered window rides
   // with the repo, not the session -- "last week" survives a webview reload

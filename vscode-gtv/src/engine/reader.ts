@@ -681,11 +681,13 @@ export class RepoReader {
     if (r.code !== 0) throw new Error(`Checkout failed${summarizeStderr(r.stderr)}`);
   }
 
-  /** `git fetch --all --quiet`; returns null when clean, else a one-line
-   *  stderr summary. Mirrors fetch_remotes (write surface: tracking refs +
-   *  objects + FETCH_HEAD only). */
+  /** `git fetch --all --prune --quiet`; returns null when clean, else a
+   *  one-line stderr summary. Mirrors fetch_remotes (write surface: tracking
+   *  refs (+auto-followed tags) & objects & FETCH_HEAD only, plus --prune's
+   *  removal of stale remote-tracking refs — a remote-deleted branch must
+   *  disappear from the graph on the next fetch). */
   async fetch(): Promise<string | null> {
-    const r = await gitRaw(this.dir, ['fetch', '--all', '--quiet'], 120000);
+    const r = await gitRaw(this.dir, ['fetch', '--all', '--prune', '--quiet'], 120000);
     if (r.code === 0) return null;
     return `git fetch exited ${r.code}${summarizeStderr(r.stderr)}`;
   }
