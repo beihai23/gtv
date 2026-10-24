@@ -153,6 +153,11 @@ const LABEL_MIN_ROW_H = 28;
  *  zero badge, zero flicker. */
 const HEAVY_SCENE_COMMITS = 2500;
 
+/** How close (scene px) the view's left edge must sit to the oldest loaded
+ *  commit before another history page comes in — one working-zoom viewport
+ *  width. See maybeLoadOlder for why this must not scale with 1/k. */
+const EDGE_PROBE_SCENE_PX = 1600;
+
 /** Lane-chip label cap: longer names keep head and tail with an ellipsis in
  *  the middle (the tail carries the distinguishing part); the chip's title
  *  holds the full name. */
@@ -308,6 +313,10 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   /** A frame-coalesced cull scheduled by the zoom handler; component-level
    *  so draw() can cancel a stale frame before rebuilding the scene. */
   const pendingCullRef = useRef(0);
+  /** True while a draw restores the camera programmatically (viewport reset
+   *  or refresh anchoring): those zoom events must not probe for older
+   *  history — see the zoom handler note. */
+  const restoringCameraRef = useRef(false);
   /** Trailing debounce for camera persistence: wheel-pan programs one zoom
    *  transform per wheel tick, each firing the behavior's 'end' -- one
    *  localStorage write per burst, not per tick. */
@@ -471,11 +480,22 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
 
     // Near the oldest (left) edge of the scene? Page in the next chunk of
     // history. Covers drag-pan, wheel-pan and minimap jumps — all of them
-    // funnel through this zoom handler.
+    // funnel through this zoom handler. The probe margin is a fixed
+    // scene-px budget, NOT the viewport width in scene coordinates: at
+    // overview zoom (width/k spans the whole scene) the old margin made the
+    // condition always-true, so any redraw — a fetch refresh, a view-mode
+    // switch — cascaded page-ins (backend walk + full scene rebuild each)
+    // until has_more ran out, on a resting camera the user never panned
+    // (the fetch -> star -> starred view fan-spin report). At >= 1x zoom
+    // the viewport width is the smaller value and nothing changes; panning
+    // to the actual oldest edge still pages exactly as before, one chunk
+    // per approach — after a page the scene grows ~28k scene-px to the
+    // left, which alone drops the resting camera out of the zone.
     const maybeLoadOlder = (t: d3.ZoomTransform) => {
       if (!hasMore || loadingOlder) return;
       const visibleLeft = -t.x / t.k;
-      if (visibleLeft < sceneBoundsRef.current.minX + width / t.k) {
+      const probe = Math.min(width / t.k, EDGE_PROBE_SCENE_PX);
+      if (visibleLeft < sceneBoundsRef.current.minX + probe) {
         onLoadOlder();
       }
     };
@@ -507,7 +527,14 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         transformRef.current = event.transform;
         g.attr('transform', event.transform.toString());
         scheduleFrame();
-        maybeLoadOlder(event.transform);
+        // Pagination is a USER-navigation behavior (pan / minimap jump /
+        // search jump). The camera-restore transforms at the end of every
+        // draw fire this same event; letting them probe loaded a page of
+        // older history on every fetch refresh and view-mode switch — each
+        // a backend walk plus a full scene rebuild, repeating while the
+        // edge stayed reachable (the fetch -> star -> starred view fan-spin
+        // report). Draw-time restores set restoringCamera below.
+        if (!restoringCameraRef.current) maybeLoadOlder(event.transform);
       })
       .on('end', () => {
         // Remember the camera wherever a gesture (or a programmatic camera
@@ -1783,7 +1810,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
           if (cx >= minX - M && cx <= maxX + M && cy >= minY - M && cy <= maxY + M) t = st;
         }
       }
+      restoringCameraRef.current = true;
       svg.call(zoom.transform, t);
+      restoringCameraRef.current = false;
       transformRef.current = t;
     } else {
       // Data changed without a view reset (older history paged in, or diff
@@ -1811,7 +1840,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
           transformRef.current = t;
         }
       }
+      restoringCameraRef.current = true;
       svg.call(zoom.transform, t);
+      restoringCameraRef.current = false;
     }
     prevDataRef.current = data;
     minimapViewport();
