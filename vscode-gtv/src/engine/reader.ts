@@ -226,12 +226,32 @@ export class RepoReader {
   async walk(seeds: LaneSeed[], hide: ReadonlySet<string>, limit: number): Promise<CommitNode[]> {
     const refs = await this.refMap();
     // Pre-validate tips: one bad tip must not fail the whole walk (Rust
-    // skips unparseable oids; an empty push set falls back to HEAD).
-    const tips: string[] = [];
+    // skips unparseable oids; an empty push set falls back to HEAD). ONE
+    // batched cat-file probe for every walk start — the old per-tip
+    // `rev-parse --verify` spawned one subprocess per seed, ~100 sequential
+    // spawns per walk on a 100-lane repo, re-paid on every open, refresh
+    // and page-in (the "loading older" fan-spin report). cat-file answers
+    // line-per-input and never aborts, where multi-arg rev-parse stops at
+    // the first bad argument.
+    const starts: string[] = [];
     for (const s of seeds) {
       for (const start of [s.tip, ...(s.extra_tips ?? [])]) {
-        const r = await gitRaw(this.dir, ['rev-parse', '--verify', '--quiet', `${start}^{commit}`]);
-        if (r.code === 0) tips.push(start);
+        if (!starts.includes(start)) starts.push(start);
+      }
+    }
+    const tips: string[] = [];
+    if (starts.length > 0) {
+      const r = await gitRaw(
+        this.dir,
+        ['cat-file', '--batch-check'],
+        30000,
+        starts.map(s => `${s}^{commit}`).join('\n') + '\n',
+      );
+      const outLines = r.stdout.split('\n');
+      for (let i = 0; i < starts.length; i++) {
+        // good line: `<oid> commit <size>` · bad line: `<input> missing`
+        const fields = (outLines[i] ?? '').split(' ');
+        if (fields.length >= 3 && /^[0-9a-f]{40}$/.test(fields[0] ?? '')) tips.push(starts[i]);
       }
     }
     const revArgs = tips.length > 0 ? tips : ['HEAD'];
@@ -481,13 +501,46 @@ export class RepoReader {
     return { additions, deletions };
   }
 
-  /** Capped at 150 ids, per the desktop. Mirrors get_commit_stats. */
+  /** Capped at 150 ids, per the desktop. Mirrors get_commit_stats.
+   *  One batched walk for the whole batch: --no-walk lists exactly the
+   *  requested commits, --first-parent diffs merges against parent #1,
+   *  --root covers the root commit — per-id diffVsFirstParent semantics in
+   *  a single subprocess instead of three per id (150 ids spawned 450
+   *  sequential git processes after every page-in; the fan-spin report).
+   *  Anything the batch misses falls back to the per-id path. */
   async commitStats(ids: string[]): Promise<CommitStat[]> {
+    const capped = ids.slice(0, 150);
+    if (capped.length === 0) return [];
+    const byId = new Map<string, { additions: number; deletions: number }>();
+    try {
+      const out = await git(this.dir, [
+        'log', '--no-walk=unsorted', '--first-parent', '--root', '--numstat',
+        '--format=%H', ...capped,
+      ]);
+      let current: string | null = null;
+      for (const line of out.split('\n')) {
+        if (/^[0-9a-f]{40}$/.test(line)) {
+          current = line;
+          if (!byId.has(current)) byId.set(current, { additions: 0, deletions: 0 });
+          continue;
+        }
+        if (!line || !current) continue;
+        const [a, d] = line.split('\t');
+        const e = byId.get(current)!;
+        e.additions += parseInt(a, 10) || 0; // binary files count 0 like the desktop
+        e.deletions += parseInt(d, 10) || 0;
+      }
+    } catch { /* fall through to the per-id path */ }
     const out: CommitStat[] = [];
-    for (const id of ids.slice(0, 150)) {
-      try {
-        const s = await this.diffStats(id);
+    for (const id of capped) {
+      const s = byId.get(id);
+      if (s) {
         out.push({ id, additions: s.additions, deletions: s.deletions });
+        continue;
+      }
+      try {
+        const f = await this.diffStats(id);
+        out.push({ id, additions: f.additions, deletions: f.deletions });
       } catch { /* a stat that fails to resolve is skipped, never fatal */ }
     }
     return out;

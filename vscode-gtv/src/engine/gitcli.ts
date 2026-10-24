@@ -14,17 +14,18 @@ export interface GitResult {
 }
 
 /** Run git without throwing. Callers that treat non-zero as data (rev-parse
- *  probes, checkouts with their own error text) use this directly. */
-export function gitRaw(cwd: string, args: string[], timeoutMs = 30000): Promise<GitResult> {
+ *  probes, checkouts with their own error text) use this directly. `input`
+ *  is written to stdin (batch commands: cat-file --batch-check). */
+export function gitRaw(cwd: string, args: string[], timeoutMs = 30000, input?: string): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', cwd, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       env: process.env,
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout.on('data', (d: Buffer) => out.push(d));
-    child.stderr.on('data', (d: Buffer) => err.push(d));
+    child.stdout!.on('data', (d: Buffer) => out.push(d));
+    child.stderr!.on('data', (d: Buffer) => err.push(d));
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error(`git ${args[0]} timed out after ${timeoutMs}ms`));
@@ -33,6 +34,10 @@ export function gitRaw(cwd: string, args: string[], timeoutMs = 30000): Promise<
       clearTimeout(timer);
       reject(new Error(`git failed to spawn: ${e.message}`));
     });
+    if (input !== undefined) {
+      child.stdin!.on('error', () => { /* EPIPE when git exits early: the result says why */ });
+      child.stdin!.end(input);
+    }
     child.on('close', code => {
       clearTimeout(timer);
       resolve({
