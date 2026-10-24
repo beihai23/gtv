@@ -193,6 +193,91 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
+// --- incremental x-range cull (heavy layers) --------------------------------
+// The per-frame cull used to re-scan every node/edge on each pan/zoom tick;
+// with thousands of scene elements that alone ate the whole 16ms frame
+// budget (the 100-lane report's fan spin). Heavy layers index their
+// elements by x instead: each cull binary-searches the visible window and
+// touches only elements whose display actually changes — offscreen elements
+// that STAY offscreen cost nothing. Zooming fully out spans the whole index
+// and degenerates to the old full pass (minus the redundant style writes).
+interface XCullEntry<E extends Element, D> {
+  el: E;
+  d: D;
+  x0: number;
+  x1: number;
+  vis: (d: D, x0: number, x1: number, y0: number, y1: number) => boolean;
+}
+function makeXCull<E extends SVGElement, D>() {
+  const entries: XCullEntry<E, D>[] = [];
+  let shown = new Uint8Array(0);
+  let shownList: number[] = [];
+  let maxSpan = 0;
+  return {
+    add(el: E, d: D, x0: number, x1: number,
+        vis: (d: D, x0: number, x1: number, y0: number, y1: number) => boolean) {
+      entries.push({ el, d, x0, x1, vis });
+      if (x1 - x0 > maxSpan) maxSpan = x1 - x0;
+    },
+    seal() {
+      entries.sort((a, b) => a.x0 - b.x0);
+      shown = new Uint8Array(entries.length);
+      shownList = [];
+      // Everything starts hidden: elements outside the first culled window
+      // must not linger visible just because no window ever covered them
+      // (the old full pass wrote every element's display; the incremental
+      // one only writes changes). Safe because every draw ends in a zoom
+      // transform whose rAF cull runs before that frame paints.
+      for (const e of entries) e.el.style.display = 'none';
+    },
+    cull(x0: number, x1: number, y0: number, y1: number) {
+      if (entries.length === 0) return;
+      // Window over entries sorted by x0: everything with x0 <= x1, minus
+      // the entries that ended left of the view even at widest span (their
+      // x1 = x0 + span < x0-view bound). Widen the left edge by maxSpan so
+      // long edges crossing the viewport are never dropped.
+      let lo = 0;
+      let hi = entries.length;
+      const leftBound = x0 - maxSpan;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (entries[mid].x0 < leftBound) lo = mid + 1;
+        else hi = mid;
+      }
+      const wLo = lo;
+      hi = entries.length;
+      lo = wLo;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (entries[mid].x0 <= x1) lo = mid + 1;
+        else hi = mid;
+      }
+      const wHi = lo;
+      // Hide entries still displayed from earlier frames that left the
+      // window (a minimap jump can teleport it); keep the rest listed.
+      const kept: number[] = [];
+      for (const i of shownList) {
+        if (i >= wLo && i < wHi) {
+          kept.push(i);
+          continue;
+        }
+        shown[i] = 0;
+        entries[i].el.style.display = 'none';
+      }
+      shownList = kept;
+      for (let i = wLo; i < wHi; i++) {
+        const e = entries[i];
+        const want = e.vis(e.d, x0, x1, y0, y1) ? 1 : 0;
+        if (shown[i] !== want) {
+          shown[i] = want;
+          e.el.style.display = want ? '' : 'none';
+          if (want) shownList.push(i);
+        }
+      }
+    },
+  };
+}
+
 export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName, onCanvasClick, starredLanes, onToggleStarLane, onFoldLane }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -358,7 +443,11 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       updateLaneBand();
     }
 
-    const g = svg.append('g').attr('class', 'timeline-content');
+    // The zoomable scene builds DETACHED and mounts in one insertion below:
+    // appending thousands of elements straight into the live SVG invalidates
+    // style/layout per append, which dominated heavy redraws (the 100-lane /
+    // 5k-commit starred/all switch report). One mount = one recalc.
+    const g = d3.create('svg:g').attr('class', 'timeline-content');
     const dimOthers = (name: string) => focusedLane !== null && focusedLane !== name;
     const laneOpacity = (name: string) => (dimOthers(name) ? 0.12 : 1);
 
@@ -886,11 +975,12 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       });
 
     // Invisible fat strokes on top: edges are 1.3-2.5px thin, so the clickable
-    // area lives on a separate transparent path.
+    // area lives on a separate transparent path. Clicks are handled by the
+    // scene group's DELEGATED handler (see the nodes note):
     //   click       -> highlight both endpoint commits
     //   ctrl/cmd+click -> jump to the parent end
     //   shift+click    -> jump to the child end
-    const edgeHit = g.selectAll('.edge-hit')
+    g.selectAll('.edge-hit')
       .data(visibleEdges)
       .enter()
       .append('path')
@@ -900,19 +990,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       .attr('stroke', 'rgba(0,0,0,0)')
       .attr('stroke-width', 14)
       .style('cursor', 'pointer')
-      .on('click', (event: MouseEvent, d: CommitEdge) => {
-        event.stopPropagation();
-        if (event.ctrlKey || event.metaKey) {
-          const parent = commitMap.get(d.to);
-          if (parent) centerOn(parent.x, parent.y);
-        } else if (event.shiftKey) {
-          const child = commitMap.get(d.from);
-          if (child) centerOn(child.x, child.y);
-        } else {
-          setEdgeHighlight(h => (h && h.from === d.from && h.to === d.to ? null : { from: d.from, to: d.to }));
-        }
-      });
-    edgeHit.append('title')
+      .append('title')
       .text(t('edgeTip'));
 
     // Flow-direction overlay on the clicked edge: round dots marching from
@@ -962,6 +1040,44 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       .text((l: PatchLink) =>
         `${l.kind === 'rebase' ? 'Rebased' : 'Cherry-picked'} copy: ${l.from.slice(0, 7)} ↔ ${l.to.slice(0, 7)}`);
 
+    // x-indices for the remaining heavy layers (see makeXCull). Missing
+    // endpoints (dangling edge datum) stay hidden outright, matching the
+    // old cull's `if (!a || !b) return 'none'`.
+    const edgesCull = makeXCull<SVGPathElement, CommitEdge>();
+    for (const el of g.selectAll<SVGPathElement, CommitEdge>('.edge,.edge-hit').nodes()) {
+      const d = d3.select(el).datum() as CommitEdge;
+      const a = commitMap.get(d.from);
+      const b = commitMap.get(d.to);
+      if (!a || !b) {
+        el.style.display = 'none';
+        continue;
+      }
+      const ex0 = Math.min(a.x, b.x);
+      const ex1 = Math.max(a.x, b.x);
+      const ey0 = Math.min(a.y, b.y);
+      const ey1 = Math.max(a.y, b.y);
+      edgesCull.add(el, d, ex0, ex1,
+        (_d, x0, x1, y0, y1) => ex1 >= x0 && ex0 <= x1 && ey1 >= y0 && ey0 <= y1);
+    }
+    edgesCull.seal();
+    const patchCull = makeXCull<SVGPathElement, PatchLink>();
+    for (const el of g.selectAll<SVGPathElement, PatchLink>('.patch-link').nodes()) {
+      const d = d3.select(el).datum() as PatchLink;
+      const a = commitMap.get(d.from);
+      const b = commitMap.get(d.to);
+      if (!a || !b) {
+        el.style.display = 'none';
+        continue;
+      }
+      const ex0 = Math.min(a.x, b.x);
+      const ex1 = Math.max(a.x, b.x);
+      const ey0 = Math.min(a.y, b.y);
+      const ey1 = Math.max(a.y, b.y);
+      patchCull.add(el, d, ex0, ex1,
+        (_d, x0, x1, y0, y1) => ex1 >= x0 && ex0 <= x1 && ey1 >= y0 && ey0 <= y1);
+    }
+    patchCull.seal();
+
     // --- collapsed-run chips ---------------------------------------------------
     if (compressed) {
       const chips = g.selectAll('.collapse-chip')
@@ -998,52 +1114,57 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     }
 
     // --- nodes -------------------------------------------------------------------
-    const nodes = g.selectAll('.node')
+    // One flat circle per commit positioned by cx/cy — no <g> wrapper (the
+    // wrapper doubled the element count of the dominant layer; rings carry
+    // absolute coordinates instead). Node verbs (click / hover tooltip) are
+    // DELEGATED to the scene group below: ~4 listeners × N commits of
+    // addEventListener calls dominated heavy redraws.
+    g.selectAll('.node')
       .data(visibleCommits)
       .enter()
-      .append('g')
+      .append('circle')
       .attr('class', 'node')
-      .attr('transform', (d: CommitNode) => `translate(${d.x}, ${d.y})`)
-      .attr('opacity', (d: CommitNode) => laneOpacity(d.lane_owner))
-      .style('cursor', 'pointer')
-      .on('click', (event: MouseEvent, d: CommitNode) => {
-        event.stopPropagation();
-        // Modifier split mirrors the edge-click precedent above: ctrl/cmd
-        // feeds the compare pairer, a plain click stays a selection.
-        if (event.ctrlKey || event.metaKey) onCompareClick(d.id);
-        else onCommitClick(d.id);
-      })
-      .on('mouseenter', (event: MouseEvent, d: CommitNode) => {
-        setHoveredCommit(d);
-        setTooltipPos({ x: event.clientX, y: event.clientY });
-      })
-      .on('mousemove', (event: MouseEvent) => {
-        setTooltipPos({ x: event.clientX, y: event.clientY });
-      })
-      .on('mouseleave', () => setHoveredCommit(null));
-
-    nodes.append('circle')
+      .attr('cx', (d: CommitNode) => d.x)
+      .attr('cy', (d: CommitNode) => d.y)
       .attr('r', nodeRadius)
-      .attr('fill', (d: CommitNode) => ownerColor(d.lane_owner));
+      .attr('fill', (d: CommitNode) => ownerColor(d.lane_owner))
+      .attr('opacity', (d: CommitNode) => laneOpacity(d.lane_owner))
+      .style('cursor', 'pointer');
+
+    // Rings and markers around individual commits. They sit OUTSIDE the
+    // node circles now, so each carries absolute coordinates, its datum
+    // (the cull hides it with the node), and pointer-events: none (hits
+    // fall through to the node / edge underneath, as the old nesting did).
+    const ring = (d: CommitNode) =>
+      g.append('circle')
+        .attr('class', 'node-ring')
+        .attr('cx', d.x).attr('cy', d.y)
+        .attr('fill', 'none')
+        .attr('opacity', laneOpacity(d.lane_owner))
+        .attr('pointer-events', 'none')
+        .datum(d);
+    const markText = (d: CommitNode) =>
+      g.append('text')
+        .attr('class', 'node-ring')
+        .attr('x', d.x).attr('y', d.y - nodeRadius(d) - 10)
+        .attr('font-size', '10px')
+        .attr('font-weight', 'bold')
+        .attr('text-anchor', 'middle')
+        .attr('opacity', laneOpacity(d.lane_owner))
+        .attr('pointer-events', 'none')
+        .datum(d);
 
     // Selection halo: a crisp accent ring over a soft wide glow. The accent
     // contrasts with the canvas in every theme (a plain white stroke was
     // invisible on light themes and washed out on pale lane colors).
     const accent = cssVar('--accent', '#e94560');
-    const selectedNodes = nodes.filter((d: CommitNode) => d.id === selectedCommitId);
-    selectedNodes.append('circle')
-      .attr('r', (d: CommitNode) => nodeRadius(d) + 8)
-      .attr('fill', 'none')
-      .attr('stroke', accent)
-      .attr('stroke-opacity', 0.3)
-      .attr('stroke-width', 6)
-      .attr('pointer-events', 'none');
-    selectedNodes.append('circle')
-      .attr('r', (d: CommitNode) => nodeRadius(d) + 4)
-      .attr('fill', 'none')
-      .attr('stroke', accent)
-      .attr('stroke-width', 2.5)
-      .attr('pointer-events', 'none');
+    for (const d of visibleCommits) {
+      if (d.id !== selectedCommitId) continue;
+      ring(d).attr('r', nodeRadius(d) + 8)
+        .attr('stroke', accent).attr('stroke-opacity', 0.3).attr('stroke-width', 6);
+      ring(d).attr('r', nodeRadius(d) + 4)
+        .attr('stroke', accent).attr('stroke-width', 2.5);
+    }
 
     // Pending-compare ring (spec 4.4): ONLY while pairing is incomplete
     // (compareBaseId is non-null exactly then) the waiting base gets a
@@ -1054,48 +1175,93 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // --compare-ring, dashed, thinner, and one step wider (r+11/r+7).
     if (compareBaseId) {
       const pending = cssVar('--compare-ring', '#b388ff');
-      const baseNodes = nodes.filter((d: CommitNode) => d.id === compareBaseId);
-      baseNodes.append('circle')
-        .attr('r', (d: CommitNode) => nodeRadius(d) + 11)
-        .attr('fill', 'none')
-        .attr('stroke', pending)
-        .attr('stroke-opacity', 0.25)
-        .attr('stroke-width', 5)
-        .attr('pointer-events', 'none');
-      baseNodes.append('circle')
-        .attr('r', (d: CommitNode) => nodeRadius(d) + 7)
-        .attr('fill', 'none')
-        .attr('stroke', pending)
-        .attr('stroke-width', 1.5)
-        .attr('stroke-dasharray', '4,3')
-        .attr('pointer-events', 'none');
+      for (const d of visibleCommits) {
+        if (d.id !== compareBaseId) continue;
+        ring(d).attr('r', nodeRadius(d) + 11)
+          .attr('stroke', pending).attr('stroke-opacity', 0.25).attr('stroke-width', 5);
+        ring(d).attr('r', nodeRadius(d) + 7)
+          .attr('stroke', pending).attr('stroke-width', 1.5).attr('stroke-dasharray', '4,3');
+      }
     }
 
-    const headNodes = nodes.filter((d: CommitNode) => d.is_head);
-    headNodes.append('circle')
-      .attr('r', (d: CommitNode) => nodeRadius(d) + 5)
-      .attr('fill', 'none')
-      .attr('stroke', cssVar('--success', '#4CAF50'))
-      .attr('stroke-width', 2);
-    headNodes.append('text')
-      .attr('y', (d: CommitNode) => -nodeRadius(d) - 10)
-      .attr('font-size', '10px')
-      .attr('font-weight', 'bold')
-      .attr('fill', cssVar('--success', '#4CAF50'))
-      .attr('text-anchor', 'middle')
-      .text('HEAD');
+    for (const d of visibleCommits) {
+      if (!d.is_head) continue;
+      ring(d).attr('r', nodeRadius(d) + 5)
+        .attr('stroke', cssVar('--success', '#4CAF50')).attr('stroke-width', 2);
+      markText(d).attr('fill', cssVar('--success', '#4CAF50')).text('HEAD');
+    }
 
     // edge-click highlight: amber rings around the two endpoint commits
     if (edgeHighlight) {
-      nodes
-        .filter((d: CommitNode) => d.id === edgeHighlight!.from || d.id === edgeHighlight!.to)
-        .append('circle')
-        .attr('r', (d: CommitNode) => nodeRadius(d) + 6)
-        .attr('fill', 'none')
-        .attr('stroke', cssVar('--edge-hot', '#FFD166'))
-        .attr('stroke-width', 2.5)
-        .attr('pointer-events', 'none');
+      for (const d of visibleCommits) {
+        if (d.id !== edgeHighlight.from && d.id !== edgeHighlight.to) continue;
+        ring(d).attr('r', nodeRadius(d) + 6)
+          .attr('stroke', cssVar('--edge-hot', '#FFD166')).attr('stroke-width', 2.5);
+      }
     }
+
+    // x-index for the per-frame cull (see makeXCull): one entry per node
+    // circle and ring, keyed on the commit's position.
+    const nodesCull = makeXCull<SVGCircleElement | SVGTextElement, CommitNode>();
+    for (const el of g.selectAll<SVGCircleElement | SVGTextElement, CommitNode>('.node,.node-ring').nodes()) {
+      const d = d3.select(el).datum() as CommitNode;
+      nodesCull.add(el, d, d.x, d.x, (n, x0, x1, y0, y1) => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1);
+    }
+    nodesCull.seal();
+
+    // Delegated node + edge-hit verbs (see the nodes note above). The scene
+    // group carries ONE listener set; each event classifies its target via
+    // closest() — the topmost element under the pointer keeps deciding, so
+    // a click landing on both a node and the fat edge-hit stroke below it
+    // still reads as the node (nodes render above edge-hits, as before).
+    // stopPropagation when a target matches keeps the container's
+    // empty-canvas handler out, exactly like the old per-element handlers.
+    const datumOf = (el: Element) => d3.select(el).datum() as CommitNode | CommitEdge;
+    let hoveredNodeEl: Element | null = null;
+    g.on('click', (event: MouseEvent) => {
+      const target = event.target as Element;
+      const nodeEl = target.closest('.node');
+      if (nodeEl) {
+        event.stopPropagation();
+        const d = datumOf(nodeEl) as CommitNode;
+        // Modifier split mirrors the edge-click precedent: ctrl/cmd
+        // feeds the compare pairer, a plain click stays a selection.
+        if (event.ctrlKey || event.metaKey) onCompareClick(d.id);
+        else onCommitClick(d.id);
+        return;
+      }
+      const hitEl = target.closest('.edge-hit');
+      if (hitEl) {
+        event.stopPropagation();
+        const d = datumOf(hitEl) as CommitEdge;
+        if (event.ctrlKey || event.metaKey) {
+          const parent = commitMap.get(d.to);
+          if (parent) centerOn(parent.x, parent.y);
+        } else if (event.shiftKey) {
+          const child = commitMap.get(d.from);
+          if (child) centerOn(child.x, child.y);
+        } else {
+          setEdgeHighlight(h => (h && h.from === d.from && h.to === d.to ? null : { from: d.from, to: d.to }));
+        }
+      }
+    });
+    g.on('pointerover', (event: PointerEvent) => {
+      const el = (event.target as Element).closest('.node');
+      if (!el || el === hoveredNodeEl) return;
+      hoveredNodeEl = el;
+      setHoveredCommit(datumOf(el) as CommitNode);
+      setTooltipPos({ x: event.clientX, y: event.clientY });
+    });
+    g.on('pointermove', (event: PointerEvent) => {
+      if (hoveredNodeEl) setTooltipPos({ x: event.clientX, y: event.clientY });
+    });
+    g.on('pointerout', (event: PointerEvent) => {
+      if (!hoveredNodeEl) return;
+      const related = event.relatedTarget as Element | null;
+      if (related && hoveredNodeEl.contains(related)) return;
+      hoveredNodeEl = null;
+      setHoveredCommit(null);
+    });
 
     // NOTE: no SVG <title> on nodes — the custom HTML tooltip below covers
     // hover; a native title would show up as a second, redundant popup.
@@ -1393,8 +1559,11 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       const rowH = LANE_HEIGHT * t.k;
       const labelsMuted = rowH < LABEL_MIN_ROW_H;
 
-      g.selectAll<SVGGElement, CommitNode>('.node')
-        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
+      // Heavy layers through the x-index (makeXCull): touch only what
+      // changes, not the whole scene.
+      nodesCull.cull(x0, x1, y0, y1);
+      edgesCull.cull(x0, x1, y0, y1);
+      patchCull.cull(x0, x1, y0, y1);
       g.selectAll<SVGGElement, BadgeSpec>('.ref-badges')
         .style('display', d => {
           if (!inView(d.c.x, d.c.y)) return 'none';
@@ -1409,32 +1578,6 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       // the only evidence of the merge) — cull by view, never mute.
       g.selectAll<SVGGElement, CommitNode>('.merge-badge')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
-      // Cull by bounding box, not endpoints: a fork polyline's long vertical
-      // run (or a merge curve's midsection) can cross the viewport while both
-      // endpoint nodes are offscreen — endpoint testing made such edges
-      // vanish when zooming in.
-      g.selectAll<SVGPathElement, CommitEdge>('.edge,.edge-hit')
-        .style('display', d => {
-          const a = commitMap.get(d.from);
-          const b = commitMap.get(d.to);
-          if (!a || !b) return 'none';
-          const minX = Math.min(a.x, b.x);
-          const maxX = Math.max(a.x, b.x);
-          const minY = Math.min(a.y, b.y);
-          const maxY = Math.max(a.y, b.y);
-          return maxX >= x0 && minX <= x1 && maxY >= y0 && minY <= y1 ? null : 'none';
-        });
-      g.selectAll<SVGPathElement, PatchLink>('.patch-link')
-        .style('display', d => {
-          const a = commitMap.get(d.from);
-          const b = commitMap.get(d.to);
-          if (!a || !b) return 'none';
-          const minX = Math.min(a.x, b.x);
-          const maxX = Math.max(a.x, b.x);
-          const minY = Math.min(a.y, b.y);
-          const maxY = Math.max(a.y, b.y);
-          return maxX >= x0 && minX <= x1 && maxY >= y0 && minY <= y1 ? null : 'none';
-        });
       g.selectAll<SVGLineElement, TimeGap>('.gap-break')
         .style('display', d => {
           const x = (d.x_start + d.x_end) / 2;
@@ -1518,15 +1661,20 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
           .attr('stroke-width', 2)
           .attr('opacity', 0.35);
       }
+      // Key-commit dots: one batched innerHTML parse instead of one
+      // append per commit — the minimap redraws with every scene, and a
+      // large repo puts thousands of dots here.
+      const dots: string[] = [];
       for (const c of data.commits) {
         if (!c.is_key || hiddenIds.has(c.id)) continue;
-        mm.append('circle')
-          .attr('cx', mx(c.x)).attr('cy', my(c.y))
-          .attr('r', 1.8)
-          // Lane-colored like the main graph; hardcoded white vanished on
-          // light themes, --text turned into a black blob.
-          .attr('fill', ownerColor(c.lane_owner))
-          .attr('opacity', 0.85);
+        // Lane-colored like the main graph; hardcoded white vanished on
+        // light themes, --text turned into a black blob.
+        dots.push(`<circle cx="${mx(c.x)}" cy="${my(c.y)}" r="1.8" fill="${ownerColor(c.lane_owner)}" opacity="0.85"/>`);
+      }
+      if (dots.length > 0) {
+        const dotG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        dotG.innerHTML = dots.join('');
+        mm.node()!.appendChild(dotG);
       }
 
       // time anchors: oldest ↔ newest month
@@ -1594,6 +1742,11 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       });
       mm.on('click', (event: MouseEvent) => event.stopPropagation());
     }
+
+    // Mount the fully-built scene in one insertion (see the detached build
+    // note at the top): everything below only wires camera/state, never
+    // scene elements.
+    svg.node()!.appendChild(g.node()!);
 
     // --- viewport: reset only when a repo was (re)opened ------------------------------
     const initialDraw = resetKeyRef.current === -1;
@@ -1705,6 +1858,15 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     };
   }, [draw]);
 
+  // Latest draw for the size observer below. The observer itself must live
+  // for the component's lifetime: keying the observe() on draw identity
+  // (the previous shape) re-fired an initial observation after every redraw
+  // trigger — a mode switch, refresh or page-in each rebuilt the whole
+  // scene a SECOND time (the second long task of the 100-lane starred/all
+  // switch report).
+  const drawRef = useRef<() => void>(() => {});
+  useEffect(() => { drawRef.current = draw; }, [draw]);
+
   // Container-size redraws: the window resize listener only covers resizes
   // that change the WINDOW -- panel toggles and flex re-layouts resize the
   // container silently, and during a macOS live window drag WebKit reports
@@ -1718,10 +1880,19 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   useEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => draw());
+    // observe() always delivers one initial entry; the draw effect already
+    // drew with real dimensions, so swallow exactly that first delivery.
+    let delivered = false;
+    const ro = new ResizeObserver(() => {
+      if (!delivered) {
+        delivered = true;
+        return;
+      }
+      drawRef.current();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [draw]);
+  }, []);
 
   // Unmount-only: cancel a pending debounced camera save (the draw effect's
   // cleanup must NOT do this -- a redraw landing inside the debounce window

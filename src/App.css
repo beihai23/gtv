@@ -485,12 +485,17 @@
   height: 100%;
 }
 
-.timeline-container .node circle {
+/* Nodes are flat circles (one element per commit, no <g> wrapper), so the
+   hover scale must resolve around the circle's own box, not the SVG origin
+   (transform-box: fill-box + center origin = the old g-relative scale). */
+.timeline-container .node {
   transition: transform 0.15s;
 }
 
-.timeline-container .node:hover circle {
+.timeline-container .node:hover {
   transform: scale(1.3);
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .commit-details {

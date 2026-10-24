@@ -162,8 +162,8 @@ describe('vscode extension full stack (no VS Code)', () => {
 
   it('boots into the timeline for the restored repo', async () => {
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('g.node', { state: 'attached', timeout: 20000 });
-    const nodes = await page.locator('g.node').count();
+    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
+    const nodes = await page.locator('.node').count();
     expect(nodes).toBeGreaterThan(0);
     const chips = await page.evaluate(() =>
       [...document.querySelectorAll('div.lane-chip')].map(c => c.textContent?.trim()));
@@ -179,11 +179,11 @@ describe('vscode extension full stack (no VS Code)', () => {
 
   it('commit details + file diff + watcher event all flow over the bridge', async () => {
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('g.node', { state: 'attached', timeout: 20000 });
+    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
     await page.waitForTimeout(1000);
     // select a commit → details panel
     await page.evaluate(() => {
-      const g = [...document.querySelectorAll('g.node')][1];
+      const g = [...document.querySelectorAll('.node')][1];
       g.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
     await page.waitForSelector('.commit-details', { timeout: 10000 });
@@ -226,7 +226,7 @@ describe('vscode extension full stack (no VS Code)', () => {
     // canonical form.
     const wtDir = fs.realpathSync(`${repoDir}-wt`);
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('g.node', { state: 'attached', timeout: 20000 });
+    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
     // The worktree add moved refs; give the family refresh a beat, then
     // switch member through the worktree menu.
     await page.locator('.member-menu-btn').waitFor({ timeout: 10000 });

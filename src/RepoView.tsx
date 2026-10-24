@@ -443,6 +443,26 @@ export default function RepoView({
     }
     return m;
   }, [modeDead, inactive, rangeEmpty, viewMode]);
+  // Runtime diagnostic for view-narrowing reports (readable in the webview
+  // console: Help > Toggle Developer Tools): one line per mode/star/branch
+  // change. The state combination is exactly what the "starred view still
+  // shows everything" class of reports needs to be actionable.
+  const excludedCount = useMemo(() => {
+    let n = 0;
+    for (const kind of modeDead.values()) if (kind === 'excluded') n++;
+    return n;
+  }, [modeDead]);
+  useEffect(() => {
+    let excluded = 0;
+    for (const kind of modeDead.values()) if (kind === 'excluded') excluded++;
+    console.debug(
+      '[gtv] view', viewMode,
+      `stars=${pinnedBranches.length}`,
+      `lanes=${branchList.length}`,
+      `excluded=${excluded}`,
+      `stars=[${pinnedBranches.join(',')}]`,
+    );
+  }, [viewMode, modeDead, pinnedBranches, branchList]);
   // Sibling members' checkouts (branch -> member name), current member
   // excluded: Timeline badges those lanes with a house marker. Memoized
   // for identity -- it sits in Timeline's draw-effect deps.
@@ -547,6 +567,12 @@ export default function RepoView({
     if (ids.length === 0) return;
     getCommitStats(repoId, ids)
       .then(stats => {
+        // An empty response (nothing new since the last merge) must not
+        // clone the whole commit array: a fresh gitData object re-runs the
+        // entire display pipeline AND a full scene redraw for no visual
+        // change — this landed right after every fetch-triggered refresh,
+        // doubling its rebuild.
+        if (stats.length === 0) return;
         const byId = new Map(stats.map(s => [s.id, s]));
         setGitData(prev => prev && ({
           ...prev,
@@ -2248,6 +2274,7 @@ export default function RepoView({
                 )}
               </div>
               <div className="branch-panel-footer">
+                {viewMode !== 'all' && <>{t('modeDiag', { n: excludedCount })} · </>}
                 {t('lanesOnCanvas', { n: selectedActiveCount })} · {t('panelFooter')}
               </div>
             </div>
