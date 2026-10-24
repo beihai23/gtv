@@ -426,8 +426,8 @@ cargo run --example dump_json -- /path/to/repo > public/mock-data.json
 There is no CI, no linter config, and no formatter config beyond the defaults.
 TypeScript is the gate on the frontend (`npm run build` runs `tsc` with `strict`,
 `noUnusedLocals`, `noUnusedParameters`). Frontend pure-function tests use vitest
-(`npm test`, 211 cases across 22 files: `src/inactive.test.ts`,
-`src/laneview.test.ts`,
+(`npm test`, 213 cases across 23 files: `src/inactive.test.ts`,
+`src/laneview.test.ts`, `src/laneview.pipeline.test.ts`,
 `src/locate.test.ts`, `src/related.test.ts`, `src/daterange.test.ts`,
 `src/refs.test.ts`, `src/persist.test.ts`, `src/viewpersist.test.ts`,
 `src/terminalSize.test.ts`, `src/detailSize.test.ts`,
