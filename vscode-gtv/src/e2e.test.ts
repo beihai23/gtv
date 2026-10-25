@@ -162,9 +162,13 @@ describe('vscode extension full stack (no VS Code)', () => {
 
   it('boots into the timeline for the restored repo', async () => {
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
-    const nodes = await page.locator('.node').count();
-    expect(nodes).toBeGreaterThan(0);
+    // The graph paints on a CANVAS (no .node DOM); the draw exposes a test
+    // seam with the visible commit count instead.
+    await page.waitForFunction(
+      () => (window as unknown as { __GTV_CANVAS__?: { commitCount: number } }).__GTV_CANVAS__?.commitCount !== undefined
+        && (window as unknown as { __GTV_CANVAS__: { commitCount: number } }).__GTV_CANVAS__.commitCount > 0,
+      { timeout: 20000 },
+    );
     const chips = await page.evaluate(() =>
       [...document.querySelectorAll('div.lane-chip')].map(c => c.textContent?.trim()));
     expect(chips.join(' ')).toContain('main');
@@ -179,12 +183,25 @@ describe('vscode extension full stack (no VS Code)', () => {
 
   it('commit details + file diff + watcher event all flow over the bridge', async () => {
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
+    await page.waitForFunction(
+      () => (window as unknown as { __GTV_CANVAS__?: { commitCount: number } }).__GTV_CANVAS__?.commitCount !== undefined
+        && (window as unknown as { __GTV_CANVAS__: { commitCount: number } }).__GTV_CANVAS__.commitCount > 0,
+      { timeout: 20000 },
+    );
     await page.waitForTimeout(1000);
-    // select a commit → details panel
+    // select a commit → details panel (click the canvas at the commit's
+    // client position, through the seam the draw exposes — toScreen already
+    // includes the camera transform, so the coords are viewport-ready)
     await page.evaluate(() => {
-      const g = [...document.querySelectorAll('.node')][1];
-      g.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      const seam = (window as unknown as {
+        __GTV_CANVAS__: { ids: string[]; toScreen: (id: string) => { x: number; y: number } | null };
+      }).__GTV_CANVAS__;
+      const id = seam.ids[1] ?? seam.ids[0];
+      const p = seam.toScreen(id)!;
+      const canvas = document.querySelector('canvas.timeline-canvas')!;
+      canvas.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: p.x, clientY: p.y,
+      }));
     });
     await page.waitForSelector('.commit-details', { timeout: 10000 });
     const hasFiles = await page.locator('.file-row').count();
@@ -226,7 +243,11 @@ describe('vscode extension full stack (no VS Code)', () => {
     // canonical form.
     const wtDir = fs.realpathSync(`${repoDir}-wt`);
     await page.goto(`http://127.0.0.1:${server.port}/index.html`);
-    await page.waitForSelector('.node', { state: 'attached', timeout: 20000 });
+    await page.waitForFunction(
+      () => (window as unknown as { __GTV_CANVAS__?: { commitCount: number } }).__GTV_CANVAS__?.commitCount !== undefined
+        && (window as unknown as { __GTV_CANVAS__: { commitCount: number } }).__GTV_CANVAS__.commitCount > 0,
+      { timeout: 20000 },
+    );
     // The worktree add moved refs; give the family refresh a beat, then
     // switch member through the worktree menu.
     await page.locator('.member-menu-btn').waitFor({ timeout: 10000 });

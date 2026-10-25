@@ -147,12 +147,6 @@ const UNATTRIBUTED_COLOR = '#9E9E9E';
  *  pills and fork/merge annotations mute entirely; HEAD and tag pills stay. */
 const LABEL_MIN_ROW_H = 28;
 
-/** Above this many visible commits the full join redraw reliably blocks the
- *  main thread past ~300ms on ordinary hardware — long enough to be felt and
- *  worth pre-lighting the render badge. Smaller scenes redraw synchronously:
- *  zero badge, zero flicker. */
-const HEAVY_SCENE_COMMITS = 2500;
-
 /** How close (scene px) the view's left edge must sit to the oldest loaded
  *  commit before another history page comes in — one working-zoom viewport
  *  width. See maybeLoadOlder for why this must not scale with 1/k. */
@@ -198,94 +192,101 @@ function nodeRadius(c: CommitNode): number {
   return 7 + Math.min(7, Math.sqrt(volume) / 2.5);
 }
 
-// --- incremental x-range cull (heavy layers) --------------------------------
-// The per-frame cull used to re-scan every node/edge on each pan/zoom tick;
-// with thousands of scene elements that alone ate the whole 16ms frame
-// budget (the 100-lane report's fan spin). Heavy layers index their
-// elements by x instead: each cull binary-searches the visible window and
-// touches only elements whose display actually changes — offscreen elements
-// that STAY offscreen cost nothing. Zooming fully out spans the whole index
-// and degenerates to the old full pass (minus the redundant style writes).
-interface XCullEntry<E extends Element, D> {
-  el: E;
-  d: D;
+// --- the canvas scene model ---------------------------------------------------
+// The heavy graph layers (HEAD band, gap breaks, lane lines/bars, trace bars,
+// patch links, edges, nodes, rings) render as immediate-mode Canvas 2D: the
+// DOM/SVG retained-mode pipeline charged a full style/layout/paint pass per
+// rebuild for ~13k elements (the 100-lane switch report), while a canvas
+// repaint of the same primitives costs ~10ms. The SVG overlay above the
+// canvas keeps only what wants DOM semantics: text (pills, annotations, the
+// HEAD label) and the few interactive widgets (trace rows, +N chips).
+interface EdgeEntry {
+  p: Path2D;
+  d: string;
+  type: CommitEdge['edge_type'];
+  from: string;
+  to: string;
+  color: string;
+  width: number;
+  opacity: number;
   x0: number;
   x1: number;
-  vis: (d: D, x0: number, x1: number, y0: number, y1: number) => boolean;
+  y0: number;
+  y1: number;
 }
-function makeXCull<E extends SVGElement, D>() {
-  const entries: XCullEntry<E, D>[] = [];
-  let shown = new Uint8Array(0);
-  let shownList: number[] = [];
-  let maxSpan = 0;
-  return {
-    add(el: E, d: D, x0: number, x1: number,
-        vis: (d: D, x0: number, x1: number, y0: number, y1: number) => boolean) {
-      entries.push({ el, d, x0, x1, vis });
-      if (x1 - x0 > maxSpan) maxSpan = x1 - x0;
-    },
-    seal() {
-      entries.sort((a, b) => a.x0 - b.x0);
-      shown = new Uint8Array(entries.length);
-      shownList = [];
-      // Everything starts hidden: elements outside the first culled window
-      // must not linger visible just because no window ever covered them
-      // (the old full pass wrote every element's display; the incremental
-      // one only writes changes). Safe because every draw ends in a zoom
-      // transform whose rAF cull runs before that frame paints.
-      for (const e of entries) e.el.style.display = 'none';
-    },
-    cull(x0: number, x1: number, y0: number, y1: number) {
-      if (entries.length === 0) return;
-      // Window over entries sorted by x0: everything with x0 <= x1, minus
-      // the entries that ended left of the view even at widest span (their
-      // x1 = x0 + span < x0-view bound). Widen the left edge by maxSpan so
-      // long edges crossing the viewport are never dropped.
-      let lo = 0;
-      let hi = entries.length;
-      const leftBound = x0 - maxSpan;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (entries[mid].x0 < leftBound) lo = mid + 1;
-        else hi = mid;
-      }
-      const wLo = lo;
-      hi = entries.length;
-      lo = wLo;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (entries[mid].x0 <= x1) lo = mid + 1;
-        else hi = mid;
-      }
-      const wHi = lo;
-      // Hide entries still displayed from earlier frames that left the
-      // window (a minimap jump can teleport it); keep the rest listed.
-      const kept: number[] = [];
-      for (const i of shownList) {
-        if (i >= wLo && i < wHi) {
-          kept.push(i);
-          continue;
-        }
-        shown[i] = 0;
-        entries[i].el.style.display = 'none';
-      }
-      shownList = kept;
-      for (let i = wLo; i < wHi; i++) {
-        const e = entries[i];
-        const want = e.vis(e.d, x0, x1, y0, y1) ? 1 : 0;
-        if (shown[i] !== want) {
-          shown[i] = want;
-          e.el.style.display = want ? '' : 'none';
-          if (want) shownList.push(i);
-        }
-      }
-    },
-  };
+interface NodeEntry {
+  c: CommitNode;
+  x: number;
+  y: number;
+  r: number;
+  color: string;
+  opacity: number;
+  x0: number;
+  x1: number;
+}
+interface LaneBarEntry {
+  lane: BranchLane;
+  y: number;
+  x1: number;
+  x2: number;
+  color: string;
+  width: number;
+  opacity: number;
+}
+interface RingEntry {
+  x: number;
+  y: number;
+  r: number;
+  color: string;
+  width: number;
+  opacity: number;
+  dash: number[];
+}
+interface CanvasModel {
+  band: number | null;
+  gapBreaks: { x: number; y1: number; y2: number }[];
+  laneLines: { y: number; color: string; opacity: number }[];
+  laneBars: LaneBarEntry[];
+  laneBarByLane: Map<number, LaneBarEntry>;
+  traceBars: { y: number; x1: number; x2: number; color: string }[];
+  patchLinks: { p: Path2D; color: string }[];
+  edges: EdgeEntry[];
+  edgeMaxSpan: number;
+  nodes: NodeEntry[];
+  rings: RingEntry[];
+}
+
+type Hit = { kind: 'node'; c: CommitNode }
+  | { kind: 'edge'; edge: { from: string; to: string } }
+  | { kind: 'lane'; lane: BranchLane };
+
+/** [lo, hi) over arr sorted by x0: the entries whose x-window can intersect
+ *  [x0, x1]. maxSpan widens the left bound so long edges crossing the
+ *  viewport are never dropped (the SVG cull learned this the same way). */
+function xWindow(arr: { x0: number }[], maxSpan: number, x0: number, x1: number): [number, number] {
+  let lo = 0;
+  let hi = arr.length;
+  const leftBound = x0 - maxSpan;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid].x0 < leftBound) lo = mid + 1;
+    else hi = mid;
+  }
+  const wLo = lo;
+  hi = arr.length;
+  lo = wLo;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid].x0 <= x1) lo = mid + 1;
+    else hi = mid;
+  }
+  return [wLo, lo];
 }
 
 export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName, onCanvasClick, starredLanes, onToggleStarLane, onFoldLane }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const minimapRef = useRef<SVGSVGElement>(null);
   const laneRailRef = useRef<HTMLDivElement>(null);
@@ -305,12 +306,8 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
    *  opt-in spatial verb inside the popover. */
   const [runMenu, setRunMenu] = useState<{ x: number; y: number; run: CollapsedRun } | null>(null);
 
-  // Render badge: `rendering` covers the heavy full-join redraw (lit BEFORE
-  // the blocking draw so the browser gets a frame to paint it); the async
-  // `busy` prop rides the delay gate so quick rebuilds never flash it.
-  const [rendering, setRendering] = useState(false);
   const busyDelayed = useDelayedBusy(busy);
-  /** A frame-coalesced cull scheduled by the zoom handler; component-level
+  /** A frame-coalesced repaint scheduled by the zoom handler; component-level
    *  so draw() can cancel a stale frame before rebuilding the scene. */
   const pendingCullRef = useRef(0);
   /** True while a draw restores the camera programmatically (viewport reset
@@ -329,8 +326,14 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   const [focusedLane, setFocusedLane] = useState<string | null>(null);
   const [expandedLanes, setExpandedLanes] = useState<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<HTMLDivElement, unknown> | null>(null);
   const sceneBoundsRef = useRef({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
+  /** The canvas scene model: the immutable primitive lists paint() strokes
+   *  and hitTest() classifies against. Rebuilt wholesale by draw(). */
+  const modelRef = useRef<CanvasModel | null>(null);
+  /** Screen-point classifier (nodes / edges / lane rows), rebuilt by draw()
+   *  against the current model. */
+  const hitTestRef = useRef<(sx: number, sy: number) => Hit | null>(() => null);
   /** Scene→minimap mapping (uniform scale, letterbox-centered), set during
    *  minimap draw; viewport rect and jump hit-testing read it. */
   const minimapMapRef = useRef<MinimapMap>({ s: 1, x0: 0, y0: 0, boxW: MINIMAP_W, boxH: MINIMAP_H });
@@ -392,6 +395,20 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
 
+  /** Center the viewport on a scene point, keeping the current zoom. Live
+   *  container dimensions: callers include the minimap scrubber and the
+   *  edge jump verbs, both of which must survive container resizes. */
+  const centerOn = useCallback((sx: number, sy: number) => {
+    const container = containerRef.current;
+    const zoom = zoomRef.current;
+    if (!container || !zoom) return;
+    const t = transformRef.current;
+    const next = d3.zoomIdentity
+      .translate(container.clientWidth / 2 - sx * t.k, container.clientHeight / 2 - sy * t.k)
+      .scale(t.k);
+    d3.select(container).call(zoom.transform, next);
+  }, []);
+
   const draw = useCallback(() => {
     if (!svgRef.current || !containerRef.current) return;
     // Hidden keep-alive tab: clientWidth/Height are 0 under display:none,
@@ -403,9 +420,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // through the `active` dep with real dimensions.
     if (!active) return;
 
-    // A frame-coalesced cull from the PREVIOUS draw's zoom handler may still
-    // be pending; its closures reference the scene this draw is about to
-    // wipe. Cancel it — the draw rebuilds everything anyway.
+    // A frame-coalesced repaint from the PREVIOUS draw's zoom handler may
+    // still be pending; its closures reference the scene this draw is about
+    // to wipe. Cancel it — the draw rebuilds everything anyway.
     if (pendingCullRef.current) {
       cancelAnimationFrame(pendingCullRef.current);
       pendingCullRef.current = 0;
@@ -418,330 +435,36 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
 
     svg.attr('width', width).attr('height', height);
     svg.selectAll('*').remove();
+    // Canvas backing store sized in device pixels (CSS size stays 100%);
+    // assigning width/height clears it — paint() runs at the end of draw.
+    const cv = canvasRef.current;
+    if (cv) {
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = Math.max(1, Math.round(width * dpr));
+      cv.height = Math.max(1, Math.round(height * dpr));
+    }
 
     // --- current-lane band ----------------------------------------------------
     // "You are here" extended from a point (the HEAD node's green ring) to
     // a REGION: a translucent band behind the whole checked-out swimlane.
-    // Appended BEFORE .timeline-content so nodes/edges paint on top, and
-    // pinned to the VIEWPORT's width rather than the scene's, so the band
-    // never scrolls out from under the eye on a wide canvas (the sticky
-    // ruler's opaque backdrop covers it at the top). The lane comes from
-    // the HEAD COMMIT, not the branch name -- detached HEAD and filtered
-    // views still land on the row the user is actually on; name matching
-    // is only the fallback. Skipped when the lane has no loaded commits.
+    // Painted FIRST by the canvas (under every scene layer) and pinned to
+    // the VIEWPORT's width rather than the scene's, so the band never
+    // scrolls out from under the eye on a wide canvas (the sticky ruler's
+    // opaque backdrop covers it at the top). The lane comes from the HEAD
+    // COMMIT, not the branch name -- detached HEAD and filtered views still
+    // land on the row the user is actually on; name matching is only the
+    // fallback. Skipped when the lane has no loaded commits.
     const headCommit = data.commits.find(c => c.is_head && !hiddenIds.has(c.id));
     const headLaneIndex = headCommit?.lane
       ?? (headBranch != null ? data.branches.find(b => b.name === headBranch)?.lane_index : undefined)
       ?? null;
-    let updateLaneBand: (() => void) | null = null;
-    if (headLaneIndex != null && data.commits.some(c => c.lane === headLaneIndex)) {
-      const laneIdx = headLaneIndex;
-      const band = svg.append('rect')
-        .attr('class', 'head-lane-band')
-        .attr('pointer-events', 'none')
-        .attr('fill', cssVar('--head-lane-band', 'rgba(76, 175, 80, 0.08)'))
-        .attr('rx', 4);
-      updateLaneBand = () => {
-        const t = transformRef.current;
-        band
-          .attr('x', 0)
-          .attr('width', width)
-          .attr('y', t.applyY(laneIdx * LANE_HEIGHT) - (LANE_HEIGHT / 2) * t.k)
-          .attr('height', LANE_HEIGHT * t.k);
-      };
-      updateLaneBand();
-    }
+    const band = headLaneIndex != null && data.commits.some(c => c.lane === headLaneIndex)
+      ? headLaneIndex
+      : null;
 
-    // The zoomable scene builds DETACHED and mounts in one insertion below:
-    // appending thousands of elements straight into the live SVG invalidates
-    // style/layout per append, which dominated heavy redraws (the 100-lane /
-    // 5k-commit starred/all switch report). One mount = one recalc.
-    const g = d3.create('svg:g').attr('class', 'timeline-content');
     const dimOthers = (name: string) => focusedLane !== null && focusedLane !== name;
     const laneOpacity = (name: string) => (dimOthers(name) ? 0.12 : 1);
 
-    // --- zoom ----------------------------------------------------------------
-    const minimapViewport = () => {
-      if (!minimapRef.current) return;
-      const t = transformRef.current;
-      // screen = t * scene ; scene->mini = uniform scale + letterbox (./minimap)
-      // LIVE container size, not the draw-time capture: the container can
-      // collapse to 0 (or recover) between draws -- panel toggles, macOS
-      // live window resize -- and the zero-window guard must judge the
-      // window that IS, or a 0-size draw poisons the rect until the next
-      // full redraw while every later pan/zoom keeps reading stale dims.
-      const w = containerRef.current?.clientWidth || width;
-      const h = containerRef.current?.clientHeight || height;
-      const r = viewportRect(t.k, t.x, t.y, w, h, minimapMapRef.current);
-      d3.select(minimapRef.current).select('.mm-viewport')
-        .attr('x', r.x).attr('y', r.y)
-        .attr('width', r.w).attr('height', r.h);
-    };
-
-    // Near the oldest (left) edge of the scene? Page in the next chunk of
-    // history. Covers drag-pan, wheel-pan and minimap jumps — all of them
-    // funnel through this zoom handler. The probe margin is a fixed
-    // scene-px budget, NOT the viewport width in scene coordinates: at
-    // overview zoom (width/k spans the whole scene) the old margin made the
-    // condition always-true, so any redraw — a fetch refresh, a view-mode
-    // switch — cascaded page-ins (backend walk + full scene rebuild each)
-    // until has_more ran out, on a resting camera the user never panned
-    // (the fetch -> star -> starred view fan-spin report). At >= 1x zoom
-    // the viewport width is the smaller value and nothing changes; panning
-    // to the actual oldest edge still pages exactly as before, one chunk
-    // per approach — after a page the scene grows ~28k scene-px to the
-    // left, which alone drops the resting camera out of the zone.
-    const maybeLoadOlder = (t: d3.ZoomTransform) => {
-      if (!hasMore || loadingOlder) return;
-      const visibleLeft = -t.x / t.k;
-      const probe = Math.min(width / t.k, EDGE_PROBE_SCENE_PX);
-      if (visibleLeft < sceneBoundsRef.current.minX + probe) {
-        onLoadOlder();
-      }
-    };
-
-    // Frame-coalesced follow-up work: the transform itself applies per zoom
-    // event (the canvas must track the pointer exactly), while the expensive
-    // per-event bookkeeping — a full-scene cull, the minimap viewport, the
-    // lane band, the ruler — runs at most ONCE per animation frame. The rAF
-    // callback reads transformRef (always the LATEST transform), so the
-    // final frame of a gesture is guaranteed to cull against the resting
-    // camera. draw() cancels a pending frame before rebuilding the scene.
-    const scheduleFrame = () => {
-      if (pendingCullRef.current) return;
-      pendingCullRef.current = requestAnimationFrame(() => {
-        pendingCullRef.current = 0;
-        cull();
-        minimapViewport();
-        updateLaneBand?.();
-        updateRuler?.();
-      });
-    };
-
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.005, 40])
-      // Wheel events are handled by our own trackpad-friendly handler
-      // (scroll = pan, pinch/ctrl = zoom); d3 only keeps drag-pan.
-      .filter((event: Event) => event.type !== 'wheel')
-      .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-        transformRef.current = event.transform;
-        g.attr('transform', event.transform.toString());
-        scheduleFrame();
-        // Pagination is a USER-navigation behavior (pan / minimap jump /
-        // search jump). The camera-restore transforms at the end of every
-        // draw fire this same event; letting them probe loaded a page of
-        // older history on every fetch refresh and view-mode switch — each
-        // a backend walk plus a full scene rebuild, repeating while the
-        // edge stayed reachable (the fetch -> star -> starred view fan-spin
-        // report). Draw-time restores set restoringCamera below.
-        if (!restoringCameraRef.current) maybeLoadOlder(event.transform);
-      })
-      .on('end', () => {
-        // Remember the camera wherever a gesture (or a programmatic camera
-        // move -- refresh anchoring, jumps) leaves it. The transform is
-        // captured now: a viewKey switch racing the debounce must not file
-        // this camera under the new repo's path.
-        if (!viewKey) return;
-        const t = transformRef.current;
-        window.clearTimeout(viewportSaveTimer.current);
-        viewportSaveTimer.current = window.setTimeout(() => saveViewport(viewKey, t), 250);
-      });
-    // Every draw installs a fresh zoom behavior; d3 registers its DOM
-    // listeners under the .zoom namespace, so strip the previous draw's set
-    // first -- without this, stacked behaviors accumulate one listener set
-    // per redraw and all of them fight over the same gesture.
-    svg.on('.zoom', null);
-    svg.call(zoom);
-    zoomRef.current = zoom;
-
-    /** Center the viewport on a scene point, keeping the current zoom. */
-    const centerOn = (sx: number, sy: number) => {
-      const t = transformRef.current;
-      const next = d3.zoomIdentity
-        .translate(width / 2 - sx * t.k, height / 2 - sy * t.k)
-        .scale(t.k);
-      svg.call(zoom.transform, next);
-    };
-
-    const allX = data.commits.map(c => c.x);
-    const minX = Math.min(...allX, 0) - 180;
-    const maxX = Math.max(...allX, 100) + 200;
-    const minY = Math.min(...data.commits.map(c => c.y), 0) - LANE_HEIGHT;
-    const maxY = Math.max(...data.commits.map(c => c.y), 0) + LANE_HEIGHT;
-    sceneBoundsRef.current = { minX, maxX, minY, maxY };
-    // No viewBox: the scene lives in plain pixel space and the zoom transform
-    // owns all scaling. (viewBox + zoom double-scales, which made large repos
-    // render microscopically small.)
-
-    // --- sticky time ruler ---------------------------------------------------
-    // Lives OUTSIDE the zoomable scene: pinned to the top of the canvas with
-    // an opaque backdrop. The time→x mapping is piecewise-linear, anchored on
-    // the commits THEMSELVES — not just the time span endpoints: the backend
-    // stretches x with a per-lane min-spacing cascade, so a two-endpoint map
-    // drifts by days in dense regions. Same-timestamp commits on different
-    // lanes can sit at different x; their mean is the compromise anchor.
-    // Ticks are generated for the VISIBLE time window only, so zooming in
-    // refines their precision; ticks falling inside a folded gap are dropped.
-    let updateRuler: (() => void) | null = null;
-    if (data.commits.length > 1) {
-      const gaps = [...(data.time_gaps ?? [])].sort((a, b) => a.x_start - b.x_start);
-
-      // One anchor per distinct commit timestamp (mean x), x forced
-      // non-decreasing so the map stays monotone.
-      const byTime = new Map<number, { sum: number; n: number }>();
-      for (const c of data.commits) {
-        const e = byTime.get(c.timestamp);
-        if (e) { e.sum += c.x; e.n++; } else byTime.set(c.timestamp, { sum: c.x, n: 1 });
-      }
-      const times: number[] = [];
-      const xs: number[] = [];
-      for (const [t, agg] of [...byTime.entries()].sort((a, b) => a[0] - b[0])) {
-        times.push(t);
-        const x = agg.sum / agg.n;
-        xs.push(xs.length > 0 ? Math.max(x, xs[xs.length - 1]) : x);
-      }
-      const lerpAnchors = (v: number, from: number[], to: number[]): number => {
-        if (v <= from[0]) return to[0];
-        for (let i = 1; i < from.length; i++) {
-          if (v <= from[i]) {
-            const d = from[i] - from[i - 1];
-            return d <= 0 ? to[i] : to[i - 1] + (to[i] - to[i - 1]) * (v - from[i - 1]) / d;
-          }
-        }
-        return to[to.length - 1];
-      };
-      const timeToX = (t: number) => lerpAnchors(t, times, xs);
-      const xToTime = (x: number) => lerpAnchors(x, xs, times);
-      const inGap = (t: number) => gaps.some(gp => t > gp.t_start && t < gp.t_end);
-
-      const ruler = svg.append('g')
-        .attr('class', 'time-ruler-sticky')
-        .attr('pointer-events', 'none');
-      ruler.append('rect')
-        .attr('x', 0).attr('y', 0)
-        .attr('width', width).attr('height', 26)
-        .attr('fill', cssVar('--bg-canvas', '#1a1a2e'));
-      ruler.append('line')
-        .attr('x1', 0).attr('x2', width)
-        .attr('y1', 26).attr('y2', 26)
-        .attr('stroke', cssVar('--ruler-line', '#2c2c3e'))
-        .attr('stroke-width', 1);
-      const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
-
-      const pad2 = (n: number) => String(n).padStart(2, '0');
-      const fmtDuration = (sec: number): string => {
-        const days = sec / 86400;
-        if (days < 90) return `${Math.max(1, Math.round(days))}d`;
-        if (days < 730) return `${Math.round(days / 30.4)}mo`;
-        return `${(days / 365.25).toFixed(1)}y`;
-      };
-
-      updateRuler = () => {
-        const t = transformRef.current;
-        // Visible time window (with margin), so ticks adapt to the zoom level.
-        const vt0 = xToTime(-t.x / t.k - 100);
-        const vt1 = xToTime((width - t.x) / t.k + 100);
-        if (!(vt1 > vt0)) return;
-        const shown = d3.scaleTime()
-          .domain([new Date(vt0 * 1000), new Date(vt1 * 1000)])
-          .ticks(Math.max(3, Math.floor(width / 150)))
-          .filter(d => !inGap(d.getTime() / 1000));
-
-        // Pick a precision strictly finer than the tightest tick gap, so two
-        // adjacent labels can never read the same (e.g. four "2026-01" ticks).
-        let minGapSec = Infinity;
-        for (let i = 1; i < shown.length; i++) {
-          minGapSec = Math.min(minGapSec, (shown[i].getTime() - shown[i - 1].getTime()) / 1000);
-        }
-        const fmtTick = (dt: Date): string => {
-          const date = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
-          if (minGapSec >= 250 * 86400) return `${dt.getFullYear()}`;
-          if (minGapSec >= 25 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
-          if (minGapSec >= 20 * 3600) return date;
-          const time = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
-          if (minGapSec >= 40 * 60) return `${date} ${time}`;
-          return `${date} ${time}:${pad2(dt.getSeconds())}`;
-        };
-
-        const tick = axisG
-          .selectAll<SVGGElement, Date>('.rtick')
-          // Ticks are uniform in TIME, but the scene x is not (dense regions
-          // are cascade-stretched), so labels can bunch up in x. Greedily
-          // keep only ticks whose label clears the previous kept one.
-          .data((() => {
-            const kept: Date[] = [];
-            let lastX = -Infinity;
-            for (const d of shown) {
-              const x = t.applyX(timeToX(d.getTime() / 1000));
-              const w = fmtTick(d).length * 5.8 + 12;
-              if (x - lastX >= w) { kept.push(d); lastX = x; }
-            }
-            return kept;
-          })(), d => String(+d));
-        const tickEnter = tick.enter().append('g').attr('class', 'rtick');
-        tickEnter.append('line')
-          .attr('y1', -5).attr('y2', 0)
-          .attr('stroke', cssVar('--tick-line', '#555'));
-        tickEnter.append('text')
-          .attr('y', -8).attr('text-anchor', 'middle')
-          .attr('fill', cssVar('--text-dim', '#888')).attr('font-size', '10px');
-        const tickMerged = tickEnter.merge(tick);
-        tickMerged.attr('transform', d => `translate(${t.applyX(timeToX(d.getTime() / 1000))},0)`);
-        tickMerged.select('text').text(fmtTick);
-        tick.exit().remove();
-
-        // Axis-break markers: "// 45d" at the center of each folded gap.
-        const brk = axisG
-          .selectAll<SVGGElement, TimeGap>('.rbreak')
-          .data(gaps, d => String(d.t_start));
-        const brkEnter = brk.enter().append('g').attr('class', 'rbreak');
-        brkEnter.append('text')
-          .attr('y', -8).attr('text-anchor', 'middle')
-          .attr('fill', cssVar('--gap-break', '#a06a3a')).attr('font-size', '10px');
-        brkEnter.merge(brk)
-          .attr('transform', d => `translate(${t.applyX((d.x_start + d.x_end) / 2)},0)`)
-          .select('text')
-          .text(d => `// ${fmtDuration(d.t_end - d.t_start)}`);
-        brk.exit().remove();
-      };
-      updateRuler();
-    }
-
-    // --- folded-gap scene markers ---------------------------------------------
-    // Low-key vertical dashed lines where the time axis is broken, so the
-    // discontinuity is visible inside the graph itself.
-    if (data.time_gaps && data.time_gaps.length > 0) {
-      g.selectAll('.gap-break')
-        .data(data.time_gaps)
-        .enter()
-        .append('line')
-        .attr('class', 'gap-break')
-        .attr('x1', (d: TimeGap) => (d.x_start + d.x_end) / 2)
-        .attr('x2', (d: TimeGap) => (d.x_start + d.x_end) / 2)
-        .attr('y1', minY)
-        .attr('y2', maxY)
-        .attr('stroke', cssVar('--gap-break', '#a06a3a'))
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '6,5')
-        .attr('opacity', 0.35);
-    }
-
-    // --- lane guide lines ------------------------------------------------------
-    g.selectAll('.lane')
-      .data(data.branches)
-      .enter()
-      .append('line')
-      .attr('class', 'lane')
-      .attr('x1', minX - 50)
-      .attr('x2', maxX + 50)
-      .attr('y1', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
-      .attr('y2', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
-      .attr('stroke', (d: BranchLane) => d.color)
-      .attr('stroke-width', 1)
-      .attr('stroke-dasharray', '4,4')
-      .attr('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.05 : 0.3);
-
-    // --- branch bars (span ALL commits of the lane, compression-proof) --------
     // Foreign lineage (lane_owner "") is parked on lane 0 but belongs to no
     // lane — excluded so a lane's track never stretches over hidden commits.
     const laneSpan = new Map<number, { min: number; max: number }>();
@@ -752,149 +475,66 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       span.max = Math.max(span.max, c.x);
       laneSpan.set(c.lane, span);
     }
-    g.selectAll('.lane-bar')
-      .data(data.branches.filter(b => laneSpan.has(b.lane_index)))
-      .enter()
-      .append('line')
-      .attr('class', 'lane-bar')
-      .attr('x1', (d: BranchLane) => laneSpan.get(d.lane_index)!.min)
-      .attr('x2', (d: BranchLane) => laneSpan.get(d.lane_index)!.max)
-      .attr('y1', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
-      .attr('y2', (d: BranchLane) => d.lane_index * LANE_HEIGHT)
-      .attr('stroke', (d: BranchLane) => d.color)
+
+    // --- the canvas model -----------------------------------------------------
+    // Every scene primitive the canvas paints, as plain data + Path2D. The
+    // x-window indexes (sorted arrays + xWindow) are the cull: paint and
+    // hit-testing binary-search the visible window instead of scanning the
+    // whole scene.
+    const model: CanvasModel = {
+      band,
+      gapBreaks: (data.time_gaps ?? []).map(gap => ({
+        x: (gap.x_start + gap.x_end) / 2,
+        y1: 0,
+        y2: 0,
+      })),
+      laneLines: [],
+      laneBars: [],
+      laneBarByLane: new Map(),
+      traceBars: traceBars.map(tb => ({
+        y: tb.laneIndex * LANE_HEIGHT,
+        x1: tb.x1,
+        x2: tb.x2,
+        color: tb.color,
+      })),
+      patchLinks: [],
+      edges: [],
+      edgeMaxSpan: 0,
+      nodes: [],
+      rings: [],
+    };
+
+    const allX = data.commits.map(c => c.x);
+    const minX = Math.min(...allX, 0) - 180;
+    const maxX = Math.max(...allX, 100) + 200;
+    const minY = Math.min(...data.commits.map(c => c.y), 0) - LANE_HEIGHT;
+    const maxY = Math.max(...data.commits.map(c => c.y), 0) + LANE_HEIGHT;
+    for (const gb of model.gapBreaks) { gb.y1 = minY; gb.y2 = maxY; }
+    sceneBoundsRef.current = { minX, maxX, minY, maxY };
+    // No viewBox: the scene lives in plain pixel space and the zoom transform
+    // owns all scaling. (viewBox + zoom double-scales, which made large repos
+    // render microscopically small.)
+
+    for (const b of data.branches) {
+      const y = b.lane_index * LANE_HEIGHT;
+      model.laneLines.push({ y, color: b.color, opacity: dimOthers(b.name) ? 0.05 : 0.3 });
+      const span = laneSpan.get(b.lane_index);
+      if (!span) continue;
       // Hue already encodes branch identity, so the checked-out lane's
       // emphasis is WEIGHT: a heavier, brighter spine riding the band.
-      .attr('stroke-width', (d: BranchLane) => (d.lane_index === headLaneIndex ? 7 : 4))
-      .attr('stroke-linecap', 'round')
-      .attr('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.12 : (d.lane_index === headLaneIndex ? 0.9 : 0.55))
-      .style('cursor', 'context-menu')
-      .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
-        event.preventDefault();
-        setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
-      });
+      const entry: LaneBarEntry = {
+        lane: b,
+        y,
+        x1: span.min,
+        x2: span.max,
+        color: b.color,
+        width: b.lane_index === headLaneIndex ? 7 : 4,
+        opacity: dimOthers(b.name) ? 0.12 : (b.lane_index === headLaneIndex ? 0.9 : 0.55),
+      };
+      model.laneBars.push(entry);
+      model.laneBarByLane.set(b.lane_index, entry);
+    }
 
-    // --- inactive-lane sediment rows ----------------------------------------
-    // Dead lanes get no rows of their own; their spans draw as thin
-    // translucent bars inside one trace row per group (bars only — no
-    // nodes, no edges). Overlapping bars darken naturally, so a dense pile
-    // of dead history reads as darker sediment. Click expands the group.
-    g.selectAll('.trace-bar')
-      .data(traceBars)
-      .enter()
-      .append('line')
-      .attr('class', 'trace-bar')
-      .attr('x1', (d: TraceBar) => d.x1)
-      .attr('x2', (d: TraceBar) => d.x2)
-      .attr('y1', (d: TraceBar) => d.laneIndex * LANE_HEIGHT)
-      .attr('y2', (d: TraceBar) => d.laneIndex * LANE_HEIGHT)
-      .attr('stroke', (d: TraceBar) => d.color)
-      .attr('stroke-width', 2)
-      .attr('stroke-linecap', 'round')
-      .attr('opacity', 0.3)
-      .attr('pointer-events', 'none');
-    const traceLabel = (r: TraceRow) =>
-      t(r.kind === 'hidden' ? 'hiddenLanes'
-        : r.kind === 'archived' ? 'archivedLanes' : 'dormantLanes', { n: r.count });
-    g.selectAll('.trace-hit')
-      .data(traceRows)
-      .enter()
-      .append('rect')
-      .attr('class', 'trace-hit')
-      .attr('x', minX - 50)
-      .attr('width', maxX + 100 - (minX - 50))
-      .attr('y', (d: TraceRow) => d.laneIndex * LANE_HEIGHT - 12)
-      .attr('height', 24)
-      .attr('fill', 'rgba(0,0,0,0)')
-      .style('cursor', 'pointer')
-      .on('click', (event: MouseEvent, d: TraceRow) => {
-        event.stopPropagation();
-        onExpandTraceGroup(d.kind);
-      })
-      .append('title')
-      .text((d: TraceRow) => `${traceLabel(d)} — ${traceGroupLabel(d.kind)}`);
-
-    // --- lane chips: HTML overlay pinned to the left edge --------------------
-    // Rendered OUTSIDE the svg as a frosted-glass rail on the highest z-layer,
-    // so labels stay crisp and readable when the graph scrolls beneath them
-    // (SVG-in-scene labels can't do backdrop blur). cull() repositions them on
-    // every pan/zoom and thins them at heavy zoom-out.
-    const rail = d3.select(laneRailRef.current);
-    const chips = rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
-      .data(data.branches, (d: BranchLane) => d.name)
-      .join('div')
-      // Current-branch marker (spec 4.3): the head-lane class adds the dot
-      // prefix + tint. Sibling worktree members' checked-out lanes get a
-      // house badge -- one graph, N anchors, no duplicate member views.
-      // A lane with NO commits in the loaded set (its tip outside the load
-      // window, or every commit outside the date range) renders hollow:
-      // dashed border + muted, with an honest tooltip -- an unmarked empty
-      // row read as "the branch has nothing" / a rendering bug (the
-      // fetched-branch phantom-lane report).
-      .attr('class', (d: BranchLane) => (
-        d.name === headBranch ? 'lane-chip head-lane'
-          : memberLanes.has(d.name) ? 'lane-chip member-lane'
-            : laneSpan.has(d.lane_index) ? 'lane-chip'
-              : 'lane-chip lane-chip-empty'))
-      .attr('title', (d: BranchLane) => {
-        const hint = d.name === headBranch ? t('currentBranchTip')
-          : memberLanes.has(d.name) ? t('checkedOutIn', { name: memberLanes.get(d.name)! })
-            : !laneSpan.has(d.lane_index) ? t('laneEmptyTip')
-              : null;
-        return hint ? `${d.name} — ${hint}` : d.name;
-      })
-      .style('color', (d: BranchLane) => d.color)
-      .style('border-color', (d: BranchLane) => d.color)
-      .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
-      .on('click', (_e: MouseEvent, d: BranchLane) => {
-        setFocusedLane(prev => (prev === d.name ? null : d.name));
-      })
-      .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
-        event.preventDefault();
-        setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
-      });
-    // Chip content: [★][name][×]. The star marks a favorite (persisted),
-    // the × folds the lane into its sediment row (display-only, session
-    // state) -- the two map-model verbs that live on the canvas itself.
-    chips.html('');
-    chips.filter((d: BranchLane) => starredLanes.has(d.name))
-      .append('span')
-      .attr('class', 'lane-chip-star')
-      .text('★');
-    chips.append('span')
-      .attr('class', 'lane-chip-name')
-      .text((d: BranchLane) => middleEllipsis(d.name));
-    chips.append('span')
-      .attr('class', 'lane-chip-fold')
-      .attr('title', t('foldLane'))
-      .text('×')
-      .on('click', (event: MouseEvent, d: BranchLane) => {
-        event.stopPropagation();
-        onFoldLane(d.name);
-      });
-    // Trace-row chips ride the same rail; datum is BranchLane-shaped so the
-    // shared cull() code path (lane_index-keyed) handles them unchanged.
-    rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip.trace-chip')
-      .data(traceRows.map(r => ({
-        name: traceLabel(r),
-        lane_index: r.laneIndex,
-        color: '#888888',
-        is_tag: false,
-        fork_point: null,
-        merged_into: null,
-        is_active: false,
-      })), (d: BranchLane) => d.name)
-      .join('div')
-      .attr('class', 'lane-chip trace-chip')
-      .style('color', (d: BranchLane) => d.color)
-      .style('border-color', (d: BranchLane) => d.color)
-      .text((d: BranchLane) => d.name)
-      .style('cursor', 'pointer')
-      .on('click', (_e: MouseEvent, d: BranchLane) => {
-        const r = traceRows.find(tr => tr.laneIndex === d.lane_index);
-        if (r) onExpandTraceGroup(r.kind);
-      });
-
-    // --- edges -----------------------------------------------------------------
     const visibleIds = new Set(visibleCommits.map(c => c.id));
     const visibleEdges = data.edges.filter(e => {
       if (!showMergeLinks && e.edge_type === 'Merge') return false;
@@ -976,76 +616,45 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       // commit — rebase/amend artifacts) or displaced lane birth.
       return diagCurve(to.x, to.y, from.x, from.y);
     };
-    const isHotEdge = (d: CommitEdge) =>
+    const isHotEdge = (d: { from: string; to: string }) =>
       edgeHighlight !== null && edgeHighlight.from === d.from && edgeHighlight.to === d.to;
 
-    g.selectAll('.edge')
-      .data(visibleEdges)
-      .enter()
-      .append('path')
-      .attr('class', 'edge')
-      .attr('d', edgePath)
-      .attr('fill', 'none')
-      .attr('stroke', (d: CommitEdge) => {
-        if (isHotEdge(d)) return cssVar('--edge-hot', '#FFD166');
-        const from = commitMap.get(d.from);
-        return from ? ownerColor(from.lane_owner) : cssVar('--text-faint', '#888888');
-      })
-      .attr('stroke-width', (d: CommitEdge) => {
-        if (isHotEdge(d)) return 4;
-        return d.edge_type === 'Direct' ? 2.5 : d.edge_type === 'Branch' ? 1.8 : 1.3;
-      })
-      .attr('opacity', (d: CommitEdge) => {
-        if (isHotEdge(d)) return 1;
-        const from = commitMap.get(d.from);
-        if (!from) return 0.5;
-        if (focusedLane && d.edge_type === 'Merge') {
-          // in focus mode keep merge links touching the focused lane visible
-          const to = commitMap.get(d.to);
-          const touches = from.lane_owner === focusedLane || to?.lane_owner === focusedLane;
-          return touches ? 0.9 : 0.06;
-        }
-        return dimOthers(from.lane_owner) ? 0.08 : (d.edge_type === 'Merge' ? 0.7 : 0.9);
+    for (const d of visibleEdges) {
+      const from = commitMap.get(d.from);
+      const to = commitMap.get(d.to);
+      if (!from || !to) continue; // dangling edge datum: undrawable, unhittable
+      const dStr = edgePath(d);
+      const color = isHotEdge(d) ? cssVar('--edge-hot', '#FFD166')
+        : ownerColor(from.lane_owner);
+      const width = isHotEdge(d) ? 4
+        : d.edge_type === 'Direct' ? 2.5 : d.edge_type === 'Branch' ? 1.8 : 1.3;
+      let opacity: number;
+      if (isHotEdge(d)) opacity = 1;
+      else if (focusedLane && d.edge_type === 'Merge') {
+        // in focus mode keep merge links touching the focused lane visible
+        const touches = from.lane_owner === focusedLane || to?.lane_owner === focusedLane;
+        opacity = touches ? 0.9 : 0.06;
+      } else {
+        opacity = dimOthers(from.lane_owner) ? 0.08 : (d.edge_type === 'Merge' ? 0.7 : 0.9);
+      }
+      model.edges.push({
+        p: new Path2D(dStr),
+        d: dStr,
+        type: d.edge_type,
+        from: d.from,
+        to: d.to,
+        color,
+        width,
+        opacity,
+        x0: Math.min(from.x, to.x),
+        x1: Math.max(from.x, to.x),
+        y0: Math.min(from.y, to.y),
+        y1: Math.max(from.y, to.y),
       });
-
-    // Invisible fat strokes on top: edges are 1.3-2.5px thin, so the clickable
-    // area lives on a separate transparent path. Clicks are handled by the
-    // scene group's DELEGATED handler (see the nodes note):
-    //   click       -> highlight both endpoint commits
-    //   ctrl/cmd+click -> jump to the parent end
-    //   shift+click    -> jump to the child end
-    g.selectAll('.edge-hit')
-      .data(visibleEdges)
-      .enter()
-      .append('path')
-      .attr('class', 'edge-hit')
-      .attr('d', edgePath)
-      .attr('fill', 'none')
-      .attr('stroke', 'rgba(0,0,0,0)')
-      .attr('stroke-width', 14)
-      .style('cursor', 'pointer')
-      .append('title')
-      .text(t('edgeTip'));
-
-    // Flow-direction overlay on the clicked edge: round dots marching from
-    // the PARENT commit to the CHILD commit — the direction data flows — so
-    // fork (downstream into the new lane) vs merge (upstream into the merge
-    // commit) is obvious at a glance. March direction follows the path's
-    // authoring direction: fork paths start at the parent, merge/direct
-    // paths at the child.
-    g.selectAll('.edge-flow')
-      .data(visibleEdges.filter(isHotEdge))
-      .enter()
-      .append('path')
-      .attr('class', (d: CommitEdge) =>
-        `edge-flow ${d.edge_type === 'Branch' ? 'flow-fwd' : 'flow-rev'}`)
-      .attr('d', edgePath)
-      .attr('fill', 'none')
-      .attr('stroke', cssVar('--edge-flow', '#FFF3C4'))
-      .attr('stroke-width', 5)
-      .attr('stroke-linecap', 'round')
-      .attr('stroke-dasharray', '0 18')
-      .attr('pointer-events', 'none');
+      const span = model.edges[model.edges.length - 1].x1 - model.edges[model.edges.length - 1].x0;
+      if (span > model.edgeMaxSpan) model.edgeMaxSpan = span;
+    }
+    model.edges.sort((a, b) => a.x0 - b.x0);
 
     // --- patch links: cherry-pick / rebase copies ------------------------------
     // Dashed forward-flow curves between commits carrying the same patch
@@ -1053,64 +662,159 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // nodes. Drawn earlier -> later (the copy lands after the original), so
     // the link reads left-to-right like every other connector.
     const patchLinkData = patchLinks.filter(l => visibleIds.has(l.from) && visibleIds.has(l.to));
-    const patchLinkPath = (l: PatchLink): string => {
-      const a = commitMap.get(l.from)!;
-      const b = commitMap.get(l.to)!;
+    for (const l of patchLinkData) {
+      const a = commitMap.get(l.from);
+      const b = commitMap.get(l.to);
+      if (!a || !b) continue;
       const [p, q] = a.x <= b.x ? [a, b] : [b, a];
-      return diagCurve(p.x, p.y, q.x, q.y);
-    };
-    g.selectAll('.patch-link')
-      .data(patchLinkData)
-      .enter()
-      .append('path')
-      .attr('class', 'patch-link')
-      .attr('d', patchLinkPath)
-      .attr('fill', 'none')
-      .attr('stroke', (l: PatchLink) => (l.kind === 'rebase' ? cssVar('--patch-rebase', '#26C6DA') : cssVar('--patch-cherry', '#FFA726')))
-      .attr('stroke-width', 1.5)
-      .attr('stroke-dasharray', '5,4')
-      .attr('opacity', 0.75)
-      .append('title')
-      .text((l: PatchLink) =>
-        `${l.kind === 'rebase' ? 'Rebased' : 'Cherry-picked'} copy: ${l.from.slice(0, 7)} ↔ ${l.to.slice(0, 7)}`);
+      model.patchLinks.push({
+        p: new Path2D(diagCurve(p.x, p.y, q.x, q.y)),
+        color: l.kind === 'rebase' ? cssVar('--patch-rebase', '#26C6DA') : cssVar('--patch-cherry', '#FFA726'),
+      });
+    }
 
-    // x-indices for the remaining heavy layers (see makeXCull). Missing
-    // endpoints (dangling edge datum) stay hidden outright, matching the
-    // old cull's `if (!a || !b) return 'none'`.
-    const edgesCull = makeXCull<SVGPathElement, CommitEdge>();
-    for (const el of g.selectAll<SVGPathElement, CommitEdge>('.edge,.edge-hit').nodes()) {
-      const d = d3.select(el).datum() as CommitEdge;
-      const a = commitMap.get(d.from);
-      const b = commitMap.get(d.to);
-      if (!a || !b) {
-        el.style.display = 'none';
-        continue;
-      }
-      const ex0 = Math.min(a.x, b.x);
-      const ex1 = Math.max(a.x, b.x);
-      const ey0 = Math.min(a.y, b.y);
-      const ey1 = Math.max(a.y, b.y);
-      edgesCull.add(el, d, ex0, ex1,
-        (_d, x0, x1, y0, y1) => ex1 >= x0 && ex0 <= x1 && ey1 >= y0 && ey0 <= y1);
+    for (const c of visibleCommits) {
+      model.nodes.push({
+        c,
+        x: c.x,
+        y: c.y,
+        r: nodeRadius(c),
+        color: ownerColor(c.lane_owner),
+        opacity: laneOpacity(c.lane_owner),
+        x0: c.x,
+        x1: c.x,
+      });
     }
-    edgesCull.seal();
-    const patchCull = makeXCull<SVGPathElement, PatchLink>();
-    for (const el of g.selectAll<SVGPathElement, PatchLink>('.patch-link').nodes()) {
-      const d = d3.select(el).datum() as PatchLink;
-      const a = commitMap.get(d.from);
-      const b = commitMap.get(d.to);
-      if (!a || !b) {
-        el.style.display = 'none';
-        continue;
-      }
-      const ex0 = Math.min(a.x, b.x);
-      const ex1 = Math.max(a.x, b.x);
-      const ey0 = Math.min(a.y, b.y);
-      const ey1 = Math.max(a.y, b.y);
-      patchCull.add(el, d, ex0, ex1,
-        (_d, x0, x1, y0, y1) => ex1 >= x0 && ex0 <= x1 && ey1 >= y0 && ey0 <= y1);
+    model.nodes.sort((a, b) => a.x0 - b.x0);
+
+    // Rings and markers around individual commits, in paint order (they sit
+    // above the node circles). Screen semantics unchanged: selection glow +
+    // crisp ring, compare-pending dashed double ring, HEAD green ring, edge
+    // highlight amber rings.
+    const accent = cssVar('--accent', '#e94560');
+    const addRing = (c: CommitNode, r: number, color: string, width: number, opacity: number, dash: number[] = []) => {
+      model.rings.push({ x: c.x, y: c.y, r, color, width, opacity, dash });
+    };
+    for (const c of visibleCommits) {
+      if (c.id !== selectedCommitId) continue;
+      // Selection halo: a crisp accent ring over a soft wide glow. The accent
+      // contrasts with the canvas in every theme (a plain white stroke was
+      // invisible on light themes and washed out on pale lane colors).
+      addRing(c, nodeRadius(c) + 8, accent, 6, 0.3);
+      addRing(c, nodeRadius(c) + 4, accent, 2.5, 1);
     }
-    patchCull.seal();
+    // Pending-compare ring (spec 4.4): ONLY while pairing is incomplete
+    // (compareBaseId is non-null exactly then) the waiting base gets a
+    // double ring, so the node the next ctrl+click will pair against is
+    // obvious. Three ring semantics share the canvas and must stay
+    // distinguishable at a glance: single-select = accent (soft glow +
+    // crisp ring, r+8/r+4), HEAD = green (r+5), compare-pending =
+    // --compare-ring, dashed, thinner, and one step wider (r+11/r+7).
+    if (compareBaseId) {
+      const pending = cssVar('--compare-ring', '#b388ff');
+      for (const c of visibleCommits) {
+        if (c.id !== compareBaseId) continue;
+        addRing(c, nodeRadius(c) + 11, pending, 5, 0.25);
+        addRing(c, nodeRadius(c) + 7, pending, 1.5, 1, [4, 3]);
+      }
+    }
+    for (const c of visibleCommits) {
+      if (!c.is_head) continue;
+      addRing(c, nodeRadius(c) + 5, cssVar('--success', '#4CAF50'), 2, laneOpacity(c.lane_owner));
+    }
+    // edge-click highlight: amber rings around the two endpoint commits
+    if (edgeHighlight) {
+      for (const c of visibleCommits) {
+        if (c.id !== edgeHighlight.from && c.id !== edgeHighlight.to) continue;
+        addRing(c, nodeRadius(c) + 6, cssVar('--edge-hot', '#FFD166'), 2.5, laneOpacity(c.lane_owner));
+      }
+    }
+    modelRef.current = model;
+
+    // Screen-point classifier against THIS model. Nodes win over edges (they
+    // render above them, as in the old stacking); edges hit-test through
+    // Path2D stroke containment — the old invisible 14px fat strokes, minus
+    // 2.7k DOM paths. Lane rows hit-test as a band (the old target was a 4px
+    // bar stroke; the band is the same verb with a humane target). The stroke
+    // test runs with an IDENTITY transform and a scene-space point, so both
+    // sides of the predicate live in the same untransformed space.
+    hitTestRef.current = (sx: number, sy: number): Hit | null => {
+      const m = modelRef.current;
+      if (!m || !cv) return null;
+      const t = transformRef.current;
+      // Caller coordinates are CLIENT coordinates; the scene lives relative
+      // to the canvas' own box (the container is not at viewport origin).
+      const rect = cv.getBoundingClientRect();
+      const px = (sx - rect.left - t.x) / t.k;
+      const py = (sy - rect.top - t.y) / t.k;
+      let best: CommitNode | null = null;
+      let bestD2 = Infinity;
+      const [nLo, nHi] = xWindow(m.nodes, 0, px - 48, px + 48);
+      for (let i = nLo; i < nHi; i++) {
+        const n = m.nodes[i];
+        const dx = px - n.x;
+        const dy = py - n.y;
+        const d2 = dx * dx + dy * dy;
+        const r = n.r + 4;
+        if (d2 <= r * r && d2 < bestD2) {
+          bestD2 = d2;
+          best = n.c;
+        }
+      }
+      if (best) return { kind: 'node', c: best };
+      const ctx = canvasRef.current?.getContext('2d');
+      if (ctx && m.edges.length > 0) {
+        const margin = 14 / t.k;
+        const [eLo, eHi] = xWindow(m.edges, m.edgeMaxSpan, px, px);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.lineWidth = margin * 2;
+        for (let i = eHi - 1; i >= eLo; i--) {
+          const e = m.edges[i];
+          if (py < e.y0 - margin || py > e.y1 + margin) continue;
+          if (ctx.isPointInStroke(e.p, px, py)) {
+            ctx.restore();
+            return { kind: 'edge', edge: { from: e.from, to: e.to } };
+          }
+        }
+        ctx.restore();
+      }
+      const laneIdx = Math.round(py / LANE_HEIGHT);
+      const bar = m.laneBarByLane.get(laneIdx);
+      if (bar && Math.abs(py - laneIdx * LANE_HEIGHT) <= 20 && px >= bar.x1 - 30 && px <= bar.x2 + 30) {
+        return { kind: 'lane', lane: bar.lane };
+      }
+      return null;
+    };
+
+    // --- the SVG overlay -------------------------------------------------------
+    // Text and the few interactive widgets, in one detached group mounted in
+    // one insertion. pointer-events are none at the svg root (canvas hit-
+    // testing owns the pointer); the widgets re-enable it individually.
+    const g = d3.create('svg:g').attr('class', 'timeline-content');
+
+    // --- inactive-lane sediment hit rows --------------------------------------
+    // Full-width invisible click targets for expanding a sediment group.
+    const traceLabel = (r: TraceRow) =>
+      t(r.kind === 'hidden' ? 'hiddenLanes'
+        : r.kind === 'archived' ? 'archivedLanes' : 'dormantLanes', { n: r.count });
+    g.selectAll('.trace-hit')
+      .data(traceRows)
+      .enter()
+      .append('rect')
+      .attr('class', 'trace-hit')
+      .attr('x', minX - 50)
+      .attr('width', maxX + 100 - (minX - 50))
+      .attr('y', (d: TraceRow) => d.laneIndex * LANE_HEIGHT - 12)
+      .attr('height', 24)
+      .attr('fill', 'rgba(0,0,0,0)')
+      .style('cursor', 'pointer')
+      .on('click', (event: MouseEvent, d: TraceRow) => {
+        event.stopPropagation();
+        onExpandTraceGroup(d.kind);
+      })
+      .append('title')
+      .text((d: TraceRow) => `${traceLabel(d)} — ${traceGroupLabel(d.kind)}`);
 
     // --- collapsed-run chips ---------------------------------------------------
     if (compressed) {
@@ -1147,155 +851,42 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       chips.append('title').text(d => t('collapsedTip', { n: d.ids.length }));
     }
 
-    // --- nodes -------------------------------------------------------------------
-    // One flat circle per commit positioned by cx/cy — no <g> wrapper (the
-    // wrapper doubled the element count of the dominant layer; rings carry
-    // absolute coordinates instead). Node verbs (click / hover tooltip) are
-    // DELEGATED to the scene group below: ~4 listeners × N commits of
-    // addEventListener calls dominated heavy redraws.
-    g.selectAll('.node')
-      .data(visibleCommits)
-      .enter()
-      .append('circle')
-      .attr('class', 'node')
-      .attr('cx', (d: CommitNode) => d.x)
-      .attr('cy', (d: CommitNode) => d.y)
-      .attr('r', nodeRadius)
-      .attr('fill', (d: CommitNode) => ownerColor(d.lane_owner))
-      .attr('opacity', (d: CommitNode) => laneOpacity(d.lane_owner))
-      .style('cursor', 'pointer');
-
-    // Rings and markers around individual commits. They sit OUTSIDE the
-    // node circles now, so each carries absolute coordinates, its datum
-    // (the cull hides it with the node), and pointer-events: none (hits
-    // fall through to the node / edge underneath, as the old nesting did).
-    const ring = (d: CommitNode) =>
-      g.append('circle')
-        .attr('class', 'node-ring')
-        .attr('cx', d.x).attr('cy', d.y)
-        .attr('fill', 'none')
-        .attr('opacity', laneOpacity(d.lane_owner))
-        .attr('pointer-events', 'none')
-        .datum(d);
-    const markText = (d: CommitNode) =>
+    // HEAD label above the checked-out commit (the ring itself is canvas).
+    for (const c of visibleCommits) {
+      if (!c.is_head) continue;
       g.append('text')
-        .attr('class', 'node-ring')
-        .attr('x', d.x).attr('y', d.y - nodeRadius(d) - 10)
+        .attr('class', 'head-mark')
+        .attr('x', c.x).attr('y', c.y - nodeRadius(c) - 10)
         .attr('font-size', '10px')
         .attr('font-weight', 'bold')
         .attr('text-anchor', 'middle')
-        .attr('opacity', laneOpacity(d.lane_owner))
+        .attr('fill', cssVar('--success', '#4CAF50'))
         .attr('pointer-events', 'none')
-        .datum(d);
-
-    // Selection halo: a crisp accent ring over a soft wide glow. The accent
-    // contrasts with the canvas in every theme (a plain white stroke was
-    // invisible on light themes and washed out on pale lane colors).
-    const accent = cssVar('--accent', '#e94560');
-    for (const d of visibleCommits) {
-      if (d.id !== selectedCommitId) continue;
-      ring(d).attr('r', nodeRadius(d) + 8)
-        .attr('stroke', accent).attr('stroke-opacity', 0.3).attr('stroke-width', 6);
-      ring(d).attr('r', nodeRadius(d) + 4)
-        .attr('stroke', accent).attr('stroke-width', 2.5);
+        .attr('opacity', laneOpacity(c.lane_owner))
+        .datum(c)
+        .text('HEAD');
     }
 
-    // Pending-compare ring (spec 4.4): ONLY while pairing is incomplete
-    // (compareBaseId is non-null exactly then) the waiting base gets a
-    // double ring, so the node the next ctrl+click will pair against is
-    // obvious. Three ring semantics share the canvas and must stay
-    // distinguishable at a glance: single-select = accent (soft glow +
-    // crisp ring, r+8/r+4), HEAD = green (r+5), compare-pending =
-    // --compare-ring, dashed, thinner, and one step wider (r+11/r+7).
-    if (compareBaseId) {
-      const pending = cssVar('--compare-ring', '#b388ff');
-      for (const d of visibleCommits) {
-        if (d.id !== compareBaseId) continue;
-        ring(d).attr('r', nodeRadius(d) + 11)
-          .attr('stroke', pending).attr('stroke-opacity', 0.25).attr('stroke-width', 5);
-        ring(d).attr('r', nodeRadius(d) + 7)
-          .attr('stroke', pending).attr('stroke-width', 1.5).attr('stroke-dasharray', '4,3');
-      }
-    }
-
-    for (const d of visibleCommits) {
-      if (!d.is_head) continue;
-      ring(d).attr('r', nodeRadius(d) + 5)
-        .attr('stroke', cssVar('--success', '#4CAF50')).attr('stroke-width', 2);
-      markText(d).attr('fill', cssVar('--success', '#4CAF50')).text('HEAD');
-    }
-
-    // edge-click highlight: amber rings around the two endpoint commits
+    // Flow-direction overlay on the clicked edge: round dots marching from
+    // the PARENT commit to the CHILD commit — the direction data flows — so
+    // fork (downstream into the new lane) vs merge (upstream into the merge
+    // commit) is obvious at a glance. March direction follows the path's
+    // authoring direction: fork paths start at the parent, merge/direct
+    // paths at the child.
     if (edgeHighlight) {
-      for (const d of visibleCommits) {
-        if (d.id !== edgeHighlight.from && d.id !== edgeHighlight.to) continue;
-        ring(d).attr('r', nodeRadius(d) + 6)
-          .attr('stroke', cssVar('--edge-hot', '#FFD166')).attr('stroke-width', 2.5);
+      const hot = model.edges.find(e => isHotEdge(e));
+      if (hot) {
+        g.append('path')
+          .attr('class', `edge-flow ${hot.type === 'Branch' ? 'flow-fwd' : 'flow-rev'}`)
+          .attr('d', hot.d)
+          .attr('fill', 'none')
+          .attr('stroke', cssVar('--edge-flow', '#FFF3C4'))
+          .attr('stroke-width', 5)
+          .attr('stroke-linecap', 'round')
+          .attr('stroke-dasharray', '0 18')
+          .attr('pointer-events', 'none');
       }
     }
-
-    // x-index for the per-frame cull (see makeXCull): one entry per node
-    // circle and ring, keyed on the commit's position.
-    const nodesCull = makeXCull<SVGCircleElement | SVGTextElement, CommitNode>();
-    for (const el of g.selectAll<SVGCircleElement | SVGTextElement, CommitNode>('.node,.node-ring').nodes()) {
-      const d = d3.select(el).datum() as CommitNode;
-      nodesCull.add(el, d, d.x, d.x, (n, x0, x1, y0, y1) => n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1);
-    }
-    nodesCull.seal();
-
-    // Delegated node + edge-hit verbs (see the nodes note above). The scene
-    // group carries ONE listener set; each event classifies its target via
-    // closest() — the topmost element under the pointer keeps deciding, so
-    // a click landing on both a node and the fat edge-hit stroke below it
-    // still reads as the node (nodes render above edge-hits, as before).
-    // stopPropagation when a target matches keeps the container's
-    // empty-canvas handler out, exactly like the old per-element handlers.
-    const datumOf = (el: Element) => d3.select(el).datum() as CommitNode | CommitEdge;
-    let hoveredNodeEl: Element | null = null;
-    g.on('click', (event: MouseEvent) => {
-      const target = event.target as Element;
-      const nodeEl = target.closest('.node');
-      if (nodeEl) {
-        event.stopPropagation();
-        const d = datumOf(nodeEl) as CommitNode;
-        // Modifier split mirrors the edge-click precedent: ctrl/cmd
-        // feeds the compare pairer, a plain click stays a selection.
-        if (event.ctrlKey || event.metaKey) onCompareClick(d.id);
-        else onCommitClick(d.id);
-        return;
-      }
-      const hitEl = target.closest('.edge-hit');
-      if (hitEl) {
-        event.stopPropagation();
-        const d = datumOf(hitEl) as CommitEdge;
-        if (event.ctrlKey || event.metaKey) {
-          const parent = commitMap.get(d.to);
-          if (parent) centerOn(parent.x, parent.y);
-        } else if (event.shiftKey) {
-          const child = commitMap.get(d.from);
-          if (child) centerOn(child.x, child.y);
-        } else {
-          setEdgeHighlight(h => (h && h.from === d.from && h.to === d.to ? null : { from: d.from, to: d.to }));
-        }
-      }
-    });
-    g.on('pointerover', (event: PointerEvent) => {
-      const el = (event.target as Element).closest('.node');
-      if (!el || el === hoveredNodeEl) return;
-      hoveredNodeEl = el;
-      setHoveredCommit(datumOf(el) as CommitNode);
-      setTooltipPos({ x: event.clientX, y: event.clientY });
-    });
-    g.on('pointermove', (event: PointerEvent) => {
-      if (hoveredNodeEl) setTooltipPos({ x: event.clientX, y: event.clientY });
-    });
-    g.on('pointerout', (event: PointerEvent) => {
-      if (!hoveredNodeEl) return;
-      const related = event.relatedTarget as Element | null;
-      if (related && hoveredNodeEl.contains(related)) return;
-      hoveredNodeEl = null;
-      setHoveredCommit(null);
-    });
 
     // NOTE: no SVG <title> on nodes — the custom HTML tooltip below covers
     // hover; a native title would show up as a second, redundant popup.
@@ -1575,10 +1166,128 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       }
     }
 
-    // --- viewport culling: only elements inside (or near) the visible scene
-    // rect stay in the render tree; everything else is display:none. Lane
-    // labels get pinned to the view's left edge so they never scroll away.
-    function cull() {
+    // --- canvas paint ----------------------------------------------------------
+    // Immediate-mode stroke of the visible window. Line widths are in scene
+    // units so they scale with zoom exactly as the SVG stroke-widths did.
+    const paint = () => {
+      const m = modelRef.current;
+      if (!cv || !m) return;
+      const ctx = cv.getContext('2d');
+      if (!ctx) return;
+      const dpr = window.devicePixelRatio || 1;
+      const t = transformRef.current;
+      const w = cv.width / dpr;
+      const h = cv.height / dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      if (m.band != null) {
+        ctx.fillStyle = cssVar('--head-lane-band', 'rgba(76, 175, 80, 0.08)');
+        ctx.fillRect(0, t.applyY(m.band * LANE_HEIGHT) - (LANE_HEIGHT / 2) * t.k, w, LANE_HEIGHT * t.k);
+      }
+      const vx0 = -t.x / t.k;
+      const vx1 = (w - t.x) / t.k;
+      const vy0 = -t.y / t.k;
+      const vy1 = (h - t.y) / t.k;
+      ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+      // gap breaks
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = cssVar('--gap-break', '#a06a3a');
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      for (const gb of m.gapBreaks) {
+        if (gb.x < vx0 || gb.x > vx1) continue;
+        ctx.moveTo(gb.x, gb.y1);
+        ctx.lineTo(gb.x, gb.y2);
+      }
+      ctx.stroke();
+      // lane guide lines
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      for (const ll of m.laneLines) {
+        if (ll.y < vy0 || ll.y > vy1) continue;
+        ctx.globalAlpha = ll.opacity;
+        ctx.strokeStyle = ll.color;
+        ctx.beginPath();
+        ctx.moveTo(minX - 50, ll.y);
+        ctx.lineTo(maxX + 50, ll.y);
+        ctx.stroke();
+      }
+      // lane bars + trace bars: round caps
+      ctx.setLineDash([]);
+      ctx.lineCap = 'round';
+      for (const bar of m.laneBars) {
+        if (bar.y < vy0 || bar.y > vy1) continue;
+        ctx.globalAlpha = bar.opacity;
+        ctx.strokeStyle = bar.color;
+        ctx.lineWidth = bar.width;
+        ctx.beginPath();
+        ctx.moveTo(bar.x1, bar.y);
+        ctx.lineTo(bar.x2, bar.y);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.3;
+      for (const tb of m.traceBars) {
+        if (tb.y < vy0 || tb.y > vy1) continue;
+        ctx.strokeStyle = tb.color;
+        ctx.beginPath();
+        ctx.moveTo(tb.x1, tb.y);
+        ctx.lineTo(tb.x2, tb.y);
+        ctx.stroke();
+      }
+      // patch links (under the nodes, dashed)
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.75;
+      for (const pl of m.patchLinks) {
+        ctx.strokeStyle = pl.color;
+        ctx.stroke(pl.p);
+      }
+      // edges
+      ctx.setLineDash([]);
+      const [eLo, eHi] = xWindow(m.edges, m.edgeMaxSpan, vx0, vx1);
+      for (let i = eLo; i < eHi; i++) {
+        const e = m.edges[i];
+        if (e.y1 < vy0 || e.y0 > vy1) continue;
+        ctx.globalAlpha = e.opacity;
+        ctx.strokeStyle = e.color;
+        ctx.lineWidth = e.width;
+        ctx.stroke(e.p);
+      }
+      // nodes
+      ctx.lineCap = 'butt';
+      const [nLo, nHi] = xWindow(m.nodes, 0, vx0 - 20, vx1 + 20);
+      for (let i = nLo; i < nHi; i++) {
+        const n = m.nodes[i];
+        if (n.y < vy0 || n.y > vy1) continue;
+        ctx.globalAlpha = n.opacity;
+        ctx.fillStyle = n.color;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // rings
+      ctx.setLineDash([]);
+      for (const r of m.rings) {
+        if (r.y < vy0 || r.y > vy1) continue;
+        ctx.globalAlpha = r.opacity;
+        ctx.strokeStyle = r.color;
+        ctx.lineWidth = r.width;
+        ctx.setLineDash(r.dash);
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    };
+
+    // --- overlay + chip cull (the DOM half of the per-frame sync) --------------
+    // The canvas paints only the visible window by construction; the SVG
+    // overlay's few dozen widgets still cull display, and the pinned chip
+    // rail repositions.
+    const cullOverlay = () => {
       const t = transformRef.current;
       const M = 240; // scene-px margin around the viewport
       const x0 = -t.x / t.k - M;
@@ -1593,11 +1302,6 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       const rowH = LANE_HEIGHT * t.k;
       const labelsMuted = rowH < LABEL_MIN_ROW_H;
 
-      // Heavy layers through the x-index (makeXCull): touch only what
-      // changes, not the whole scene.
-      nodesCull.cull(x0, x1, y0, y1);
-      edgesCull.cull(x0, x1, y0, y1);
-      patchCull.cull(x0, x1, y0, y1);
       g.selectAll<SVGGElement, BadgeSpec>('.ref-badges')
         .style('display', d => {
           if (!inView(d.c.x, d.c.y)) return 'none';
@@ -1612,16 +1316,8 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       // the only evidence of the merge) — cull by view, never mute.
       g.selectAll<SVGGElement, CommitNode>('.merge-badge')
         .style('display', d => (inView(d.x, d.y) ? null : 'none'));
-      g.selectAll<SVGLineElement, TimeGap>('.gap-break')
-        .style('display', d => {
-          const x = (d.x_start + d.x_end) / 2;
-          return x >= x0 && x <= x1 ? null : 'none';
-        });
-      g.selectAll<SVGLineElement, BranchLane>('.lane,.lane-bar')
-        .style('display', d => {
-          const y = d.lane_index * LANE_HEIGHT;
-          return y >= y0 && y <= y1 ? null : 'none';
-        });
+      g.selectAll<SVGTextElement, CommitNode>('.head-mark')
+        .style('display', d => (inView(d.x, d.y) ? null : 'none'));
       rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
         .style('display', d => {
           const y = d.lane_index * LANE_HEIGHT;
@@ -1637,14 +1333,329 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         .style('top', d => `${d.lane_index * LANE_HEIGHT * t.k + t.y - 9}px`);
       g.selectAll<SVGGElement, CollapsedRun>('.collapse-chip')
         .style('display', d => (inView(d.x, d.lane_index * LANE_HEIGHT - 16) ? null : 'none'));
-      g.selectAll<SVGLineElement, TraceBar>('.trace-bar')
-        .style('display', d => (d.x2 >= x0 && d.x1 <= x1 ? null : 'none'));
       g.selectAll<SVGRectElement, TraceRow>('.trace-hit')
         .style('display', d => {
           const y = d.laneIndex * LANE_HEIGHT;
           return y >= y0 && y <= y1 ? null : 'none';
         });
+    };
+
+    // --- zoom ----------------------------------------------------------------
+    const minimapViewport = () => {
+      if (!minimapRef.current) return;
+      const t = transformRef.current;
+      // screen = t * scene ; scene->mini = uniform scale + letterbox (./minimap)
+      // LIVE container size, not the draw-time capture: the container can
+      // collapse to 0 (or recover) between draws -- panel toggles, macOS
+      // live window resize -- and the zero-window guard must judge the
+      // window that IS, or a 0-size draw poisons the rect until the next
+      // full redraw while every later pan/zoom keeps reading stale dims.
+      const w = containerRef.current?.clientWidth || width;
+      const h = containerRef.current?.clientHeight || height;
+      const r = viewportRect(t.k, t.x, t.y, w, h, minimapMapRef.current);
+      d3.select(minimapRef.current).select('.mm-viewport')
+        .attr('x', r.x).attr('y', r.y)
+        .attr('width', r.w).attr('height', r.h);
+    };
+
+    // Near the oldest (left) edge of the scene? Page in the next chunk of
+    // history. Covers drag-pan, wheel-pan and minimap jumps — all of them
+    // funnel through this zoom handler. The probe margin is a fixed
+    // scene-px budget, NOT the viewport width in scene coordinates: at
+    // overview zoom (width/k spans the whole scene) the old margin made the
+    // condition always-true, so any redraw — a fetch refresh, a view-mode
+    // switch — cascaded page-ins (backend walk + full scene rebuild each)
+    // until has_more ran out, on a resting camera the user never panned
+    // (the fetch -> star -> starred view fan-spin report). At >= 1x zoom
+    // the viewport width is the smaller value and nothing changes; panning
+    // to the actual oldest edge still pages exactly as before, one chunk
+    // per approach — after a page the scene grows ~28k scene-px to the
+    // left, which alone drops the resting camera out of the zone.
+    const maybeLoadOlder = (t: d3.ZoomTransform) => {
+      if (!hasMore || loadingOlder) return;
+      const visibleLeft = -t.x / t.k;
+      const probe = Math.min(width / t.k, EDGE_PROBE_SCENE_PX);
+      if (visibleLeft < sceneBoundsRef.current.minX + probe) {
+        onLoadOlder();
+      }
+    };
+
+    // Frame-coalesced follow-up work: the transform itself applies per zoom
+    // event (the overlay group tracks the pointer exactly; the canvas
+    // repaints), while the per-event bookkeeping — canvas paint, overlay
+    // cull, the minimap viewport, the ruler — runs at most ONCE per
+    // animation frame. The rAF callback reads transformRef (always the
+    // LATEST transform), so the final frame of a gesture is guaranteed to
+    // paint against the resting camera. draw() cancels a pending frame
+    // before rebuilding the scene.
+    const scheduleFrame = () => {
+      if (pendingCullRef.current) return;
+      pendingCullRef.current = requestAnimationFrame(() => {
+        pendingCullRef.current = 0;
+        paint();
+        cullOverlay();
+        minimapViewport();
+        updateRuler?.();
+      });
+    };
+
+    const zoom = d3.zoom<HTMLDivElement, unknown>()
+      .scaleExtent([0.005, 40])
+      // Wheel events are handled by our own trackpad-friendly handler
+      // (scroll = pan, pinch/ctrl = zoom); d3 only keeps drag-pan. Everything
+      // that is NOT the graph surface (chip rail, minimap, menus, toolbar)
+      // stays out of the gesture — it all bubbles to the container now.
+      .filter((event: Event) => {
+        if (event.type === 'wheel') return false;
+        const target = event.target as Element | null;
+        return !target?.closest('.lane-rail,.minimap,.view-toolbar,.lane-menu,.run-menu,.tooltip,.render-overlay,.locate-float');
+      })
+      .on('zoom', (event: d3.D3ZoomEvent<HTMLDivElement, unknown>) => {
+        transformRef.current = event.transform;
+        g.attr('transform', event.transform.toString());
+        scheduleFrame();
+        // Pagination is a USER-navigation behavior (pan / minimap jump /
+        // search jump). The camera-restore transforms at the end of every
+        // draw fire this same event; letting them probe loaded a page of
+        // older history on every fetch refresh and view-mode switch — each
+        // a backend walk plus a full scene rebuild, repeating while the
+        // edge stayed reachable (the fetch -> star -> starred view fan-spin
+        // report). Draw-time restores set restoringCamera below.
+        if (!restoringCameraRef.current) maybeLoadOlder(event.transform);
+      })
+      .on('end', () => {
+        // Remember the camera wherever a gesture (or a programmatic camera
+        // move -- refresh anchoring, jumps) leaves it. The transform is
+        // captured now: a viewKey switch racing the debounce must not file
+        // this camera under the new repo's path.
+        if (!viewKey) return;
+        const t = transformRef.current;
+        window.clearTimeout(viewportSaveTimer.current);
+        viewportSaveTimer.current = window.setTimeout(() => saveViewport(viewKey, t), 250);
+      });
+    // Every draw installs a fresh zoom behavior; d3 registers its DOM
+    // listeners under the .zoom namespace, so strip the previous draw's set
+    // first -- without this, stacked behaviors accumulate one listener set
+    // per redraw and all of them fight over the same gesture.
+    const containerSel = d3.select(container);
+    containerSel.on('.zoom', null);
+    containerSel.call(zoom);
+    zoomRef.current = zoom;
+
+    // --- sticky time ruler ---------------------------------------------------
+    // Lives OUTSIDE the zoomable scene: pinned to the top of the canvas with
+    // an opaque backdrop. The time→x mapping is piecewise-linear, anchored on
+    // the commits THEMSELVES — not just the time span endpoints: the backend
+    // stretches x with a per-lane min-spacing cascade, so a two-endpoint map
+    // drifts by days in dense regions. Same-timestamp commits on different
+    // lanes can sit at different x; their mean is the compromise anchor.
+    // Ticks are generated for the VISIBLE time window only, so zooming in
+    // refines their precision; ticks falling inside a folded gap are dropped.
+    let updateRuler: (() => void) | null = null;
+    if (data.commits.length > 1) {
+      const gaps = [...(data.time_gaps ?? [])].sort((a, b) => a.x_start - b.x_start);
+
+      // One anchor per distinct commit timestamp (mean x), x forced
+      // non-decreasing so the map stays monotone.
+      const byTime = new Map<number, { sum: number; n: number }>();
+      for (const c of data.commits) {
+        const e = byTime.get(c.timestamp);
+        if (e) { e.sum += c.x; e.n++; } else byTime.set(c.timestamp, { sum: c.x, n: 1 });
+      }
+      const times: number[] = [];
+      const xs: number[] = [];
+      for (const [t, agg] of [...byTime.entries()].sort((a, b) => a[0] - b[0])) {
+        times.push(t);
+        const x = agg.sum / agg.n;
+        xs.push(xs.length > 0 ? Math.max(x, xs[xs.length - 1]) : x);
+      }
+      const lerpAnchors = (v: number, from: number[], to: number[]): number => {
+        if (v <= from[0]) return to[0];
+        for (let i = 1; i < from.length; i++) {
+          if (v <= from[i]) {
+            const d = from[i] - from[i - 1];
+            return d <= 0 ? to[i] : to[i - 1] + (to[i] - to[i - 1]) * (v - from[i - 1]) / d;
+          }
+        }
+        return to[to.length - 1];
+      };
+      const timeToX = (t: number) => lerpAnchors(t, times, xs);
+      const xToTime = (x: number) => lerpAnchors(x, xs, times);
+      const inGap = (t: number) => gaps.some(gp => t > gp.t_start && t < gp.t_end);
+
+      const ruler = svg.append('g')
+        .attr('class', 'time-ruler-sticky')
+        .attr('pointer-events', 'none');
+      ruler.append('rect')
+        .attr('x', 0).attr('y', 0)
+        .attr('width', width).attr('height', 26)
+        .attr('fill', cssVar('--bg-canvas', '#1a1a2e'));
+      ruler.append('line')
+        .attr('x1', 0).attr('x2', width)
+        .attr('y1', 26).attr('y2', 26)
+        .attr('stroke', cssVar('--ruler-line', '#2c2c3e'))
+        .attr('stroke-width', 1);
+      const axisG = ruler.append('g').attr('transform', 'translate(0, 26)');
+
+      const pad2 = (n: number) => String(n).padStart(2, '0');
+      const fmtDuration = (sec: number): string => {
+        const days = sec / 86400;
+        if (days < 90) return `${Math.max(1, Math.round(days))}d`;
+        if (days < 730) return `${Math.round(days / 30.4)}mo`;
+        return `${(days / 365.25).toFixed(1)}y`;
+      };
+
+      updateRuler = () => {
+        const t = transformRef.current;
+        // Visible time window (with margin), so ticks adapt to the zoom level.
+        const vt0 = xToTime(-t.x / t.k - 100);
+        const vt1 = xToTime((width - t.x) / t.k + 100);
+        if (!(vt1 > vt0)) return;
+        const shown = d3.scaleTime()
+          .domain([new Date(vt0 * 1000), new Date(vt1 * 1000)])
+          .ticks(Math.max(3, Math.floor(width / 150)))
+          .filter(d => !inGap(d.getTime() / 1000));
+
+        // Pick a precision strictly finer than the tightest tick gap, so two
+        // adjacent labels can never read the same (e.g. four "2026-01" ticks).
+        let minGapSec = Infinity;
+        for (let i = 1; i < shown.length; i++) {
+          minGapSec = Math.min(minGapSec, (shown[i].getTime() - shown[i - 1].getTime()) / 1000);
+        }
+        const fmtTick = (dt: Date): string => {
+          const date = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+          if (minGapSec >= 250 * 86400) return `${dt.getFullYear()}`;
+          if (minGapSec >= 25 * 86400) return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}`;
+          if (minGapSec >= 20 * 3600) return date;
+          const time = `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+          if (minGapSec >= 40 * 60) return `${date} ${time}`;
+          return `${date} ${time}:${pad2(dt.getSeconds())}`;
+        };
+
+        const tick = axisG
+          .selectAll<SVGGElement, Date>('.rtick')
+          // Ticks are uniform in TIME, but the scene x is not (dense regions
+          // are cascade-stretched), so labels can bunch up in x. Greedily
+          // keep only ticks whose label clears the previous kept one.
+          .data((() => {
+            const kept: Date[] = [];
+            let lastX = -Infinity;
+            for (const d of shown) {
+              const x = t.applyX(timeToX(d.getTime() / 1000));
+              const w = fmtTick(d).length * 5.8 + 12;
+              if (x - lastX >= w) { kept.push(d); lastX = x; }
+            }
+            return kept;
+          })(), d => String(+d));
+        const tickEnter = tick.enter().append('g').attr('class', 'rtick');
+        tickEnter.append('line')
+          .attr('y1', -5).attr('y2', 0)
+          .attr('stroke', cssVar('--tick-line', '#555'));
+        tickEnter.append('text')
+          .attr('y', -8).attr('text-anchor', 'middle')
+          .attr('fill', cssVar('--text-dim', '#888')).attr('font-size', '10px');
+        const tickMerged = tickEnter.merge(tick);
+        tickMerged.attr('transform', d => `translate(${t.applyX(timeToX(d.getTime() / 1000))},0)`);
+        tickMerged.select('text').text(fmtTick);
+        tick.exit().remove();
+
+        // Axis-break markers: "// 45d" at the center of each folded gap.
+        const brk = axisG
+          .selectAll<SVGGElement, TimeGap>('.rbreak')
+          .data(gaps, d => String(d.t_start));
+        const brkEnter = brk.enter().append('g').attr('class', 'rbreak');
+        brkEnter.append('text')
+          .attr('y', -8).attr('text-anchor', 'middle')
+          .attr('fill', cssVar('--gap-break', '#a06a3a')).attr('font-size', '10px');
+        brkEnter.merge(brk)
+          .attr('transform', d => `translate(${t.applyX((d.x_start + d.x_end) / 2)},0)`)
+          .select('text')
+          .text(d => `// ${fmtDuration(d.t_end - d.t_start)}`);
+        brk.exit().remove();
+      };
+      updateRuler();
     }
+
+    // --- lane chips: HTML overlay pinned to the left edge --------------------
+    // Rendered OUTSIDE the svg as a frosted-glass rail on the highest z-layer,
+    // so labels stay crisp and readable when the graph scrolls beneath them
+    // (SVG-in-scene labels can't do backdrop blur). cullOverlay() repositions
+    // them on every pan/zoom and thins them at heavy zoom-out.
+    const rail = d3.select(laneRailRef.current);
+    const chips = rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip')
+      .data(data.branches, (d: BranchLane) => d.name)
+      .join('div')
+      // Current-branch marker (spec 4.3): the head-lane class adds the dot
+      // prefix + tint. Sibling worktree members' checked-out lanes get a
+      // house badge -- one graph, N anchors, no duplicate member views.
+      // A lane with NO commits in the loaded set (its tip outside the load
+      // window, or every commit outside the date range) renders hollow:
+      // dashed border + muted, with an honest tooltip -- an unmarked empty
+      // row read as "the branch has nothing" / a rendering bug (the
+      // fetched-branch phantom-lane report).
+      .attr('class', (d: BranchLane) => (
+        d.name === headBranch ? 'lane-chip head-lane'
+          : memberLanes.has(d.name) ? 'lane-chip member-lane'
+            : laneSpan.has(d.lane_index) ? 'lane-chip'
+              : 'lane-chip lane-chip-empty'))
+      .attr('title', (d: BranchLane) => {
+        const hint = d.name === headBranch ? t('currentBranchTip')
+          : memberLanes.has(d.name) ? t('checkedOutIn', { name: memberLanes.get(d.name)! })
+            : !laneSpan.has(d.lane_index) ? t('laneEmptyTip')
+              : null;
+        return hint ? `${d.name} — ${hint}` : d.name;
+      })
+      .style('color', (d: BranchLane) => d.color)
+      .style('border-color', (d: BranchLane) => d.color)
+      .style('opacity', (d: BranchLane) => dimOthers(d.name) ? 0.25 : 1)
+      .on('click', (_e: MouseEvent, d: BranchLane) => {
+        setFocusedLane(prev => (prev === d.name ? null : d.name));
+      })
+      .on('contextmenu', (event: MouseEvent, d: BranchLane) => {
+        event.preventDefault();
+        setLaneMenu({ x: event.clientX, y: event.clientY, lane: d });
+      });
+    // Chip content: [★][name][×]. The star marks a favorite (persisted),
+    // the × folds the lane into its sediment row (display-only, session
+    // state) -- the two map-model verbs that live on the canvas itself.
+    chips.html('');
+    chips.filter((d: BranchLane) => starredLanes.has(d.name))
+      .append('span')
+      .attr('class', 'lane-chip-star')
+      .text('★');
+    chips.append('span')
+      .attr('class', 'lane-chip-name')
+      .text((d: BranchLane) => middleEllipsis(d.name));
+    chips.append('span')
+      .attr('class', 'lane-chip-fold')
+      .attr('title', t('foldLane'))
+      .text('×')
+      .on('click', (event: MouseEvent, d: BranchLane) => {
+        event.stopPropagation();
+        onFoldLane(d.name);
+      });
+    // Trace-row chips ride the same rail; datum is BranchLane-shaped so the
+    // shared cull code path (lane_index-keyed) handles them unchanged.
+    rail.selectAll<HTMLDivElement, BranchLane>('.lane-chip.trace-chip')
+      .data(traceRows.map(r => ({
+        name: traceLabel(r),
+        lane_index: r.laneIndex,
+        color: '#888888',
+        is_tag: false,
+        fork_point: null,
+        merged_into: null,
+        is_active: false,
+      })), (d: BranchLane) => d.name)
+      .join('div')
+      .attr('class', 'lane-chip trace-chip')
+      .style('color', (d: BranchLane) => d.color)
+      .style('border-color', (d: BranchLane) => d.color)
+      .text((d: BranchLane) => d.name)
+      .style('cursor', 'pointer')
+      .on('click', (_e: MouseEvent, d: BranchLane) => {
+        const r = traceRows.find(tr => tr.laneIndex === d.lane_index);
+        if (r) onExpandTraceGroup(r.kind);
+      });
 
     // --- minimap ----------------------------------------------------------------------
     // Uniform scale: one factor for both axes, with the scene letterboxed
@@ -1777,10 +1788,25 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       mm.on('click', (event: MouseEvent) => event.stopPropagation());
     }
 
-    // Mount the fully-built scene in one insertion (see the detached build
+    // Mount the fully-built overlay in one insertion (see the detached build
     // note at the top): everything below only wires camera/state, never
-    // scene elements.
+    // overlay elements. Appended AFTER the ruler, matching the old stacking
+    // (graph content above the sticky ruler's backdrop).
     svg.node()!.appendChild(g.node()!);
+
+    // Test seam: canvas hit-testing replaced DOM nodes, so the extension E2E
+    // locates commits through this hook instead of querySelector('.node').
+    (window as unknown as { __GTV_CANVAS__?: unknown }).__GTV_CANVAS__ = {
+      commitCount: visibleCommits.length,
+      ids: visibleCommits.slice(0, 8).map(c => c.id),
+      toScreen: (id: string) => {
+        const c = commitMap.get(id);
+        if (!c || !cv) return null;
+        const t = transformRef.current;
+        const rect = cv.getBoundingClientRect();
+        return { x: c.x * t.k + t.x + rect.left, y: c.y * t.k + t.y + rect.top };
+      },
+    };
 
     // --- viewport: reset only when a repo was (re)opened ------------------------------
     const initialDraw = resetKeyRef.current === -1;
@@ -1818,7 +1844,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         }
       }
       restoringCameraRef.current = true;
-      svg.call(zoom.transform, t);
+      containerSel.call(zoom.transform, t);
       restoringCameraRef.current = false;
       transformRef.current = t;
     } else {
@@ -1848,52 +1874,23 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         }
       }
       restoringCameraRef.current = true;
-      svg.call(zoom.transform, t);
+      containerSel.call(zoom.transform, t);
       restoringCameraRef.current = false;
     }
     prevDataRef.current = data;
     minimapViewport();
-  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId, starredLanes, onFoldLane]);
+    // First paint of this scene (a camera restore also fires the zoom
+    // handler, but an unchanged transform must not rely on that).
+    paint();
+    cullOverlay();
+  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId, starredLanes, onFoldLane, centerOn]);
 
-  // Full redraw. Small scenes draw synchronously (zero badge, zero flicker).
-  // A heavy scene's join blocks the main thread past a frame budget, and a
-  // synchronous block could never paint a spinner — so the badge goes up
-  // FIRST and the draw runs inside a double rAF: the browser gets one full
-  // frame to paint the badge before the blocking draw begins. Cleanup
-  // cancels a pending draw (fast successive dep changes don't stack stale
-  // redraws) and drops the badge. `rendering` deliberately stays OUT of the
-  // deps (it would retrigger the effect it gates); visibleCommits.length is
-  // fresh because visibleCommits is already in draw's deps.
+  // Full redraw: the canvas repaint + the light SVG overlay rebuild are both
+  // cheap enough to run synchronously on every dep change — the old
+  // heavy-scene scrim existed because a 13k-element DOM join blocked the
+  // main thread past a frame budget, which the canvas model eliminated.
   useEffect(() => {
-    let rafOuter = 0;
-    let rafInner = 0;
-    // Only a viewport-RESET draw replaces the whole view wholesale (repo
-    // open, date re-crop, view-from-branch) -- there the dimmed scrim +
-    // spinner card honestly explain the freeze. Camera-preserving redraws
-    // (watcher refresh, older-history paging, diff-stats merge) swap the
-    // scene in place around a stable camera; scrimming those read as "the
-    // graph disappeared" (the VS Code flicker report) for a hitch the user
-    // never asked for.
-    const heavy = visibleCommits.length > HEAVY_SCENE_COMMITS
-      && resetKeyRef.current !== resetKey;
-    if (heavy) {
-      setRendering(true);
-      rafOuter = requestAnimationFrame(() => {
-        rafInner = requestAnimationFrame(() => {
-          draw();
-          setRendering(false);
-        });
-      });
-    } else {
-      draw();
-    }
-    window.addEventListener('resize', draw);
-    return () => {
-      window.removeEventListener('resize', draw);
-      cancelAnimationFrame(rafOuter);
-      cancelAnimationFrame(rafInner);
-      if (heavy) setRendering(false);
-    };
+    draw();
   }, [draw]);
 
   // Latest draw for the size observer below. The observer itself must live
@@ -1905,16 +1902,15 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   const drawRef = useRef<() => void>(() => {});
   useEffect(() => { drawRef.current = draw; }, [draw]);
 
-  // Container-size redraws: the window resize listener only covers resizes
-  // that change the WINDOW -- panel toggles and flex re-layouts resize the
+  // Container-size redraws: panel toggles and flex re-layouts resize the
   // container silently, and during a macOS live window drag WebKit reports
   // transient 0x0 clientWidth/Height, so a resize-triggered draw can capture
   // a zero window. Every closure built by that draw (minimap viewport rect,
-  // ruler backdrop, lane band, cull window) stays poisoned until an unrelated
-  // dep triggers a full redraw. Observing the container makes any size
-  // change -- including recovery from a transient zero -- re-run draw with
-  // real dimensions. (draw() writes only svg width/height attributes that
-  // CSS 100%/100% overrides, so observing cannot feed back into layout.)
+  // ruler backdrop, cull window) stays poisoned until an unrelated dep
+  // triggers a full redraw. Observing the container makes any size change --
+  // including recovery from a transient zero -- re-run draw with real
+  // dimensions. (draw() writes only canvas/svg pixel sizes that CSS 100%
+  // overrides, so observing cannot feed back into layout.)
   useEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -1939,7 +1935,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
 
   /** Fit the whole scene into the viewport (toolbar "Fit" button). */
   const fitToView = useCallback(() => {
-    if (!svgRef.current || !zoomRef.current || !containerRef.current) return;
+    if (!zoomRef.current || !containerRef.current) return;
     const { minX, maxX, minY, maxY } = sceneBoundsRef.current;
     const width = containerRef.current.clientWidth;
     const height = containerRef.current.clientHeight;
@@ -1950,7 +1946,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     const t = d3.zoomIdentity
       .translate(width / 2 - (minX + sceneW / 2) * k, height / 2 - (minY + sceneH / 2) * k)
       .scale(k);
-    d3.select(svgRef.current).call(zoomRef.current.transform, t);
+    d3.select(containerRef.current).call(zoomRef.current.transform, t);
   }, []);
 
   // "Fit" lives in the app header; fitSignal increments trigger it here.
@@ -1982,7 +1978,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     const next = d3.zoomIdentity
       .translate(width / 2 - c.x * k, height / 2 - c.y * k)
       .scale(k);
-    d3.select(svgRef.current).call(zoomRef.current.transform, next);
+    d3.select(containerRef.current).call(zoomRef.current.transform, next);
 
     // Ring flash on the HEAD node, in screen coordinates (the pulses live
     // on the svg root, outside the zoom group, so the camera snap doesn't
@@ -2044,14 +2040,14 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     const next = d3.zoomIdentity
       .translate(width / 2 - c.x * k, height / 2 - c.y * k)
       .scale(k);
-    d3.select(svgRef.current).call(zoomRef.current.transform, next);
+    d3.select(containerRef.current).call(zoomRef.current.transform, next);
   }, [focusCommit, commitMap, compressed, expandedLanes]);
 
   // Trackpad-friendly wheel handling (Figma-style):
   //   two-finger scroll (plain wheel)  -> pan
   //   pinch (ctrlKey wheel) / cmd+wheel -> zoom around the cursor
   useEffect(() => {
-    const node = svgRef.current;
+    const node = containerRef.current;
     if (!node) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -2099,23 +2095,83 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         const press = canvasPressRef.current;
         canvasPressRef.current = null;
         // A drag-pan also ends with a click event on this container; only
-        // a nearly stationary press counts as a deliberate empty-canvas
-        // click (4px of slack for shaky hands).
+        // a nearly stationary press counts as a deliberate click (4px of
+        // slack for shaky hands).
         if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 4) return;
+        const target = e.target as Element;
+        // Overlay widgets (ref pills, merge badges) carry no verbs: a click
+        // on them counts as an empty-canvas click, exactly as when they
+        // intercepted the event in the old stacking.
+        if (target.closest('.ref-badges,.merge-badge,.head-mark')) {
+          setLaneMenu(null);
+          setRunMenu(null);
+          setEdgeHighlight(null);
+          onCanvasClick();
+          return;
+        }
+        const hit = hitTestRef.current(e.clientX, e.clientY);
+        if (hit?.kind === 'node') {
+          // Modifier split mirrors the edge-click precedent: ctrl/cmd
+          // feeds the compare pairer, a plain click stays a selection.
+          if (e.ctrlKey || e.metaKey) onCompareClick(hit.c.id);
+          else onCommitClick(hit.c.id);
+          return;
+        }
+        if (hit?.kind === 'edge') {
+          //   click       -> highlight both endpoint commits
+          //   ctrl/cmd+click -> jump to the parent end
+          //   shift+click    -> jump to the child end
+          const d = hit.edge;
+          if (e.ctrlKey || e.metaKey) {
+            const parent = commitMap.get(d.to);
+            if (parent) centerOn(parent.x, parent.y);
+          } else if (e.shiftKey) {
+            const child = commitMap.get(d.from);
+            if (child) centerOn(child.x, child.y);
+          } else {
+            setEdgeHighlight(h => (h && h.from === d.from && h.to === d.to ? null : { from: d.from, to: d.to }));
+          }
+          return;
+        }
         setLaneMenu(null);
         setRunMenu(null);
         setEdgeHighlight(null);
         onCanvasClick();
       }}
+      onContextMenu={e => {
+        // The lane verb lives on the lane ROW (band hit-test): the old
+        // target was the 4px bar stroke itself. Overlay widgets and non-
+        // canvas surfaces keep the browser's own menu.
+        const target = e.target as Element;
+        if (target.closest('.lane-rail,.minimap,.view-toolbar,.lane-menu,.run-menu,.tooltip,.ref-badges,.merge-badge,.collapse-chip,.trace-hit,.head-mark')) return;
+        const hit = hitTestRef.current(e.clientX, e.clientY);
+        if (hit?.kind === 'lane') {
+          e.preventDefault();
+          setLaneMenu({ x: e.clientX, y: e.clientY, lane: hit.lane });
+        }
+      }}
+      onPointerMove={e => {
+        const hit = hitTestRef.current(e.clientX, e.clientY);
+        const el = e.currentTarget as HTMLDivElement;
+        el.style.cursor = hit?.kind === 'node' ? 'pointer' : '';
+        if (hit?.kind === 'node') {
+          setHoveredCommit(prev => (prev?.id === hit.c.id ? prev : hit.c));
+          setTooltipPos({ x: e.clientX, y: e.clientY });
+        } else {
+          setHoveredCommit(prev => (prev ? null : prev));
+        }
+      }}
+      onPointerLeave={() => setHoveredCommit(null)}
     >
-      <svg ref={svgRef}></svg>
+      <canvas ref={canvasRef} className="timeline-canvas"></canvas>
+      <svg ref={svgRef} className="timeline-overlay"></svg>
       <div className="lane-rail-blur"></div>
       {/* Lane chips are canvas controls, not empty space: their clicks must
           not bubble to the container's empty-canvas handler (which closes
           the details panel). */}
       <div ref={laneRailRef} className="lane-rail" onClick={e => e.stopPropagation()}></div>
 
-      {(rendering || busyDelayed) && (
+      {busyDelayed && (
         <div className="render-overlay" aria-live="polite" role="status">
           <div className="render-card">
             <span className="render-spinner" aria-hidden="true" />
