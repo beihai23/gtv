@@ -960,17 +960,60 @@
   flex-shrink: 0;
 }
 
-/* Lens group: one-gesture lane-selection presets after the date scope.
-   Reuses the panel-pill control so "quiet toggle pill" reads as one
-   idiom everywhere. Carries the minor separator (lighter than the major
-   region borders): time axis | lane axis. */
-.lens-group {
+/* Lens group: the view-mode trio as a CONNECTED segmented control with the
+   starred quick bar hanging below the ★ segment (two rows). The shared
+   border makes the three-way exclusivity readable at a glance -- three
+   independent pills read as three unrelated toggles (the user report).
+   Carries the minor separator (lighter than the major region borders):
+   time axis | lane axis. */
+.lens-block {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   flex-shrink: 0;
   padding-left: 10px;
   border-left: 1px solid var(--border);
+}
+.lens-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.lens-seg-btn {
+  height: 22px;
+  padding: 0 12px;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.lens-seg-btn + .lens-seg-btn {
+  border-left: 1px solid var(--border);
+}
+.lens-seg-btn:hover {
+  color: var(--text);
+  background: var(--bg-input);
+}
+.lens-seg-btn.on {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.lens-seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.lens-seg-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-dim);
+}
+.lens-block .star-dots {
+  /* Under the ★ segment (second segment = ~one button in from the left). */
+  padding-left: 52px;
 }
 
 /* Collapsed view-options menu. The anchor is position:relative so the
@@ -1270,17 +1313,6 @@
   container-type: inline-size;
 }
 
-.lens-group .panel-pill {
-  gap: 4px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.lens-group .panel-pill:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
 .branch-select {
   padding: 6px 12px;
   background: var(--bg-input);
@@ -1470,6 +1502,13 @@
 }
 /* Sediment-row chips (collapsed inactive lanes) read as quieter than branches. */
 .lane-chip.trace-chip { font-style: italic; opacity: 0.85; }
+/* Hollow lane: zero commits in the loaded set (tip outside the load window,
+   or every commit outside the date range). Dashed border + muted so an
+   empty row reads as "nothing loaded here", not as a broken lane. */
+.lane-chip.lane-chip-empty {
+  opacity: 0.55;
+  border-style: dashed;
+}
 /* Current-branch chip (spec 4.3): green dot prefix plus a green-tinted
    fill -- the same "you are here" green as the lane band, HEAD ring and
    minimap dot, replacing the old link-blue tint that read as "selected"

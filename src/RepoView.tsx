@@ -1936,31 +1936,47 @@ export default function RepoView({
                 folds, switching is instant, and the lit state is the mode
                 itself so it can never silently unlight (the old lens
                 presets did). "全部" is the one heavy verb: it also restores
-                the full LOADED set. Toggling a narrowed mode off returns to
-                'all' without touching the loaded set. */}
-            <div className="lens-group" role="group" aria-label={t('modeGroup')}>
-              <button
-                className={`panel-pill lens${viewMode === 'active' ? ' on' : ''}`}
-                onClick={() => setViewMode(m => (m === 'active' ? 'all' : 'active'))}
-                title={t('modeActiveTip', { n: ACTIVE_MODE_SIZE })}
-              >
-                {t('modeActive')}
-              </button>
-              <button
-                className={`panel-pill lens${viewMode === 'starred' ? ' on' : ''}`}
-                onClick={() => setViewMode(m => (m === 'starred' ? 'all' : 'starred'))}
-                disabled={pinnedBranches.length === 0}
-                title={t('modeStarredTip')}
-              >
-                {t('modeStarred')}
-              </button>
+                the full LOADED set. A connected segmented control, not
+                three independent pills: the shared border makes the
+                three-way exclusivity readable (the user report), so a lit
+                segment no longer toggles off -- 全部 is the explicit way
+                back. The star dots drop to a SECOND ROW directly under the
+                ★ segment. */}
+            <div className="lens-block">
+              <div className="lens-seg" role="group" aria-label={t('modeGroup')}>
+                <button
+                  type="button"
+                  className={`lens-seg-btn${viewMode === 'active' ? ' on' : ''}`}
+                  onClick={() => setViewMode('active')}
+                  title={t('modeActiveTip', { n: ACTIVE_MODE_SIZE })}
+                >
+                  {t('modeActive')}
+                </button>
+                <button
+                  type="button"
+                  className={`lens-seg-btn${viewMode === 'starred' ? ' on' : ''}`}
+                  onClick={() => setViewMode('starred')}
+                  disabled={pinnedBranches.length === 0}
+                  title={t('modeStarredTip')}
+                >
+                  {t('modeStarred')}
+                </button>
+                <button
+                  type="button"
+                  className={`lens-seg-btn${viewMode === 'all' ? ' on' : ''}`}
+                  onClick={resetLanes}
+                  title={t('modeAllTip')}
+                >
+                  {t('modeAll')}
+                </button>
+              </div>
               {/* Starred quick bar: one colored dot per favorite (lane colors,
                   so it doubles as a legend), click = the starred view. It
-                  belongs to the ★ mode, so it sits INSIDE the trio, right
-                  against the ★ button — parked after 全部 it read as an
-                  unrelated third group. Over STAR_DOT_MAX the rest collapse
-                  into +N, which opens the manager where every star is
-                  listed. */}
+                  belongs to the ★ mode, so it hangs UNDER the ★ segment;
+                  inline between the pills it broke the three-way group
+                  apart (the user report). Over STAR_DOT_MAX the rest
+                  collapse into +N, which opens the manager where every
+                  star is listed. */}
               {starDots.length > 0 && (
                 <div className="star-dots" role="group" aria-label={t('modeStarredTip')}>
                   {starDots.map(b => (
@@ -1986,13 +2002,6 @@ export default function RepoView({
                   )}
                 </div>
               )}
-              <button
-                className={`panel-pill lens${viewMode === 'all' ? ' on' : ''}`}
-                onClick={resetLanes}
-                title={t('modeAllTip')}
-              >
-                {t('modeAll')}
-              </button>
             </div>
             {/* Lane manager trigger: a BUTTON, not a text field -- the old
                 field-as-trigger made focus imply typing. The label carries
@@ -2003,7 +2012,19 @@ export default function RepoView({
             <button
               type="button"
               className={`lanes-trigger${showAllTags ? ' open' : ''}`}
-              onClick={() => setShowAllTags(v => !v)}
+              onClick={() => setShowAllTags(v => {
+                const next = !v;
+                // The moment the user looks at the list is the moment
+                // freshness matters (the member-menu re-enumeration
+                // precedent): OPENING the manager reconciles against the
+                // live repo, so a branch deleted outside gtv -- locally,
+                // or on the remote ahead of the next fetch -- drops out of
+                // the list AND its zombie star dies on the spot instead of
+                // waiting for the next poll/fetch cycle (the deleted
+                // branch still sitting in ★收藏 report).
+                if (next) void refreshHandlerRef.current();
+                return next;
+              })}
               title={t('lanesTriggerTip')}
               aria-expanded={showAllTags}
             >

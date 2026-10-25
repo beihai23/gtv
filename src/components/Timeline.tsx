@@ -825,14 +825,21 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       // Current-branch marker (spec 4.3): the head-lane class adds the dot
       // prefix + tint. Sibling worktree members' checked-out lanes get a
       // house badge -- one graph, N anchors, no duplicate member views.
+      // A lane with NO commits in the loaded set (its tip outside the load
+      // window, or every commit outside the date range) renders hollow:
+      // dashed border + muted, with an honest tooltip -- an unmarked empty
+      // row read as "the branch has nothing" / a rendering bug (the
+      // fetched-branch phantom-lane report).
       .attr('class', (d: BranchLane) => (
         d.name === headBranch ? 'lane-chip head-lane'
           : memberLanes.has(d.name) ? 'lane-chip member-lane'
-            : 'lane-chip'))
+            : laneSpan.has(d.lane_index) ? 'lane-chip'
+              : 'lane-chip lane-chip-empty'))
       .attr('title', (d: BranchLane) => {
         const hint = d.name === headBranch ? t('currentBranchTip')
           : memberLanes.has(d.name) ? t('checkedOutIn', { name: memberLanes.get(d.name)! })
-            : null;
+            : !laneSpan.has(d.lane_index) ? t('laneEmptyTip')
+              : null;
         return hint ? `${d.name} — ${hint}` : d.name;
       })
       .style('color', (d: BranchLane) => d.color)
