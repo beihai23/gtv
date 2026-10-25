@@ -76,6 +76,12 @@ interface TimelineProps {
   headSignal: number;
   /** True while older history can still be paged in. */
   hasMore: boolean;
+  /** True while a date-range window crops the DISPLAY: page-in would pull
+   *  history the filter then hides (invisible work, plus a relayout cascade
+   *  because the displayed scene never grows). Panning to the oldest edge
+   *  shows a hint instead of loading; widening the scope reveals what is
+   *  already loaded instantly. */
+  dateRangeActive: boolean;
   /** An older-history page load is in flight. */
   loadingOlder: boolean;
   /** A USER-initiated async rebuild is in flight (branch filter / lens swap).
@@ -283,7 +289,7 @@ function xWindow(arr: { x0: number }[], maxSpan: number, x0: number, x1: number)
   return [wLo, lo];
 }
 
-export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName, onCanvasClick, starredLanes, onToggleStarLane, onFoldLane }: TimelineProps) {
+export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, resetKey, active, onViewFromBranch, onRelatedBranch, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, fitSignal, headSignal, hasMore, dateRangeActive, loadingOlder, busy, onLoadOlder, focusCommit, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, headBranch, headLaneHover, memberLanes, onCheckoutBranch, onCompareClick, compareBaseId, onComparePair, onCopyName, onCanvasClick, starredLanes, onToggleStarLane, onFoldLane }: TimelineProps) {
   const { t, theme, lang, hideRemotes } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -307,6 +313,13 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
   const [runMenu, setRunMenu] = useState<{ x: number; y: number; run: CollapsedRun } | null>(null);
 
   const busyDelayed = useDelayedBusy(busy);
+  /** True while the camera rests within the page-in probe zone of the oldest
+   *  loaded commit AND a date range hides whatever would load there — the
+   *  "widen the time scope" hint state (see maybeLoadOlder). */
+  const [atOldestEdge, setAtOldestEdge] = useState(false);
+  useEffect(() => {
+    if (!dateRangeActive) setAtOldestEdge(false);
+  }, [dateRangeActive]);
   /** A frame-coalesced repaint scheduled by the zoom handler; component-level
    *  so draw() can cancel a stale frame before rebuilding the scene. */
   const pendingCullRef = useRef(0);
@@ -1371,13 +1384,28 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // to the actual oldest edge still pages exactly as before, one chunk
     // per approach — after a page the scene grows ~28k scene-px to the
     // left, which alone drops the resting camera out of the zone.
+    //
+    // With a DATE RANGE active the scene cannot grow: every page the
+    // backend loads is filtered out of the display, so the same probe stays
+    // true and the cascade runs away (each round a relayout plus a lazy
+    // stats merge — the big/small node flicker report) while nothing new
+    // ever appears. There, reaching the edge lights the widen-the-scope
+    // hint instead of loading; widening reveals what is already loaded
+    // instantly, because the backend session already holds it.
     const maybeLoadOlder = (t: d3.ZoomTransform) => {
-      if (!hasMore || loadingOlder) return;
+      if (!hasMore || loadingOlder) {
+        setAtOldestEdge(false);
+        return;
+      }
       const visibleLeft = -t.x / t.k;
       const probe = Math.min(width / t.k, EDGE_PROBE_SCENE_PX);
-      if (visibleLeft < sceneBoundsRef.current.minX + probe) {
-        onLoadOlder();
+      const atEdge = visibleLeft < sceneBoundsRef.current.minX + probe;
+      if (dateRangeActive) {
+        setAtOldestEdge(atEdge);
+        return;
       }
+      setAtOldestEdge(false);
+      if (atEdge) onLoadOlder();
     };
 
     // Frame-coalesced follow-up work: the transform itself applies per zoom
@@ -1883,7 +1911,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // handler, but an unchanged transform must not rely on that).
     paint();
     cullOverlay();
-  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId, starredLanes, onFoldLane, centerOn]);
+  }, [data, viewKey, onCommitClick, selectedCommitId, resetKey, active, compressed, showMergeLinks, showRefLabels, showAnnotations, patchLinks, focusedLane, expandedLanes, collapseRunData, visibleCommits, commitMap, branchColorMap, edgeHighlight, theme, lang, t, hasMore, dateRangeActive, loadingOlder, onLoadOlder, hiddenIds, traceRows, traceBars, onExpandTraceGroup, traceGroupLabel, hideRemotes, headBranch, memberLanes, onCompareClick, compareBaseId, starredLanes, onFoldLane, centerOn]);
 
   // Full redraw: the canvas repaint + the light SVG overlay rebuild are both
   // cheap enough to run synchronously on every dep change — the old
@@ -2186,6 +2214,9 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       <div className="view-toolbar" onClick={e => e.stopPropagation()}>
         {loadingOlder && (
           <span className="view-btn loading-older">{t('loadingOlder')}</span>
+        )}
+        {atOldestEdge && (
+          <span className="view-btn loading-older">{t('olderAtEdge')}</span>
         )}
         {compressed && expandedLanes.size + expandedIds.size > 0 && (
           <button className="view-btn" onClick={() => { setExpandedLanes(new Set()); setExpandedIds(new Set()); }}>

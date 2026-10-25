@@ -2369,6 +2369,7 @@ export default function RepoView({
               fitSignal={fitSignal}
               headSignal={headSignal}
               hasMore={gitData.has_more ?? false}
+              dateRangeActive={dateRange.kind !== 'all'}
               loadingOlder={loadingOlder}
               // User-initiated rebuilds only: a background watcher refresh
               // must keep the canvas on screen (the delay-gated scrim read
