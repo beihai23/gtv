@@ -911,18 +911,23 @@ fn build_stale_window_fixture(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// The toggle flips session.include_stale, rebuilds the view + pagination
-/// session (stale seed retained or dropped), returns a fresh full-window
-/// read, and get_branch_list -- where include_stale is user-visible --
-/// mirrors the policy. Unknown ids error like every repo-routed command.
+/// The toggle flips session.include_stale and rebuilds the view. Under the
+/// full-history load policy (2026-10-26) every seed tip is inside the
+/// loaded set, so no branch is ever stale: the flag flips but the branch
+/// list and the view are membership-identical across the toggle — the
+/// test pins that the toggle stays a harmless no-op (the frontend switch
+/// remains wired) instead of resurrecting windowed staleness.
+/// Unknown ids error like every repo-routed command.
 #[test]
-fn set_include_stale_rebuilds_session_and_filters_branch_list() {
+fn set_include_stale_is_a_no_op_under_full_load() {
     let dir = build_stale_window_fixture("toggle");
     let state = AppState::default();
     let repo = open(&state, &dir); // include_stale: true
 
-    // Fixture sanity: the window really excludes the stale tip.
-    assert_eq!(repo.data.commits.len(), 2000);
+    // Full load: the whole fixture is in the view, has_more is false, and
+    // the deep `stale` tip is loaded with everything else.
+    assert_eq!(repo.data.commits.len(), 2101);
+    assert!(!repo.data.has_more);
     {
         let repos = state.repos.lock().unwrap();
         let session = repos.get(&repo.repo_id).unwrap();
@@ -940,12 +945,12 @@ fn set_include_stale_rebuilds_session_and_filters_branch_list() {
     let with_stale = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list on");
     assert!(with_stale.iter().any(|b| b.name == "stale"));
 
-    // Toggle OFF: flag flips, the pagination session drops the stale seed,
-    // the branch list hides the branch, and the returned view is a fresh
-    // full-window read.
+    // Toggle OFF: the flag flips, but under full load nothing is stale —
+    // membership is identical, and the deep tip stays.
     let rebuilt =
         run(set_include_stale_impl(&state, repo.repo_id, false)).expect("toggle stale off");
-    assert_eq!(rebuilt.commits.len(), 2000);
+    assert_eq!(rebuilt.commits.len(), 2101);
+    assert!(!rebuilt.has_more);
     {
         let repos = state.repos.lock().unwrap();
         let session = repos.get(&repo.repo_id).unwrap();
@@ -958,16 +963,12 @@ fn set_include_stale_rebuilds_session_and_filters_branch_list() {
             .iter()
             .map(|s| s.name.as_str())
             .collect();
-        assert!(
-            !names.contains(&"stale"),
-            "seeds with stale off: {:?}",
-            names
-        );
+        assert!(names.contains(&"stale"), "seeds with stale off: {:?}", names);
     }
     let without_stale = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list off");
-    assert!(without_stale.iter().all(|b| b.name != "stale"));
+    assert!(without_stale.iter().any(|b| b.name == "stale"));
 
-    // Toggle back ON: the stale seed and the branch-list entry return.
+    // Toggle back ON: still identical.
     run(set_include_stale_impl(&state, repo.repo_id, true)).expect("toggle stale on");
     let restored = run(get_branch_list_impl(&state, repo.repo_id)).expect("branch list on again");
     assert!(restored.iter().any(|b| b.name == "stale"));

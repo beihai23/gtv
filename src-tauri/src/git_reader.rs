@@ -4,6 +4,14 @@ use git2::build::CheckoutBuilder;
 use git2::{BranchType, Oid, Repository, Sort, Status, StatusOptions};
 use std::collections::{HashMap, HashSet};
 
+/// Load policy (2026-10-26 user decision): the default view walks the FULL
+/// reachable history — no newest-window cap. Performance is no longer the
+/// constraint it was, and a window made hash searches of older commits land
+/// outside the loaded set. has_more is therefore false on every default
+/// path and load_more stays only as a dormant compat surface (the
+/// pagination tests pass explicit limits and keep exercising it).
+pub const FULL: usize = usize::MAX;
+
 pub struct GitReader {
     repo: Repository,
 }

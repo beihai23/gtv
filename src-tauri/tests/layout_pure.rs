@@ -222,7 +222,8 @@ fn compression_marks_only_key_commits() {
 
 #[test]
 fn lanes_sorted_by_birth_time() {
-    // old forks sit closer to main (lane 1), late forks further out.
+    // newest forks sit closest to main (lane 1), old forks further out —
+    // the converge rule: over a long timeline the fan closes toward main.
     // main:  c1 -- c2 -- c3
     //          \      \
     // early:    e1     \
@@ -237,8 +238,8 @@ fn lanes_sorted_by_birth_time() {
     let seeds = [seed("main", "c3"), seed("early", "e1"), seed("late", "l1")];
     let (lanes, _, _) = compute_layout(&mut commits, &seeds, "main", None);
 
-    assert_eq!(lane(&lanes, "early").lane_index, 1);
-    assert_eq!(lane(&lanes, "late").lane_index, 2);
+    assert_eq!(lane(&lanes, "late").lane_index, 1);
+    assert_eq!(lane(&lanes, "early").lane_index, 2);
 }
 
 #[test]

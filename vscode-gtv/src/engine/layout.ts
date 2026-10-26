@@ -57,11 +57,9 @@ export interface LaneSeed {
 
 const LANE_HEIGHT = 80.0;
 
-// Rust i64 sentinels, used only as sort-key extremes. -2^63 is exactly
-// representable in f64; +2^63-1 rounds to 2^63, which is still the
-// largest key in play, so the ordering is unaffected.
+// Rust i64 sentinel, used only as a sort-key extreme. -2^63 is exactly
+// representable in f64, so the ordering is unaffected.
 const I64_MIN = -9223372036854775808;
-const I64_MAX = 9223372036854775807;
 
 /// Longest-path depth of each commit above its oldest loaded ancestor
 /// (0 = no parent in the loaded set). Used only as the within-second
@@ -341,19 +339,33 @@ export function computeLayout(
   }
 
   // Vertical lane order: main on top, others by fork-point time
-  // (born earlier = closer to main), ties broken by tip recency.
+  // DESCENDING (born later = closer to main), name as the tiebreak; lanes
+  // with no fork point inside the window sink to the bottom. The converge
+  // rule (2026-10-26 user decision, flipping "born earlier = closer"):
+  // newly created branches always appear right next to main, so over a
+  // long timeline the fan CONVERGES toward the trunk instead of spreading
+  // — the visual age gradient reads youngest-at-the-top next to the
+  // spine every branch eventually returns to.
   const tsOf = (id: string): number => {
     const i = indexOf.get(id);
     return i !== undefined ? commits[i].timestamp : 0;
   };
   const sideLanes = laneNames.slice(1);
-  // Compound key (fork_ts, name): Rust string Ord is byte-wise, matching
-  // JS < on ASCII names. Sort stays stable for exact ties.
+  // Compound key (has_fork, -fork_ts, name): lanes with a fork point sort
+  // first (newest fork nearest main), no-fork lanes sink last by name;
+  // Rust string Ord is byte-wise, matching JS < on ASCII names.
   sideLanes.sort((a, b) => {
-    const fa = forkPoints.has(a) ? tsOf(forkPoints.get(a)!) : I64_MAX;
-    const fb = forkPoints.has(b) ? tsOf(forkPoints.get(b)!) : I64_MAX;
+    const fa = forkPoints.has(a);
+    const fb = forkPoints.has(b);
     if (fa !== fb) {
-      return fa - fb;
+      return fa ? -1 : 1;
+    }
+    if (fa) {
+      const ta = tsOf(forkPoints.get(a)!);
+      const tb = tsOf(forkPoints.get(b)!);
+      if (ta !== tb) {
+        return tb - ta;
+      }
     }
     return a < b ? -1 : a > b ? 1 : 0;
   });

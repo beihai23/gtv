@@ -1391,12 +1391,11 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
     // stats merge — the big/small node flicker report) while nothing new
     // ever appears. There, reaching the edge lights the widen-the-scope
     // hint instead of loading; widening reveals what is already loaded
-    // instantly, because the backend session already holds it.
+    // instantly, because the backend session already holds it. The hint is
+    // independent of has_more: since the default view loads the FULL
+    // history, a cropped display hides LOADED commits, and the hint is the
+    // only affordance pointing at them.
     const maybeLoadOlder = (t: d3.ZoomTransform) => {
-      if (!hasMore || loadingOlder) {
-        setAtOldestEdge(false);
-        return;
-      }
       const visibleLeft = -t.x / t.k;
       const probe = Math.min(width / t.k, EDGE_PROBE_SCENE_PX);
       const atEdge = visibleLeft < sceneBoundsRef.current.minX + probe;
@@ -1405,7 +1404,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         return;
       }
       setAtOldestEdge(false);
-      if (atEdge) onLoadOlder();
+      if (atEdge && hasMore && !loadingOlder) onLoadOlder();
     };
 
     // Frame-coalesced follow-up work: the transform itself applies per zoom

@@ -328,14 +328,23 @@ pub fn compute_layout(
     }
 
     // Vertical lane order: main on top, others by fork-point time
-    // (born earlier = closer to main), ties broken by tip recency.
+    // DESCENDING (born later = closer to main), name as the tiebreak; lanes
+    // with no fork point inside the window sink to the bottom. The converge
+    // rule (2026-10-26 user decision, flipping "born earlier = closer"):
+    // newly created branches always appear right next to main, so over a
+    // long timeline the fan CONVERGES toward the trunk instead of spreading
+    // — the visual age gradient reads youngest-at-the-top next to the
+    // spine every branch eventually returns to.
     let ts_of = |id: &str| -> i64 {
         index_of.get(id).map(|&i| commits[i].timestamp).unwrap_or(0)
     };
     let mut side_lanes: Vec<&String> = lane_names.iter().skip(1).collect();
     side_lanes.sort_by_key(|name| {
-        let fork_ts = fork_points.get(*name).map(|id| ts_of(id)).unwrap_or(i64::MAX);
-        (fork_ts, name.to_string())
+        // (has_fork, Reverse(fork_ts), name): lanes with a fork point sort
+        // first (newest fork nearest main), no-fork lanes sink last by name.
+        let has_fork = fork_points.contains_key(*name);
+        let fork_ts = fork_points.get(*name).map(|id| ts_of(id)).unwrap_or(0);
+        (!has_fork, std::cmp::Reverse(fork_ts), name.to_string())
     });
 
     let mut lane_index_of: HashMap<String, i32> = HashMap::new();

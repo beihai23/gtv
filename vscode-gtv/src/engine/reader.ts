@@ -52,6 +52,14 @@ export function attributionOf(data: GitData): ViewAttribution {
   return { ownerOf, forkOf };
 }
 
+// Load policy (2026-10-26 user decision): the default view walks the FULL
+// reachable history — no newest-window cap. Performance is no longer the
+// constraint it was (canvas rendering, windowed paint, batched engine
+// calls), and a window made hash searches of older commits land outside
+// the loaded set. has_more is therefore false on every default path and
+// the load_more machinery stays only as a dormant compat surface (PAGE is
+// its chunk size).
+const FULL = Number.POSITIVE_INFINITY;
 const PAGE = 2000;
 const US = '\x1f'; // field separator in --format strings
 const RS = '\x1e'; // record separator
@@ -257,9 +265,10 @@ export class RepoReader {
     const revArgs = tips.length > 0 ? tips : ['HEAD'];
     // No -n when hiding: the limit applies AFTER filtering, like the Rust
     // revwalk's in-loop skip. (git log walks newest-first either way.)
+    // No -n either when the limit is the full-history sentinel.
     // Tips are revisions, not paths: they go after the format flags.
     const finalArgs = ['log', '--date-order', `--format=${LOG_FORMAT}`];
-    if (hide.size === 0) finalArgs.push('-n', String(limit));
+    if (hide.size === 0 && Number.isFinite(limit)) finalArgs.push('-n', String(limit));
     finalArgs.push(...revArgs);
     const out = await git(this.dir, finalArgs, 60000);
 
@@ -299,7 +308,7 @@ export class RepoReader {
   }
 
   /** Walk + layout. Mirrors build_view. */
-  async buildView(seeds: LaneSeed[], limit = PAGE): Promise<GitData> {
+  async buildView(seeds: LaneSeed[], limit = FULL): Promise<GitData> {
     const mainBranch = this.detectMainBranch(seeds);
     const headId = await this.headOid();
     const headBranch = await this.headBranch();
@@ -330,7 +339,7 @@ export class RepoReader {
   }
 
   /** Full view result. Mirrors read_git_data. */
-  async viewResult(limit = PAGE): Promise<ViewResult> {
+  async viewResult(limit = FULL): Promise<ViewResult> {
     const seeds = await this.laneSeeds();
     const data = await this.buildView(seeds, limit);
     return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
@@ -338,7 +347,7 @@ export class RepoReader {
 
   /** Single-commit seed window (search jump target). Mirrors
    *  read_git_data_from_commit. */
-  async viewFromCommit(commitId: string, limit = PAGE): Promise<ViewResult> {
+  async viewFromCommit(commitId: string, limit = FULL): Promise<ViewResult> {
     const r = await gitRaw(this.dir, ['rev-parse', '--verify', '--quiet', `${commitId}^{commit}`]);
     if (r.code !== 0) throw new Error(`Commit not found: ${commitId}`);
     const id = r.stdout.trim();
@@ -348,7 +357,7 @@ export class RepoReader {
   }
 
   /** View from one branch only. Mirrors read_git_data_from_branch. */
-  async viewFromBranch(branchName: string, limit = PAGE): Promise<ViewResult> {
+  async viewFromBranch(branchName: string, limit = FULL): Promise<ViewResult> {
     const all = await this.laneSeeds();
     const seed = all.find(s => s.name === branchName);
     if (!seed) throw new Error(`Branch not found: ${branchName}`);
@@ -381,7 +390,7 @@ export class RepoReader {
 
     // Pass 1 (cold path only): full view, read only for lane ancestry.
     if (attribution === undefined) {
-      const full = await this.buildView(all, PAGE);
+      const full = await this.buildView(all, FULL);
       attribution = attributionOf(full);
     }
     const { ownerOf, forkOf } = attribution;
@@ -408,7 +417,7 @@ export class RepoReader {
         seeds.push(s);
       }
     }
-    const data = await this.buildView(seeds, PAGE);
+    const data = await this.buildView(seeds, FULL);
     return { data, seeds, staleNames: this.staleSeeds(seeds, data) };
   }
 

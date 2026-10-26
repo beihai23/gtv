@@ -68,7 +68,12 @@ src-tauri/src/
                   seeds the soft key picks main > merged-tip class > the rest,
                   newest tip first, name as tiebreak (cycles fall back to the
                   same key). Branch tips are protected by the tip wall in the
-                  claiming loop, not by ordering. When the DAG offers no
+                  claiming loop, not by ordering. Vertical lane order is the
+                  converge rule (2026-10-26, flipping "born earlier = closer"):
+                  main on top, side lanes by fork-point time DESCENDING —
+                  newly created branches appear right next to main so the
+                  long-timeline fan closes toward the trunk; no-fork lanes
+                  sink last by name. When the DAG offers no
                   evidence (mutual mid-region forks, no merges),
                   newest-tip-first decides — a documented heuristic limit, not
                   a correctness guarantee. LaneSeed.extra_tips folds
@@ -450,21 +455,28 @@ testing lives in Rust.
   it) and asserts exact lane ownership against what gmaster's own demo renders.
   If a layout change alters lane assignment, this test is the arbiter of whether
   the change is correct.
-- **Pagination, not a hard cap.** Each view walks the newest 2000 commits;
-  `load_older_commits` pages in older history 2000 at a time (skipping
-  already-loaded oids — NOT `revwalk.hide`, whose uninteresting flag
-  propagates to ancestors and would suppress the very history being paged).
-  The whole loaded set is re-laid out per chunk because lane ownership and
-  x coordinates are global; `GitData.has_more` tells the frontend whether
-  more history exists, and the Timeline keeps the viewport anchored on a
+- **Full-history load by default (2026-10-26).** Each view walks the FULL
+  reachable history — no newest-window cap (`FULL` sentinel in both
+  engines; hash searches can no longer land outside the loaded set). The
+  load_more machinery stays as a dormant compat surface: `load_older_commits`
+  pages 2000 at a time skipping already-loaded oids (NOT `revwalk.hide`,
+  whose uninteresting flag propagates to ancestors and would suppress the
+  very history being paged), `has_more` is false on every default path, and
+  the whole loaded set is re-laid out per chunk because lane ownership and
+  x coordinates are global. The Timeline keeps the viewport anchored on a
   commit across the relayout. `AppState.session` (ViewSession) tracks the
-  seeds/stale set/loaded oids.
-- **Stale branches** (tip outside the loaded window) are controlled by the
-  `showStaleBranches` setting (`localStorage` `gtv_show_stale`, default on),
-  passed to `open_repository` as `include_stale`. Off = stale seeds are
-  removed from the pagination session and hidden from the branch list.
-- The revwalk chunk size (2000) is shared by all views; tests use small
-  limits to exercise the same paths.
+  seeds/stale set/loaded oids. With a date range active, page-in is
+  suppressed in favor of a widen-the-scope hint (the display can't grow, so
+  the probe would cascade invisibly).
+- **Stale branches** (tip outside the loaded window) were controlled by the
+  `showStaleBranches` setting (`localStorage` `gtv_show_stale`), passed to
+  `open_repository` as `include_stale`. Under the full-history load no tip
+  can fall outside the window, so the toggle is currently an inert no-op
+  kept for wiring compat; `set_include_stale` flips the session flag with
+  membership-identical results (pinned by
+  `set_include_stale_is_a_no_op_under_full_load`).
+- The revwalk chunk size (2000) survives as the load_more chunk and in
+  tests, which pass small explicit limits to exercise the same paths.
 
 ## Code conventions and gotchas
 

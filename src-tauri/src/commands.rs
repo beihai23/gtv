@@ -1,4 +1,4 @@
-use crate::git_reader::{attribution_of, GitReader, ViewAttribution, ViewResult};
+use crate::git_reader::{attribution_of, FULL, GitReader, ViewAttribution, ViewResult};
 use crate::layout::LaneSeed;
 use crate::models::*;
 use crate::terminal::PtySession;
@@ -191,7 +191,7 @@ pub async fn open_repository_impl(
                 let p = canonical.clone();
                 task::spawn_blocking(move || {
                     let mut reader = GitReader::new(&p)?;
-                    reader.read_git_data(2000).map(|r| r.data)
+                    reader.read_git_data(FULL).map(|r| r.data)
                 })
                 .await
                 .map_err(|e| format!("Task join error: {}", e))??
@@ -245,7 +245,7 @@ pub async fn open_repository_impl(
             move || -> Result<(GitReader, ViewResult, String, String, Vec<WorktreeMember>), String>
             {
                 let mut reader = GitReader::new(&p)?;
-                let result = reader.read_git_data(2000)?;
+                let result = reader.read_git_data(FULL)?;
                 let fingerprint = reader.change_fingerprint()?;
                 let commondir = reader.commondir()?;
                 let family = reader.worktree_family()?;
@@ -415,7 +415,7 @@ async fn rebuild_view(state: &AppState, repo_id: u64) -> Result<GitData, String>
 
     let result = task::spawn_blocking(move || {
         let mut reader = GitReader::new(&path)?;
-        reader.read_git_data(2000)
+        reader.read_git_data(FULL)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
@@ -648,7 +648,7 @@ pub async fn jump_to_commit_impl(
 
     let result = task::spawn_blocking(move || {
         let mut reader = GitReader::new(&path)?;
-        reader.read_git_data_from_commit(&commit_id, 2000)
+        reader.read_git_data_from_commit(&commit_id, FULL)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
@@ -755,7 +755,7 @@ pub async fn switch_branch_impl(
     // pagination works here too.
     let result = task::spawn_blocking(move || {
         let mut reader = GitReader::new(&path)?;
-        reader.read_git_data_from_branch(&branch_name, 2000)
+        reader.read_git_data_from_branch(&branch_name, FULL)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;

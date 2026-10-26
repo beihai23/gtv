@@ -224,7 +224,8 @@ describe('computeLayout', () => {
   });
 
   it('lanes_sorted_by_birth_time', () => {
-    // old forks sit closer to main (lane 1), late forks further out.
+    // newest forks sit closest to main (lane 1), old forks further out —
+    // the converge rule: over a long timeline the fan closes toward main.
     // main:  c1 -- c2 -- c3
     //          \      \
     // early:    e1     \
@@ -239,8 +240,8 @@ describe('computeLayout', () => {
     const seeds = [seed('main', 'c3'), seed('early', 'e1'), seed('late', 'l1')];
     const { lanes } = computeLayout(commits, seeds, 'main', null);
 
-    expect(lane(lanes, 'early').lane_index).toBe(1);
-    expect(lane(lanes, 'late').lane_index).toBe(2);
+    expect(lane(lanes, 'late').lane_index).toBe(1);
+    expect(lane(lanes, 'early').lane_index).toBe(2);
   });
 
   it('anomalous_time_gap_is_folded', () => {
