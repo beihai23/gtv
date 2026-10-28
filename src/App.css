@@ -2183,6 +2183,18 @@ span.view-btn.loading-older:hover { border-color: var(--border); color: var(--te
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 8px;
 }
+/* Dark/light theme groups inside the settings section: a quiet small-caps
+   label per group, stacked grids below. */
+.settings-theme-group + .settings-theme-group {
+  margin-top: 12px;
+}
+.settings-theme-group-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
 .theme-card {
   display: flex;
   flex-direction: column;

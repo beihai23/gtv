@@ -175,6 +175,8 @@ const en: Record<string, string> = {
   copiedTip: 'Context copied to clipboard — opening the issue page, paste there directly.',
   copyFailed: 'Copy failed — select the text and copy manually.',
   showStale: 'Show stale branches',
+  themeGroupDark: 'Dark',
+  themeGroupLight: 'Light',
   showStaleTip: 'Process and show branches whose tip lies outside the loaded history window. Turn off to reduce work on huge repos.',
   autoFetch: 'Auto-fetch active tab',
   autoFetchTip: 'Fetch the active tab\'s remotes every 60s in the background (writes refs/remotes and objects only)',
@@ -384,6 +386,8 @@ const zh: Record<string, string> = {
   copiedTip: '上下文已复制到剪贴板，即将打开 issue 创建页面，可直接粘贴快速完成提交',
   copyFailed: '复制失败，请手动全选复制',
   showStale: '显示窗口外分支',
+  themeGroupDark: '暗色',
+  themeGroupLight: '亮色',
   showStaleTip: '处理并显示 tip 在已加载历史窗口之外的分支。超大仓库可关闭以减少加载量。',
   autoFetch: '自动获取活动标签页',
   autoFetchTip: '每 60 秒在后台获取活动标签页的远端更新（仅写入 refs/remotes 与 objects）',
@@ -441,12 +445,15 @@ const DICTS: Record<Lang, Record<string, string>> = { en, zh };
 export interface ThemeDef {
   id: string;
   nameKey: string;
+  /** True for dark-base palettes — drives the settings dialog grouping. */
+  dark: boolean;
   vars: Record<string, string>;
 }
 
 export const THEMES: ThemeDef[] = [
   {
     id: 'midnight',
+      dark: true,
     nameKey: 'themeMidnight',
     vars: {
       '--bg': '#1a1a2e', '--bg-header': '#16213e', '--bg-panel': '#16213e',
@@ -472,6 +479,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'nord',
+      dark: true,
     nameKey: 'themeNord',
     vars: {
       '--bg': '#2e3440', '--bg-header': '#3b4252', '--bg-panel': '#3b4252',
@@ -497,6 +505,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'dracula',
+      dark: true,
     nameKey: 'themeDracula',
     vars: {
       '--bg': '#282a36', '--bg-header': '#343746', '--bg-panel': '#343746',
@@ -522,6 +531,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'solarized',
+      dark: true,
     nameKey: 'themeSolarized',
     vars: {
       '--bg': '#002b36', '--bg-header': '#073642', '--bg-panel': '#073642',
@@ -547,6 +557,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'tokyo-night',
+      dark: true,
     nameKey: 'themeTokyoNight',
     vars: {
       '--bg': '#1a1b26', '--bg-header': '#1f2335', '--bg-panel': '#1f2335',
@@ -572,6 +583,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'catppuccin-mocha',
+      dark: true,
     nameKey: 'themeCatppuccinMocha',
     vars: {
       '--bg': '#1e1e2e', '--bg-header': '#181825', '--bg-panel': '#181825',
@@ -597,6 +609,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'gruvbox-dark',
+      dark: true,
     nameKey: 'themeGruvboxDark',
     vars: {
       '--bg': '#282828', '--bg-header': '#1d2021', '--bg-panel': '#3c3836',
@@ -622,6 +635,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'github-light',
+      dark: false,
     nameKey: 'themeGithubLight',
     vars: {
       '--bg': '#ffffff', '--bg-header': '#f6f8fa', '--bg-panel': '#ffffff',
@@ -647,6 +661,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'solarized-light',
+      dark: false,
     nameKey: 'themeSolarizedLight',
     vars: {
       '--bg': '#fdf6e3', '--bg-header': '#eee8d5', '--bg-panel': '#fdf6e3',
@@ -672,6 +687,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'catppuccin-latte',
+      dark: false,
     nameKey: 'themeCatppuccinLatte',
     vars: {
       '--bg': '#eff1f5', '--bg-header': '#e6e9ef', '--bg-panel': '#e6e9ef',
@@ -697,6 +713,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'tokyo-night-light',
+      dark: false,
     nameKey: 'themeTokyoNightLight',
     vars: {
       '--bg': '#d5d6db', '--bg-header': '#cbccd1', '--bg-panel': '#e1e2e7',
@@ -722,6 +739,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'eye-care-green',
+      dark: false,
     nameKey: 'themeEyeCareGreen',
     vars: {
       '--bg': '#c7edcc', '--bg-header': '#b9e4c0', '--bg-panel': '#d3f1d8',
@@ -747,6 +765,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'sepia',
+      dark: false,
     nameKey: 'themeSepia',
     vars: {
       '--bg': '#f0e6d2', '--bg-header': '#e8dcc4', '--bg-panel': '#f6efe0',
@@ -772,6 +791,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'everforest',
+      dark: true,
     nameKey: 'themeEverforest',
     vars: {
       '--bg': '#2d353b', '--bg-header': '#272f34', '--bg-panel': '#3d484d',
@@ -797,6 +817,7 @@ export const THEMES: ThemeDef[] = [
   },
   {
     id: 'ocean',
+      dark: true,
     nameKey: 'themeOcean',
     vars: {
       '--bg': '#0e3a5c', '--bg-header': '#0a2e4a', '--bg-panel': '#134a70',
@@ -824,6 +845,7 @@ export const THEMES: ThemeDef[] = [
     // Kanagawa (rebelot/kanagawa.nvim): sumi-ink surfaces, wave blue and
     // autumn accents. Faithful to the palette's canonical hex values.
     id: 'kanagawa',
+      dark: true,
     nameKey: 'themeKanagawa',
     vars: {
       '--bg': '#1f1f28', '--bg-header': '#16161d', '--bg-panel': '#16161d',
@@ -851,6 +873,7 @@ export const THEMES: ThemeDef[] = [
     // Rosé Pine (rose-pine/pine): quiet rose-gray surfaces, muted and
     // low-chroma — the palette's own base/surface/overlay layering.
     id: 'rose-pine',
+      dark: true,
     nameKey: 'themeRosePine',
     vars: {
       '--bg': '#191724', '--bg-header': '#1f1d2e', '--bg-panel': '#1f1d2e',
@@ -878,6 +901,7 @@ export const THEMES: ThemeDef[] = [
     // Night Owl (Sarah Drasner): designed for long code-reading sessions —
     // deep sea-blue base, high-contrast pastels, carefully accessible.
     id: 'night-owl',
+      dark: true,
     nameKey: 'themeNightOwl',
     vars: {
       '--bg': '#011627', '--bg-header': '#011021', '--bg-panel': '#011021',
@@ -905,6 +929,7 @@ export const THEMES: ThemeDef[] = [
     // Ayu Mirage (ayu-theme): warm Mirage surfaces, the signature orange
     // accent against teal-blue support colors.
     id: 'ayu-mirage',
+      dark: true,
     nameKey: 'themeAyuMirage',
     vars: {
       '--bg': '#1f2430', '--bg-header': '#222839', '--bg-panel': '#222839',
@@ -932,6 +957,7 @@ export const THEMES: ThemeDef[] = [
     // Vesper (rauno-freitz/vesper.nvim): near-black charcoal, four accent
     // colors, nothing else — maximal restraint, maximal focus.
     id: 'vesper',
+      dark: true,
     nameKey: 'themeVesper',
     vars: {
       '--bg': '#101010', '--bg-header': '#161616', '--bg-panel': '#161616',
@@ -958,6 +984,7 @@ export const THEMES: ThemeDef[] = [
   {
     // Flexoki (kepano/flexoki): ink-on-paper high contrast, dark half.
     id: 'flexoki-dark',
+      dark: true,
     nameKey: 'themeFlexokiDark',
     vars: {
       '--bg': '#100f0f', '--bg-header': '#1c1b1a', '--bg-panel': '#1c1b1a',
@@ -985,6 +1012,7 @@ export const THEMES: ThemeDef[] = [
     // Flexoki light half: warm paper, ink text, muted 900-series accents —
     // the readability-first light counterpart.
     id: 'flexoki-light',
+      dark: false,
     nameKey: 'themeFlexokiLight',
     vars: {
       '--bg': '#fffcf0', '--bg-header': '#f2f0e5', '--bg-panel': '#f2f0e5',

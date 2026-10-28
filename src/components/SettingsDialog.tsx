@@ -40,22 +40,31 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
 
           <div className="settings-section">
             <div className="settings-section-title">{t('theme')}</div>
-            <div className="settings-themes">
-              {THEMES.map(th => (
-                <button
-                  key={th.id}
-                  className={`theme-card ${theme === th.id ? 'active' : ''}`}
-                  onClick={() => setTheme(th.id)}
-                >
-                  <span className="theme-swatches">
-                    <span className="swatch" style={{ background: th.vars['--bg'] }} />
-                    <span className="swatch" style={{ background: th.vars['--accent'] }} />
-                    <span className="swatch" style={{ background: th.vars['--link'] }} />
-                  </span>
-                  <span className="theme-name">{t(th.nameKey)}</span>
-                </button>
-              ))}
-            </div>
+            {/* Dark and light palettes are separate groups — 22 themes in one
+                mixed grid buried the light half (the user report). */}
+            {([true, false] as const).map(dark => (
+              <div key={String(dark)} className="settings-theme-group">
+                <div className="settings-theme-group-label">
+                  {t(dark ? 'themeGroupDark' : 'themeGroupLight')}
+                </div>
+                <div className="settings-themes">
+                  {THEMES.filter(th => th.dark === dark).map(th => (
+                    <button
+                      key={th.id}
+                      className={`theme-card ${theme === th.id ? 'active' : ''}`}
+                      onClick={() => setTheme(th.id)}
+                    >
+                      <span className="theme-swatches">
+                        <span className="swatch" style={{ background: th.vars['--bg'] }} />
+                        <span className="swatch" style={{ background: th.vars['--accent'] }} />
+                        <span className="swatch" style={{ background: th.vars['--link'] }} />
+                      </span>
+                      <span className="theme-name">{t(th.nameKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
           <div className="settings-section">
