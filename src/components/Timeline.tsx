@@ -1202,10 +1202,15 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       const vy0 = -t.y / t.k;
       const vy1 = (h - t.y) / t.k;
       ctx.setTransform(dpr * t.k, 0, 0, dpr * t.k, dpr * t.x, dpr * t.y);
+      // Hairline floor: scene-unit widths scale with k, so at overview zoom
+      // (k≈0.01) a 4px lane bar would rasterize to 0.04 screen px — invisible,
+      // where the old SVG strokes antialiased to ~1px. Clamp every stroke and
+      // the node radius to a 1 CSS-px screen floor.
+      const hair = 1 / t.k;
       // gap breaks
       ctx.globalAlpha = 0.35;
       ctx.strokeStyle = cssVar('--gap-break', '#a06a3a');
-      ctx.lineWidth = 1;
+      ctx.lineWidth = hair;
       ctx.setLineDash([6, 5]);
       ctx.beginPath();
       for (const gb of m.gapBreaks) {
@@ -1216,7 +1221,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       ctx.stroke();
       // lane guide lines
       ctx.setLineDash([4, 4]);
-      ctx.lineWidth = 1;
+      ctx.lineWidth = hair;
       for (const ll of m.laneLines) {
         if (ll.y < vy0 || ll.y > vy1) continue;
         ctx.globalAlpha = ll.opacity;
@@ -1233,13 +1238,13 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         if (bar.y < vy0 || bar.y > vy1) continue;
         ctx.globalAlpha = bar.opacity;
         ctx.strokeStyle = bar.color;
-        ctx.lineWidth = bar.width;
+        ctx.lineWidth = Math.max(bar.width, hair);
         ctx.beginPath();
         ctx.moveTo(bar.x1, bar.y);
         ctx.lineTo(bar.x2, bar.y);
         ctx.stroke();
       }
-      ctx.lineWidth = 2;
+      ctx.lineWidth = Math.max(2, hair);
       ctx.globalAlpha = 0.3;
       for (const tb of m.traceBars) {
         if (tb.y < vy0 || tb.y > vy1) continue;
@@ -1251,7 +1256,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
       }
       // patch links (under the nodes, dashed)
       ctx.setLineDash([5, 4]);
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = Math.max(1.5, hair);
       ctx.globalAlpha = 0.75;
       for (const pl of m.patchLinks) {
         ctx.strokeStyle = pl.color;
@@ -1265,11 +1270,12 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         if (e.y1 < vy0 || e.y0 > vy1) continue;
         ctx.globalAlpha = e.opacity;
         ctx.strokeStyle = e.color;
-        ctx.lineWidth = e.width;
+        ctx.lineWidth = Math.max(e.width, hair);
         ctx.stroke(e.p);
       }
       // nodes
       ctx.lineCap = 'butt';
+      const nodeFloor = 1.2 * hair;
       const [nLo, nHi] = xWindow(m.nodes, 0, vx0 - 20, vx1 + 20);
       for (let i = nLo; i < nHi; i++) {
         const n = m.nodes[i];
@@ -1277,7 +1283,7 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         ctx.globalAlpha = n.opacity;
         ctx.fillStyle = n.color;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+        ctx.arc(n.x, n.y, Math.max(n.r, nodeFloor), 0, Math.PI * 2);
         ctx.fill();
       }
       // rings
@@ -1286,10 +1292,10 @@ export function Timeline({ data, viewKey, onCommitClick, selectedCommitId, reset
         if (r.y < vy0 || r.y > vy1) continue;
         ctx.globalAlpha = r.opacity;
         ctx.strokeStyle = r.color;
-        ctx.lineWidth = r.width;
+        ctx.lineWidth = Math.max(r.width, hair);
         ctx.setLineDash(r.dash);
         ctx.beginPath();
-        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.arc(r.x, r.y, Math.max(r.r, nodeFloor), 0, Math.PI * 2);
         ctx.stroke();
       }
       ctx.setLineDash([]);
